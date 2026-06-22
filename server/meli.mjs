@@ -38,10 +38,21 @@ export async function searchMercadoLivre(query) {
   const siteId = process.env.MELI_SITE_ID || getSetting("meli_site_id") || "MLB";
 
   if (!accessToken) {
+    if (isMeliScraperEnabled()) {
+      const scraped = await searchMercadoLivreScraper(query);
+      if (scraped.ok) {
+        return scraped;
+      }
+      console.warn("[meli] OAuth not configured and public-page fallback failed", {
+        source: scraped.source,
+        message: scraped.message,
+      });
+    }
+
     return {
       ok: false,
       source: "not_configured",
-      message: "Configure um token OAuth do Mercado Livre no painel admin para ativar dados reais.",
+      message: "Nao consegui ler dados reais agora. O painel admin pode reconectar o Mercado Livre ou tentar novamente em instantes.",
       items: [],
       totalAvailable: 0,
       totals: { demand: 0, revenue: 0, averageTicket: 0 },
@@ -66,9 +77,8 @@ export async function searchMercadoLivre(query) {
   if (!response.ok) {
     const body = await response.text();
     if (response.status === 403) {
-      const scraperEnabled = (process.env.MELI_SCRAPER_ENABLED || getSetting("meli_scraper_enabled") || "true") !== "false";
       let scraped = null;
-      if (scraperEnabled) {
+      if (isMeliScraperEnabled()) {
         scraped = await searchMercadoLivreScraper(query);
         if (scraped.ok) {
           return scraped;
@@ -150,6 +160,10 @@ function searchWithToken(siteId, params, accessToken) {
       "User-Agent": "BuscaVendasConfweb/1.0",
     },
   });
+}
+
+function isMeliScraperEnabled() {
+  return (process.env.MELI_SCRAPER_ENABLED || getSetting("meli_scraper_enabled") || "true") !== "false";
 }
 
 export function createMeliPkcePair() {

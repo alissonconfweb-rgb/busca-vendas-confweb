@@ -625,9 +625,12 @@ function ResultsPanel({ query, result }: { query: string; result: SearchResult |
   const items = result?.items ?? [];
   const hasItems = items.length > 0;
   const marketSignalMode = result?.metricsMode === "market_signal" || result?.salesAvailable === false;
+  const publicPageMode = result?.source === "mercado_livre_scraper";
   const sourceText = result
     ? result.ok
-      ? marketSignalMode
+      ? publicPageMode
+        ? "Fonte: Mercado Livre - página pública"
+        : marketSignalMode
         ? "Fonte: Mercado Livre - pagina publica"
         : "Fonte: Mercado Livre - atualizado agora"
       : result.source === "meli_forbidden"
@@ -676,7 +679,7 @@ function ResultsPanel({ query, result }: { query: string; result: SearchResult |
                 <p>{item.subtitle || "Anúncio ativo no Mercado Livre"}</p>
               </div>
               <Metric
-                label={marketSignalMode ? "Venda por anúncio" : "Vendas últimos 30 dias"}
+                label={marketSignalMode ? "Venda por anúncio" : publicPageMode ? "Vendidos no anúncio" : "Vendas do anúncio"}
                 value={formatCountOrLabel(item.soldQuantity, item.salesMetricLabel)}
               />
               <Metric label="Preço anúncio" value={money.format(item.price)} />
@@ -720,6 +723,7 @@ function formatMoneyOrLabel(value: number | null | undefined, fallback = "Aguard
 
 function DemandCard({ result }: { result: SearchResult | null }) {
   const marketSignalMode = result?.metricsMode === "market_signal" || result?.salesAvailable === false;
+  const publicPageMode = result?.source === "mercado_livre_scraper";
 
   return (
     <section className="demand-card">
@@ -729,7 +733,7 @@ function DemandCard({ result }: { result: SearchResult | null }) {
       </div>
       <dl>
         <div>
-          <dt>{marketSignalMode ? "Anúncios exatos validados" : "Vendas totais (últimos 30 dias)"}</dt>
+          <dt>{marketSignalMode ? "Anúncios exatos validados" : publicPageMode ? "Vendidos nos Top 3" : "Vendas totais"}</dt>
           <dd className="blue-value">
             {marketSignalMode ? number.format(result?.exactMatches || 0) : number.format(result?.totals.demand || 0)}
           </dd>

@@ -75,7 +75,13 @@ async function runScraper(query) {
     .map((item, index) => ({ ...item, position: index + 1, match: matchesProductQuery(item.title, spec) }))
     .filter((item) => item.match.ok && item.price > 0);
   const uniqueItems = dedupeAndRank(candidates).slice(0, 3);
-  const averageTicket = uniqueItems.length
+  const mappedItems = uniqueItems.map(mapScrapedItem);
+  const demand = mappedItems.reduce((sum, item) => sum + (typeof item.soldQuantity === "number" ? item.soldQuantity : 0), 0);
+  const revenue = mappedItems.reduce((sum, item) => sum + (typeof item.revenue === "number" ? item.revenue : 0), 0);
+  const hasSales = demand > 0;
+  const averageTicket = hasSales
+    ? revenue / demand
+    : uniqueItems.length
     ? uniqueItems.reduce((sum, item) => sum + item.price, 0) / uniqueItems.length
     : 0;
 
@@ -96,17 +102,19 @@ async function runScraper(query) {
   return {
     ok: true,
     source: "mercado_livre_scraper",
-    metricsMode: "market_signal",
-    salesAvailable: false,
-    message: uniqueItems.length >= 3
-      ? "Anuncios reais encontrados na pagina publica do Mercado Livre com filtro exato. Vendas por anuncio ainda nao estao liberadas pela API, entao nao foram simuladas."
+    metricsMode: hasSales ? "sales" : "market_signal",
+    salesAvailable: hasSales,
+    message: hasSales
+      ? "Anuncios reais encontrados na pagina publica do Mercado Livre com vendas extraidas de sinais publicos do proprio anuncio."
+      : uniqueItems.length >= 3
+      ? "Anuncios reais encontrados na pagina publica do Mercado Livre com filtro exato. Vendas por anuncio nao apareceram publicamente, entao nao foram simuladas."
       : `Encontrei ${uniqueItems.length} anuncio(s) com correspondencia exata. Nao completei 3 para evitar entregar produto diferente do pesquisado.`,
-    items: uniqueItems.map(mapScrapedItem),
+    items: mappedItems,
     exactMatches: uniqueItems.length,
     totalAvailable: scraped.totalAvailable,
     totals: {
-      demand: 0,
-      revenue: 0,
+      demand,
+      revenue,
       averageTicket,
     },
   };
@@ -153,17 +161,31 @@ async function scrapeSearchPage(query) {
   const { chromium } = await import("playwright");
   const browser = await chromium.launch({
     headless: true,
-    args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
+    args: [
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage",
+      "--disable-gpu",
+      "--disable-blink-features=AutomationControlled",
+      "--window-size=1920,1080",
+      "--lang=pt-BR",
+    ],
   });
 
   try {
     const context = await browser.newContext({
       locale: "pt-BR",
-      viewport: { width: 1366, height: 900 },
-      userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+      viewport: { width: 1920, height: 1080 },
+      userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
       extraHTTPHeaders: {
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
         "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.6",
       },
+    });
+    await context.addInitScript(() => {
+      Object.defineProperty(navigator, "webdriver", { get: () => undefined });
+      Object.defineProperty(navigator, "languages", { get: () => ["pt-BR", "pt", "en-US", "en"] });
+      Object.defineProperty(navigator, "plugins", { get: () => [1, 2, 3, 4, 5] });
     });
     const page = await context.newPage();
     const url = searchUrlFor(query);
@@ -179,42 +201,74 @@ async function scrapeSearchPage(query) {
       await page.waitForTimeout(700);
     }
 
-    await page.waitForSelector("a.poly-component__title", { timeout: 10_000 });
+    await page.waitForSelector("li.ui-search-layout__item, .ui-search-result__wrapper, .poly-card", { timeout: 10_000 });
     bodyText = await safeBodyText(page);
     await assertNotBlocked(page, bodyText);
 
-    const items = await page.$$eval("a.poly-component__title", (anchors) =>
-      anchors.map((anchor) => {
-        const card =
-          anchor.closest("li.ui-search-layout__item") ||
-          anchor.closest("li") ||
-          anchor.closest(".poly-card") ||
-          anchor.parentElement;
-        const image = card
-          ? Array.from(card.querySelectorAll("img"))
-              .map((img) => img.currentSrc || img.src || img.getAttribute("data-src") || "")
-              .find(Boolean) || ""
-          : "";
-        const text = (card?.textContent || "").replace(/\s+/g, " ").trim();
+    const items = await page.$$eval("li.ui-search-layout__item, .ui-search-result__wrapper, .poly-card", (containers) => {
+      const containerSelector = "li.ui-search-layout__item, .ui-search-result__wrapper, .poly-card";
+      const titleSelector = "a.poly-component__title, a.ui-search-link, a[href*='/p/MLB'], a[href*='/MLB']";
+      const priceSelectors = [
+        ".poly-price__current .andes-money-amount",
+        ".poly-price__current",
+        ".poly-component__price .andes-money-amount",
+        ".andes-money-amount",
+      ];
+      const parsePrice = (value) => {
+        const match = String(value || "").match(/R\$\s*([\d.]+(?:,\d{1,2})?|\d+)/);
+        if (!match) {
+          return 0;
+        }
+        const raw = match[1];
+        return raw.includes(",")
+          ? Number(raw.replace(/\./g, "").replace(",", "."))
+          : Number(raw.replace(/\./g, ""));
+      };
+      const readPrice = (card) => {
+        for (const selector of priceSelectors) {
+          const values = Array.from(card.querySelectorAll(selector))
+            .map((element) => parsePrice(element.textContent))
+            .filter((price) => Number.isFinite(price) && price > 0);
+          if (values.length) {
+            return values[0];
+          }
+        }
+        return parsePrice(card.textContent);
+      };
 
-        return {
-          title: (anchor.textContent || "").replace(/\s+/g, " ").trim(),
-          href: anchor.href,
-          text,
-          image,
-          isAd: /[?&#]is_advertising=true/i.test(anchor.href) || /\bAd\b/.test(text),
-          bestSeller: /mais vendido/i.test(text),
-        };
-      }),
-    );
+      return containers
+        .filter((container) => !container.parentElement?.closest(containerSelector))
+        .map((card) => {
+          const anchor = card.querySelector(titleSelector);
+          const image =
+            Array.from(card.querySelectorAll("img"))
+              .map((img) => img.currentSrc || img.src || img.getAttribute("data-src") || "")
+              .find(Boolean) || "";
+          const text = (card.textContent || "").replace(/\s+/g, " ").trim();
+
+          return {
+            title: (anchor?.textContent || "").replace(/\s+/g, " ").trim(),
+            href: anchor?.href || "",
+            text,
+            image,
+            price: readPrice(card),
+            isAd: /[?&#]is_advertising=true/i.test(anchor?.href || "") || /\bAd\b/.test(text),
+            bestSeller: /mais vendido/i.test(text),
+          };
+        });
+    });
+
+    const mappedItems = items.map((item) => ({
+      ...item,
+      id: extractItemId(item.href) || normalizedProductKey(item.title),
+      price: Number(item.price) > 0 ? Number(item.price) : parseCardPrice(item.text),
+      soldQuantity: parseSalesFromText(item.text),
+    }));
+    const enrichedItems = await enrichTopMercadoLivreItems(context, mappedItems);
 
     return {
       totalAvailable: parseTotalAvailable(bodyText) || items.length,
-      items: items.map((item) => ({
-        ...item,
-        id: extractItemId(item.href) || normalizedProductKey(item.title),
-        price: parseCardPrice(item.text),
-      })),
+      items: enrichedItems,
     };
   } finally {
     await browser.close();
@@ -236,7 +290,8 @@ function dedupeAndRank(items) {
 }
 
 function rankingScore(item) {
-  return item.position + (item.isAd ? 20 : 0) - (item.bestSeller ? 8 : 0);
+  const salesBonus = typeof item.soldQuantity === "number" && item.soldQuantity > 0 ? Math.min(item.soldQuantity / 100, 100) : 0;
+  return item.position + (item.isAd ? 20 : 0) - (item.bestSeller ? 8 : 0) - salesBonus;
 }
 
 function mapScrapedItem(item) {
@@ -249,12 +304,53 @@ function mapScrapedItem(item) {
     ].join(" - "),
     image: String(item.image || "").replace("http://", "https://"),
     price: item.price,
-    soldQuantity: null,
-    salesMetricLabel: "Nao divulgado",
-    revenue: null,
-    revenueMetricLabel: "Aguardando API",
+    soldQuantity: typeof item.soldQuantity === "number" && item.soldQuantity > 0 ? item.soldQuantity : null,
+    salesMetricLabel: typeof item.soldQuantity === "number" && item.soldQuantity > 0 ? undefined : "Nao divulgado",
+    revenue: typeof item.soldQuantity === "number" && item.soldQuantity > 0 ? Number((item.price * item.soldQuantity).toFixed(2)) : null,
+    revenueMetricLabel: typeof item.soldQuantity === "number" && item.soldQuantity > 0 ? undefined : "Aguardando API",
     permalink: item.href || searchUrlFor(item.title),
   };
+}
+
+async function enrichTopMercadoLivreItems(context, items) {
+  const enriched = [];
+  for (const item of items.slice(0, 8)) {
+    if (typeof item.soldQuantity === "number" && item.soldQuantity > 0) {
+      enriched.push(item);
+      continue;
+    }
+    enriched.push(await enrichMercadoLivreItem(context, item));
+  }
+  return [...enriched, ...items.slice(enriched.length)];
+}
+
+async function enrichMercadoLivreItem(context, item) {
+  const href = item.href || "";
+  if (!href || !/mercadolivre\.com\.br/i.test(href)) {
+    return item;
+  }
+
+  const page = await context.newPage();
+  try {
+    await page.goto(href, { waitUntil: "domcontentloaded", timeout: 18_000 });
+    await page.waitForTimeout(900);
+    const bodyText = await safeBodyText(page);
+    await assertNotBlocked(page, bodyText);
+    const htmlText = await page.content().catch(() => "");
+    const soldQuantity = parseSalesFromText(`${bodyText} ${htmlText}`);
+    const price = parseProductPrice(`${bodyText} ${htmlText}`) || item.price;
+    const finalUrl = page.url();
+    return {
+      ...item,
+      href: /mercadolivre\.com\.br/i.test(finalUrl) ? finalUrl : item.href,
+      price,
+      soldQuantity: soldQuantity || item.soldQuantity,
+    };
+  } catch {
+    return item;
+  } finally {
+    await page.close().catch(() => {});
+  }
 }
 
 function searchUrlFor(query) {
@@ -298,6 +394,30 @@ function parseTotalAvailable(text) {
   return Number(match[1].replace(/\./g, ""));
 }
 
+function parseSalesFromText(text) {
+  const normalized = normalizedProductKey(String(text || ""));
+  const patterns = [
+    /"(?:(?:sold_quantity)|(?:soldQuantity)|(?:quantity_sold)|(?:units_sold))"\s*:\s*(\d+)/i,
+    /(\d+(?:[.,]\d+)?)\s*\+?\s*(?:vendido|vendidos|venda|vendas|comprado|comprados)/i,
+    /mais\s+de\s+(\d+(?:[.,]\d+)?)\s*(?:comprado|comprados|vendido|vendidos)/i,
+    /(\d+(?:[.,]\d+)?)\s*mil\s*(?:vendido|vendidos|comprado|comprados)?/i,
+  ];
+
+  for (let index = 0; index < patterns.length; index += 1) {
+    const match = normalized.match(patterns[index]) || String(text || "").match(patterns[index]);
+    if (!match) {
+      continue;
+    }
+    const parsed = Number(String(match[1]).replace(/\./g, "").replace(",", "."));
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      continue;
+    }
+    return index === 3 ? Math.round(parsed * 1000) : Math.round(parsed);
+  }
+
+  return null;
+}
+
 function parseCardPrice(text) {
   const prices = [...String(text || "").matchAll(/R\$\s*([\d.]+,\d{2})/g)]
     .map((match) => Number(match[1].replace(/\./g, "").replace(",", ".")))
@@ -312,6 +432,36 @@ function parseCardPrice(text) {
   }
 
   return prices[0];
+}
+
+function parseProductPrice(text) {
+  const value = parseJsonNumber(text, /itemprop=["']price["'][^>]*content=["']([\d.,]+)/i)
+    || parseJsonNumber(text, /"price"\s*:\s*"?([\d.,]+)"?/i)
+    || parseJsonNumber(text, /"base_price"\s*:\s*"?([\d.,]+)"?/i)
+    || parseJsonNumber(text, /"price_amount"\s*:\s*"?([\d.,]+)"?/i);
+  return value && value > 0 ? value : 0;
+}
+
+function parseJsonNumber(text, pattern) {
+  const match = String(text || "").match(pattern);
+  if (!match) {
+    return 0;
+  }
+  const value = parseNumberValue(match[1]);
+  return Number.isFinite(value) ? value : 0;
+}
+
+function parseNumberValue(value) {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return 0;
+  }
+
+  if (raw.includes(",")) {
+    return Number(raw.replace(/\./g, "").replace(",", "."));
+  }
+
+  return Number(raw);
 }
 
 function extractItemId(href) {
