@@ -6,6 +6,7 @@ const CACHE_TTL_MS = Number(process.env.MELI_SCRAPER_CACHE_MS || 60 * 60 * 1000)
 const STALE_CACHE_TTL_MS = Number(process.env.MELI_SCRAPER_STALE_CACHE_MS || 6 * 60 * 60 * 1000);
 const SCRAPER_TIMEOUT_MS = Number(process.env.MELI_SCRAPER_TIMEOUT_MS || 24_000);
 const PRODUCT_PAGE_TIMEOUT_MS = Number(process.env.MELI_PRODUCT_PAGE_TIMEOUT_MS || 5_000);
+const SEARCH_RESULTS_WAIT_MS = Number(process.env.MELI_SEARCH_RESULTS_WAIT_MS || 12_000);
 const CACHE_FILE = resolve(process.cwd(), "data", "meli-scraper-cache.json");
 const cache = new Map();
 const inFlight = new Map();
@@ -202,7 +203,9 @@ async function scrapeSearchPage(query) {
       await page.waitForTimeout(500);
     }
 
-    await page.waitForSelector("li.ui-search-layout__item, .ui-search-result__wrapper, .poly-card", { timeout: 6_000 });
+    await page.waitForSelector("li.ui-search-layout__item, .ui-search-result__wrapper, .poly-card", {
+      timeout: SEARCH_RESULTS_WAIT_MS,
+    });
     bodyText = await safeBodyText(page);
     await assertNotBlocked(page, bodyText);
 
