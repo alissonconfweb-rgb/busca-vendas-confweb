@@ -197,7 +197,7 @@ const searchSteps = [
   "Abrindo o Mercado Livre",
   "Filtrando produto exato",
   "Validando anúncios reais",
-  "Preparando resultado",
+  "Selecionando Top 3",
 ];
 
 async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
@@ -700,7 +700,7 @@ function ResultsPanel({
     <section className="market-panel">
       <div className="panel-head">
         <div>
-          <h2>{marketSignalMode ? "Top anúncios com produto exato" : "Top 3 anúncios por venda"}</h2>
+          <h2>Top 3 anúncios campeões</h2>
           <p>{sourceText}</p>
         </div>
         <a href={marketUrl} target="_blank" rel="noreferrer">
@@ -745,9 +745,7 @@ function ResultsPanel({
             <ChevronRight size={17} />
           </a>
           <p className="market-note">
-            {marketSignalMode
-              ? `${number.format(result?.exactMatches || items.length)} anúncio(s) passaram no filtro exato.`
-              : `Mais de ${number.format(result?.totalAvailable || 0)} anúncios analisáveis para esse tipo de pesquisa.`}
+            {`${number.format(items.length)} anúncio(s) campeão(ões) selecionado(s) com filtro exato do produto.`}
           </p>
         </div>
       )}
@@ -761,10 +759,10 @@ function SearchProgress({ query, elapsedMs }: { query: string; elapsedMs: number
   const progress = Math.min(92, 12 + seconds * 2.6);
   const statusText =
     seconds < 12
-      ? "Conectando com a página pública e lendo os primeiros anúncios."
+      ? "Conectando com o Mercado Livre e buscando os 3 anúncios campeões."
       : seconds < 28
         ? "Comparando títulos para evitar produto parecido ou medida errada."
-        : "Finalizando os cards; no modo provisório essa etapa pode levar um pouco mais.";
+        : "Finalizando o Top 3; no modo provisório essa etapa pode levar um pouco mais.";
 
   return (
     <div className="search-progress" role="status" aria-live="polite">
@@ -813,6 +811,7 @@ function formatMoneyOrLabel(value: number | null | undefined, fallback = "Aguard
 function DemandCard({ result }: { result: SearchResult | null }) {
   const marketSignalMode = result?.metricsMode === "market_signal" || result?.salesAvailable === false;
   const publicPageMode = result?.source === "mercado_livre_scraper";
+  const championCount = result?.items?.length || 0;
 
   return (
     <section className="demand-card">
@@ -822,9 +821,9 @@ function DemandCard({ result }: { result: SearchResult | null }) {
       </div>
       <dl>
         <div>
-          <dt>{marketSignalMode ? "Anúncios exatos validados" : publicPageMode ? "Vendidos nos Top 3" : "Vendas totais"}</dt>
+          <dt>{marketSignalMode ? "Campeões encontrados" : publicPageMode ? "Vendidos nos campeões" : "Vendas nos campeões"}</dt>
           <dd className="blue-value">
-            {marketSignalMode ? number.format(result?.exactMatches || 0) : number.format(result?.totals.demand || 0)}
+            {marketSignalMode ? `${number.format(championCount)} de 3` : number.format(result?.totals.demand || 0)}
           </dd>
         </div>
         <div>
@@ -836,8 +835,8 @@ function DemandCard({ result }: { result: SearchResult | null }) {
           <dd>{money.format(result?.totals.averageTicket || 0)}</dd>
         </div>
         <div>
-          <dt>{marketSignalMode ? "Resultados na busca" : "Anúncios analisados"}</dt>
-          <dd>{result?.totalAvailable ? `Mais de ${number.format(result.totalAvailable)}` : "0"}</dd>
+          <dt>Anúncios campeões</dt>
+          <dd>{championCount ? `${number.format(championCount)} selecionados` : "0"}</dd>
         </div>
       </dl>
     </section>

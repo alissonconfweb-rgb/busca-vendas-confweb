@@ -7,6 +7,7 @@ const STALE_CACHE_TTL_MS = Number(process.env.MELI_SCRAPER_STALE_CACHE_MS || 6 *
 const SCRAPER_TIMEOUT_MS = Number(process.env.MELI_SCRAPER_TIMEOUT_MS || 24_000);
 const PRODUCT_PAGE_TIMEOUT_MS = Number(process.env.MELI_PRODUCT_PAGE_TIMEOUT_MS || 5_000);
 const SEARCH_RESULTS_WAIT_MS = Number(process.env.MELI_SEARCH_RESULTS_WAIT_MS || 12_000);
+const SEARCH_CARD_LIMIT = Number(process.env.MELI_SEARCH_CARD_LIMIT || 12);
 const CACHE_FILE = resolve(process.cwd(), "data", "meli-scraper-cache.json");
 const cache = new Map();
 const inFlight = new Map();
@@ -198,7 +199,7 @@ async function scrapeSearchPage(query) {
     let bodyText = await safeBodyText(page);
     await assertNotBlocked(page, bodyText);
 
-    for (let index = 0; index < 2; index += 1) {
+    for (let index = 0; index < 1; index += 1) {
       await page.mouse.wheel(0, 900);
       await page.waitForTimeout(500);
     }
@@ -209,7 +210,7 @@ async function scrapeSearchPage(query) {
     bodyText = await safeBodyText(page);
     await assertNotBlocked(page, bodyText);
 
-    const items = await page.$$eval("li.ui-search-layout__item, .ui-search-result__wrapper, .poly-card", (containers) => {
+    const items = await page.$$eval("li.ui-search-layout__item, .ui-search-result__wrapper, .poly-card", (containers, limit) => {
       const containerSelector = "li.ui-search-layout__item, .ui-search-result__wrapper, .poly-card";
       const titleSelector = "a.poly-component__title, a.ui-search-link, a[href*='/p/MLB'], a[href*='/MLB']";
       const priceSelectors = [
@@ -242,6 +243,7 @@ async function scrapeSearchPage(query) {
 
       return containers
         .filter((container) => !container.parentElement?.closest(containerSelector))
+        .slice(0, Number(limit) || 12)
         .map((card) => {
           const anchor = card.querySelector(titleSelector);
           const image =
@@ -260,7 +262,7 @@ async function scrapeSearchPage(query) {
             bestSeller: /mais vendido/i.test(text),
           };
         });
-    });
+    }, SEARCH_CARD_LIMIT);
 
     const mappedItems = items.map((item, index) => ({
       ...item,

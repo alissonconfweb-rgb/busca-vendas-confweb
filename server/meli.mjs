@@ -62,7 +62,7 @@ export async function searchMercadoLivre(query) {
 
   const params = new URLSearchParams({
     q: query,
-    limit: "12",
+    limit: "3",
     sort: "sold_quantity_desc",
   });
 
