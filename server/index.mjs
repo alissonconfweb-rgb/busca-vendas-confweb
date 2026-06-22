@@ -18,6 +18,15 @@ const COOKIE = "bv_session";
 const CREATOR_EMAIL = (process.env.CREATOR_EMAIL || "alisson.confweb@gmail.com").toLowerCase();
 const DIST_DIR = resolve(process.cwd(), "dist");
 const MELI_OAUTH_STATE_TTL_MS = 15 * 60 * 1000;
+const PUBLIC_SETTING_KEYS = new Set([
+  "app_name",
+  "starter_monthly",
+  "starter_yearly",
+  "starter_search_limit",
+  "scale_monthly",
+  "scale_yearly",
+  "commercial_cta",
+]);
 
 bootstrapAdminFromEnv(db);
 syncMeliSettingsFromEnv();
@@ -106,6 +115,10 @@ async function route(req, res) {
     return handleMeliCallback(req, res, url);
   }
 
+  if (url.pathname === "/api/public/bootstrap" && method === "GET") {
+    return json(res, 200, publicBootstrapPayload());
+  }
+
   const user = requireUser(req, res);
   if (!user) {
     return;
@@ -173,6 +186,7 @@ async function handleSearch(req, res, user, query) {
   }
 
   const result = await searchMercadoLivre(cleanQuery);
+  const responseResult = canUseAdmin(user) ? result : publicSearchResult(result);
   db.prepare(`
     INSERT INTO search_history (user_id, query, source, total_demand, total_revenue, payload)
     VALUES (?, ?, ?, ?, ?, ?)
@@ -189,7 +203,7 @@ async function handleSearch(req, res, user, query) {
     db.prepare("UPDATE users SET searches_used = searches_used + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(user.id);
   }
 
-  return json(res, 200, result);
+  return json(res, 200, responseResult);
 }
 
 async function handleAdmin(req, res, url, currentUser) {
@@ -422,22 +436,15 @@ async function handleAdmin(req, res, url, currentUser) {
 function safeSettings(user) {
   const settings = settingsObject();
   if (!canUseAdmin(user)) {
-    delete settings.meli_access_token;
-    delete settings.meli_refresh_token;
-    delete settings.meli_client_secret;
-    delete settings.meli_oauth_state_hash;
-    delete settings.meli_oauth_state_user_id;
-    delete settings.meli_oauth_state_created_at;
-    delete settings.meli_oauth_states;
-    delete settings.meli_oauth_code_verifier;
-    delete settings.session_secret;
+    return publicSettings(settings);
   } else if (settings.meli_access_token) {
     settings.meli_access_token_configured = "true";
     settings.meli_access_token = "";
   }
   if (canUseAdmin(user)) {
-    settings.meli_refresh_token_configured = settings.meli_refresh_token ? "true" : "";
-    settings.meli_client_secret_configured = settings.meli_client_secret ? "true" : "";
+    settings.meli_access_token_configured = settings.meli_access_token || process.env.MELI_ACCESS_TOKEN ? "true" : settings.meli_access_token_configured || "";
+    settings.meli_refresh_token_configured = settings.meli_refresh_token || process.env.MELI_REFRESH_TOKEN ? "true" : "";
+    settings.meli_client_secret_configured = settings.meli_client_secret || process.env.MELI_CLIENT_SECRET ? "true" : "";
     settings.meli_oauth_connected = settings.meli_access_token_configured || settings.meli_refresh_token_configured ? "true" : "";
     settings.meli_redirect_uri = settings.meli_redirect_uri || resolveMeliRedirectUri();
     settings.meli_access_token = "";
@@ -451,6 +458,47 @@ function safeSettings(user) {
     delete settings.session_secret;
   }
   return settings;
+}
+
+function publicBootstrapPayload() {
+  return {
+    settings: publicSettings(settingsObject()),
+    tips: db.prepare("SELECT * FROM tips WHERE status = 'published' ORDER BY id DESC").all(),
+    contacts: db.prepare("SELECT * FROM commercial_contacts WHERE status = 'active' ORDER BY is_primary DESC, id DESC").all(),
+  };
+}
+
+function publicSettings(settings) {
+  return Object.fromEntries(Object.entries(settings).filter(([key]) => PUBLIC_SETTING_KEYS.has(key)));
+}
+
+function publicSearchResult(result) {
+  if (!result || result.ok) {
+    if (result?.metricsMode === "market_signal" || result?.salesAvailable === false) {
+      return {
+        ...result,
+        message: "Encontramos anúncios reais compatíveis com o produto pesquisado. As métricas completas serão exibidas quando a fonte oficial estiver disponível.",
+        items: result.items.map((item) => ({
+          ...item,
+          salesMetricLabel: item.salesMetricLabel === "Nao divulgado" ? "Em validação" : item.salesMetricLabel,
+          revenueMetricLabel: item.revenueMetricLabel === "Aguardando API" ? "Em validação" : item.revenueMetricLabel,
+        })),
+      };
+    }
+    return result;
+  }
+
+  if (result.source === "meli_forbidden" || result.source?.startsWith("mercado_livre_")) {
+    return {
+      ...result,
+      source: "market_data_pending",
+      metricsMode: "market_signal",
+      salesAvailable: false,
+      message: "Ainda não conseguimos validar esse produto com a fonte oficial agora. Nossa equipe está preparando a consulta real para liberar as métricas completas.",
+    };
+  }
+
+  return result;
 }
 
 async function handleMeliCallback(req, res, url) {

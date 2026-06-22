@@ -45,6 +45,12 @@ export function syncMeliSettingsFromEnv() {
   if (process.env.MELI_SITE_ID?.trim()) {
     setSetting("meli_site_id", process.env.MELI_SITE_ID.trim());
   }
+  if (process.env.MELI_ACCESS_TOKEN?.trim()) {
+    setSetting("meli_access_token", process.env.MELI_ACCESS_TOKEN.trim());
+  }
+  if (process.env.MELI_REFRESH_TOKEN?.trim()) {
+    setSetting("meli_refresh_token", process.env.MELI_REFRESH_TOKEN.trim());
+  }
 
   setSetting("meli_redirect_uri", resolveMeliRedirectUri());
 

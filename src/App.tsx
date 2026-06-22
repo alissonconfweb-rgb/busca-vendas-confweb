@@ -253,10 +253,21 @@ function ProductApp({ user, onUserChange }: { user: User | null; onUserChange: (
 
   const loadPrivateData = async () => {
     if (!user) {
-      setSettings(defaultSettings);
-      setTips(defaultTips);
+      try {
+        const bootstrap = await api<{
+          settings: SettingsMap;
+          tips: Tip[];
+          contacts: Contact[];
+        }>("/api/public/bootstrap");
+        setSettings({ ...defaultSettings, ...bootstrap.settings });
+        setTips(bootstrap.tips.length ? bootstrap.tips : defaultTips);
+        setContacts(bootstrap.contacts.length ? bootstrap.contacts : defaultContacts);
+      } catch {
+        setSettings(defaultSettings);
+        setTips(defaultTips);
+        setContacts(defaultContacts);
+      }
       setTickets([]);
-      setContacts(defaultContacts);
       setHistory([]);
       return;
     }
@@ -621,10 +632,14 @@ function ResultsPanel({ query, result }: { query: string; result: SearchResult |
         : "Fonte: Mercado Livre - atualizado agora"
       : result.source === "meli_forbidden"
         ? "Fonte: Mercado Livre - API aguardando liberação"
+        : result.source === "market_data_pending"
+          ? "Fonte: validação em andamento"
         : "Fonte: Mercado Livre - integração pendente"
     : "Fonte: Mercado Livre - aguardando pesquisa";
   const emptyHelp = result?.source === "meli_forbidden"
     ? "A conexão OAuth está válida. Para vendas reais por anúncio, precisamos da liberação oficial da API de Search ou de um provedor autorizado."
+    : result?.source === "market_data_pending"
+      ? "Assim que a fonte oficial retornar, você verá anúncios, demanda, ticket médio e margem com dados completos."
     : result
       ? "O Busca Vendas não mostra números simulados: use somente dados liberados pelo Mercado Livre."
       : "Entre com sua conta e busque um produto para consultar demanda, preço e concorrência.";

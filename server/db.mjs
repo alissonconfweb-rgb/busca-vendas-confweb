@@ -1,9 +1,12 @@
 import { mkdirSync } from "node:fs";
+import { createHmac, timingSafeEqual } from "node:crypto";
 import { dirname, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { hashToken, randomToken } from "./security.mjs";
 
 const DB_PATH = resolve(process.cwd(), "data", "busca-vendas.sqlite");
+const SESSION_TTL_DAYS = Number(process.env.SESSION_TTL_DAYS || 365);
+const SESSION_TTL_MS = Math.max(1, SESSION_TTL_DAYS) * 24 * 60 * 60 * 1000;
 mkdirSync(dirname(DB_PATH), { recursive: true });
 
 export const db = new DatabaseSync(DB_PATH);
@@ -179,20 +182,23 @@ export function publicUser(user) {
 }
 
 export function createSession(userId) {
-  const token = randomToken();
-  const tokenHash = hashToken(token);
-  const expires = new Date(Date.now() + 1000 * 60 * 60 * 24 * 7).toISOString();
-  db.prepare("INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)").run(
-    tokenHash,
-    userId,
-    expires,
-  );
+  const expiresAt = Date.now() + SESSION_TTL_MS;
+  const expires = new Date(expiresAt).toISOString();
+  const token = createSignedSessionToken(userId, expiresAt);
   return { token, expires };
 }
 
 export function userFromSession(token) {
   if (!token) {
     return null;
+  }
+
+  const signedSession = readSignedSessionToken(token);
+  if (signedSession) {
+    const user = db.prepare("SELECT * FROM users WHERE id = ? AND status = 'active'").get(signedSession.userId);
+    if (user) {
+      return user;
+    }
   }
 
   const row = db.prepare(`
@@ -208,4 +214,55 @@ export function deleteSession(token) {
   if (token) {
     db.prepare("DELETE FROM sessions WHERE token_hash = ?").run(hashToken(token));
   }
+}
+
+function createSignedSessionToken(userId, expiresAt) {
+  const payload = Buffer.from(JSON.stringify({
+    userId: Number(userId),
+    expiresAt: Number(expiresAt),
+    nonce: randomToken(12),
+  })).toString("base64url");
+  return `v2.${payload}.${sessionSignature(payload)}`;
+}
+
+function readSignedSessionToken(token) {
+  const parts = String(token || "").split(".");
+  if (parts.length !== 3 || parts[0] !== "v2") {
+    return null;
+  }
+
+  const [, payload, signature] = parts;
+  if (!isValidSignature(payload, signature)) {
+    return null;
+  }
+
+  try {
+    const session = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+    if (!session.userId || !session.expiresAt || Number(session.expiresAt) <= Date.now()) {
+      return null;
+    }
+    return session;
+  } catch {
+    return null;
+  }
+}
+
+function sessionSignature(payload) {
+  return createHmac("sha256", sessionSecret()).update(payload).digest("base64url");
+}
+
+function isValidSignature(payload, signature) {
+  const expected = Buffer.from(sessionSignature(payload));
+  const actual = Buffer.from(String(signature || ""));
+  return expected.length === actual.length && timingSafeEqual(expected, actual);
+}
+
+function sessionSecret() {
+  const secret = process.env.SESSION_SECRET || getSetting("session_secret");
+  if (secret) {
+    return secret;
+  }
+  const generated = randomToken(48);
+  setSetting("session_secret", generated);
+  return generated;
 }
