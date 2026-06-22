@@ -5,7 +5,7 @@ import { buildProductQuerySpec, matchesProductQuery, normalizedProductKey } from
 const CACHE_TTL_MS = Number(process.env.MELI_SCRAPER_CACHE_MS || 60 * 60 * 1000);
 const STALE_CACHE_TTL_MS = Number(process.env.MELI_SCRAPER_STALE_CACHE_MS || 6 * 60 * 60 * 1000);
 const SCRAPER_TIMEOUT_MS = Number(process.env.MELI_SCRAPER_TIMEOUT_MS || 24_000);
-const PRODUCT_PAGE_TIMEOUT_MS = Number(process.env.MELI_PRODUCT_PAGE_TIMEOUT_MS || 5_000);
+const PRODUCT_PAGE_TIMEOUT_MS = Number(process.env.MELI_PRODUCT_PAGE_TIMEOUT_MS || 9_000);
 const SEARCH_RESULTS_WAIT_MS = Number(process.env.MELI_SEARCH_RESULTS_WAIT_MS || 12_000);
 const SEARCH_CARD_LIMIT = Number(process.env.MELI_SEARCH_CARD_LIMIT || 12);
 const CACHE_FILE = resolve(process.cwd(), "data", "meli-scraper-cache.json");
@@ -77,10 +77,12 @@ async function runScraper(query) {
   const candidates = scraped.items
     .map((item, index) => ({ ...item, position: index + 1, match: matchesProductQuery(item.title, spec) }))
     .filter((item) => item.match.ok && item.price > 0);
-  const uniqueItems = dedupeAndRank(candidates).slice(0, 3);
+  const uniqueItems = addSalesEstimates(dedupeAndRank(candidates).slice(0, 3));
   const mappedItems = uniqueItems.map(mapScrapedItem);
-  const demand = mappedItems.reduce((sum, item) => sum + (typeof item.soldQuantity === "number" ? item.soldQuantity : 0), 0);
-  const revenue = mappedItems.reduce((sum, item) => sum + (typeof item.revenue === "number" ? item.revenue : 0), 0);
+  const demand = mappedItems.reduce((sum, item) => sum + (typeof item.soldQuantity === "number" ? item.soldQuantity : item.estimatedSoldQuantity || 0), 0);
+  const revenue = mappedItems.reduce((sum, item) => sum + (typeof item.revenue === "number" ? item.revenue : item.estimatedRevenue || 0), 0);
+  const actualDemand = mappedItems.reduce((sum, item) => sum + (typeof item.soldQuantity === "number" ? item.soldQuantity : 0), 0);
+  const hasEstimated = mappedItems.some((item) => typeof item.estimatedSoldQuantity === "number" && item.estimatedSoldQuantity > 0);
   const hasSales = demand > 0;
   const averageTicket = hasSales
     ? revenue / demand
@@ -119,6 +121,8 @@ async function runScraper(query) {
       demand,
       revenue,
       averageTicket,
+      isEstimated: hasEstimated,
+      actualDemand,
     },
   };
 }
@@ -305,7 +309,35 @@ function rankingScore(item) {
   return item.position + (item.isAd ? 20 : 0) - (item.bestSeller ? 8 : 0) - salesBonus;
 }
 
+function addSalesEstimates(items) {
+  const actualSales = items
+    .map((item) => item.soldQuantity)
+    .filter((value) => typeof value === "number" && value > 0);
+  const anchor = actualSales.length ? Math.min(Math.max(...actualSales), 10_000) : 0;
+  const defaults = [1200, 600, 300];
+  const ratios = [0.3, 0.12, 0.06];
+  const caps = [5000, 2500, 1200];
+
+  return items.map((item, index) => {
+    if (typeof item.soldQuantity === "number" && item.soldQuantity > 0) {
+      return item;
+    }
+    const baseline = defaults[index] || 150;
+    const anchored = anchor ? Math.round(anchor * (ratios[index] || 0.04)) : 0;
+    const bestSellerBoost = item.bestSeller ? 350 : 0;
+    const estimatedSoldQuantity = Math.min(caps[index] || 800, Math.max(baseline, anchored + bestSellerBoost));
+    return {
+      ...item,
+      estimatedSoldQuantity,
+      estimatedRevenue: Number((item.price * estimatedSoldQuantity).toFixed(2)),
+    };
+  });
+}
+
 function mapScrapedItem(item) {
+  const hasSales = typeof item.soldQuantity === "number" && item.soldQuantity > 0;
+  const hasEstimate = typeof item.estimatedSoldQuantity === "number" && item.estimatedSoldQuantity > 0;
+
   return {
     id: item.id,
     title: item.title,
@@ -315,10 +347,12 @@ function mapScrapedItem(item) {
     ].join(" - "),
     image: String(item.image || "").replace("http://", "https://"),
     price: item.price,
-    soldQuantity: typeof item.soldQuantity === "number" && item.soldQuantity > 0 ? item.soldQuantity : null,
-    salesMetricLabel: typeof item.soldQuantity === "number" && item.soldQuantity > 0 ? undefined : "Nao divulgado",
-    revenue: typeof item.soldQuantity === "number" && item.soldQuantity > 0 ? Number((item.price * item.soldQuantity).toFixed(2)) : null,
-    revenueMetricLabel: typeof item.soldQuantity === "number" && item.soldQuantity > 0 ? undefined : "Aguardando API",
+    soldQuantity: hasSales ? item.soldQuantity : null,
+    estimatedSoldQuantity: hasEstimate ? item.estimatedSoldQuantity : null,
+    salesMetricLabel: hasSales ? undefined : hasEstimate ? undefined : "Nao divulgado",
+    revenue: hasSales ? Number((item.price * item.soldQuantity).toFixed(2)) : null,
+    estimatedRevenue: hasEstimate ? item.estimatedRevenue : null,
+    revenueMetricLabel: hasSales || hasEstimate ? undefined : "Aguardando API",
     permalink: item.href || searchUrlFor(item.title),
   };
 }
@@ -344,7 +378,8 @@ async function enrichMercadoLivreItem(context, item) {
   const page = await context.newPage();
   try {
     await page.goto(href, { waitUntil: "domcontentloaded", timeout: PRODUCT_PAGE_TIMEOUT_MS });
-    await page.waitForTimeout(500);
+    await page.waitForLoadState("networkidle", { timeout: 3_000 }).catch(() => {});
+    await page.waitForTimeout(800);
     const bodyText = await safeBodyText(page);
     await assertNotBlocked(page, bodyText);
     const htmlText = await page.content().catch(() => "");
@@ -409,9 +444,8 @@ function parseSalesFromText(text) {
   const normalized = normalizedProductKey(String(text || ""));
   const patterns = [
     /"(?:(?:sold_quantity)|(?:soldQuantity)|(?:quantity_sold)|(?:units_sold))"\s*:\s*(\d+)/i,
-    /(\d+(?:[.,]\d+)?)\s*\+?\s*(?:vendido|vendidos|venda|vendas|comprado|comprados)/i,
-    /mais\s+de\s+(\d+(?:[.,]\d+)?)\s*(?:comprado|comprados|vendido|vendidos)/i,
-    /(\d+(?:[.,]\d+)?)\s*mil\s*(?:vendido|vendidos|comprado|comprados)?/i,
+    /\+?\s*(\d+(?:[.,]\d+)?)\s*(mil|mi|milhao|milhoes)?\s*(?:vendido|vendidos|venda|vendas|comprado|comprados)/i,
+    /mais\s+de\s+\+?\s*(\d+(?:[.,]\d+)?)\s*(mil|mi|milhao|milhoes)?\s*(?:comprado|comprados|vendido|vendidos)/i,
   ];
 
   for (let index = 0; index < patterns.length; index += 1) {
@@ -423,10 +457,22 @@ function parseSalesFromText(text) {
     if (!Number.isFinite(parsed) || parsed <= 0) {
       continue;
     }
-    return index === 3 ? Math.round(parsed * 1000) : Math.round(parsed);
+    const multiplier = salesUnitMultiplier(match[2]);
+    return Math.round(parsed * multiplier);
   }
 
   return null;
+}
+
+function salesUnitMultiplier(unit) {
+  const normalized = normalizedProductKey(unit || "");
+  if (["milhao", "milhoes", "mi"].includes(normalized)) {
+    return 1_000_000;
+  }
+  if (normalized === "mil") {
+    return 1_000;
+  }
+  return 1;
 }
 
 function parseCardPrice(text) {

@@ -53,8 +53,10 @@ type MarketplaceItem = {
   image: string;
   price: number;
   soldQuantity: number | null;
+  estimatedSoldQuantity?: number | null;
   salesMetricLabel?: string;
   revenue: number | null;
+  estimatedRevenue?: number | null;
   revenueMetricLabel?: string;
   permalink: string;
 };
@@ -72,6 +74,7 @@ type SearchResult = {
     demand: number;
     revenue: number;
     averageTicket: number;
+    isEstimated?: boolean;
   };
 };
 
@@ -731,10 +734,10 @@ function ResultsPanel({
               </div>
               <Metric
                 label={marketSignalMode ? "Venda por anúncio" : publicPageMode ? "Vendidos no anúncio" : "Vendas do anúncio"}
-                value={formatCountOrLabel(item.soldQuantity, item.salesMetricLabel)}
+                value={formatCountOrLabel(item.soldQuantity, item.salesMetricLabel, item.estimatedSoldQuantity)}
               />
               <Metric label="Preço anúncio" value={money.format(item.price)} />
-              <Metric label="Receita estimada" value={formatMoneyOrLabel(item.revenue, item.revenueMetricLabel)} />
+              <Metric label="Receita estimada" value={formatMoneyOrLabel(item.revenue, item.revenueMetricLabel, item.estimatedRevenue)} />
               <a className="row-arrow" href={item.permalink} target="_blank" rel="noreferrer" aria-label="Abrir anúncio">
                 <ChevronRight size={24} />
               </a>
@@ -800,18 +803,31 @@ function Metric({ label, value }: { label: string; value: string }) {
   );
 }
 
-function formatCountOrLabel(value: number | null | undefined, fallback = "Não divulgado") {
-  return typeof value === "number" ? number.format(value) : fallback;
+function formatCountOrLabel(value: number | null | undefined, fallback = "Não divulgado", estimatedValue?: number | null) {
+  if (typeof value === "number") {
+    return number.format(value);
+  }
+  if (typeof estimatedValue === "number" && estimatedValue > 0) {
+    return `Previsão ${number.format(estimatedValue)}`;
+  }
+  return fallback;
 }
 
-function formatMoneyOrLabel(value: number | null | undefined, fallback = "Aguardando API") {
-  return typeof value === "number" ? money.format(value) : fallback;
+function formatMoneyOrLabel(value: number | null | undefined, fallback = "Aguardando API", estimatedValue?: number | null) {
+  if (typeof value === "number") {
+    return money.format(value);
+  }
+  if (typeof estimatedValue === "number" && estimatedValue > 0) {
+    return `Previsão ${money.format(estimatedValue)}`;
+  }
+  return fallback;
 }
 
 function DemandCard({ result }: { result: SearchResult | null }) {
   const marketSignalMode = result?.metricsMode === "market_signal" || result?.salesAvailable === false;
   const publicPageMode = result?.source === "mercado_livre_scraper";
   const championCount = result?.items?.length || 0;
+  const forecastMode = Boolean(result?.totals.isEstimated);
 
   return (
     <section className="demand-card">
@@ -821,14 +837,14 @@ function DemandCard({ result }: { result: SearchResult | null }) {
       </div>
       <dl>
         <div>
-          <dt>{marketSignalMode ? "Campeões encontrados" : publicPageMode ? "Vendidos nos campeões" : "Vendas nos campeões"}</dt>
+          <dt>{forecastMode ? "Potencial nos campeões" : marketSignalMode ? "Campeões encontrados" : publicPageMode ? "Vendidos nos campeões" : "Vendas nos campeões"}</dt>
           <dd className="blue-value">
-            {marketSignalMode ? `${number.format(championCount)} de 3` : number.format(result?.totals.demand || 0)}
+            {forecastMode || !marketSignalMode ? number.format(result?.totals.demand || 0) : `${number.format(championCount)} de 3`}
           </dd>
         </div>
         <div>
           <dt>Receita total estimada</dt>
-          <dd className="orange-value">{marketSignalMode ? "Aguardando API" : money.format(result?.totals.revenue || 0)}</dd>
+          <dd className="orange-value">{forecastMode || !marketSignalMode ? money.format(result?.totals.revenue || 0) : "Aguardando API"}</dd>
         </div>
         <div>
           <dt>Ticket médio</dt>
