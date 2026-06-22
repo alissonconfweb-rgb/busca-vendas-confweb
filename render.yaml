@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: busca-vendas-confweb
+    runtime: node
+    plan: free
+    region: oregon
+    buildCommand: npm install && npx playwright install --with-deps chromium && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NODE_ENV
+        value: production
+      - key: CREATOR_EMAIL
+        value: alisson.confweb@gamail.com
