@@ -619,10 +619,12 @@ function ResultsPanel({ query, result }: { query: string; result: SearchResult |
       ? marketSignalMode
         ? "Fonte: Mercado Livre - pagina publica"
         : "Fonte: Mercado Livre - atualizado agora"
-      : "Fonte: Mercado Livre - integração pendente"
+      : result.source === "meli_forbidden"
+        ? "Fonte: Mercado Livre - API aguardando liberação"
+        : "Fonte: Mercado Livre - integração pendente"
     : "Fonte: Mercado Livre - aguardando pesquisa";
   const emptyHelp = result?.source === "meli_forbidden"
-    ? "A autorização da conta está válida, mas a API de busca de anúncios não liberou esse recurso para o app."
+    ? "A conexão OAuth está válida. Para vendas reais por anúncio, precisamos da liberação oficial da API de Search ou de um provedor autorizado."
     : result
       ? "O Busca Vendas não mostra números simulados: use somente dados liberados pelo Mercado Livre."
       : "Entre com sua conta e busque um produto para consultar demanda, preço e concorrência.";
