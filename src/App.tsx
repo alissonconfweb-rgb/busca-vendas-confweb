@@ -733,7 +733,7 @@ function ResultsPanel({
                 <p>{item.subtitle || "Anúncio ativo no Mercado Livre"}</p>
               </div>
               <Metric
-                label={marketSignalMode ? "Venda por anúncio" : publicPageMode ? "Vendidos no anúncio" : "Vendas do anúncio"}
+                label={item.estimatedSoldQuantity ? "Previsão de vendas" : marketSignalMode ? "Venda por anúncio" : publicPageMode ? "Vendidos no anúncio" : "Vendas do anúncio"}
                 value={formatCountOrLabel(item.soldQuantity, item.salesMetricLabel, item.estimatedSoldQuantity)}
               />
               <Metric label="Preço anúncio" value={money.format(item.price)} />
