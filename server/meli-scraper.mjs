@@ -4,8 +4,8 @@ import { buildProductQuerySpec, matchesProductQuery, normalizedProductKey } from
 
 const CACHE_TTL_MS = Number(process.env.MELI_SCRAPER_CACHE_MS || 60 * 60 * 1000);
 const STALE_CACHE_TTL_MS = Number(process.env.MELI_SCRAPER_STALE_CACHE_MS || 6 * 60 * 60 * 1000);
-const SCRAPER_TIMEOUT_MS = Number(process.env.MELI_SCRAPER_TIMEOUT_MS || 30_000);
-const PRODUCT_PAGE_TIMEOUT_MS = Number(process.env.MELI_PRODUCT_PAGE_TIMEOUT_MS || 7_000);
+const SCRAPER_TIMEOUT_MS = Number(process.env.MELI_SCRAPER_TIMEOUT_MS || 24_000);
+const PRODUCT_PAGE_TIMEOUT_MS = Number(process.env.MELI_PRODUCT_PAGE_TIMEOUT_MS || 5_000);
 const CACHE_FILE = resolve(process.cwd(), "data", "meli-scraper-cache.json");
 const cache = new Map();
 const inFlight = new Map();
@@ -192,17 +192,17 @@ async function scrapeSearchPage(query) {
     const url = searchUrlFor(query);
 
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: SCRAPER_TIMEOUT_MS });
-    await page.waitForTimeout(2_500);
+    await page.waitForTimeout(1_500);
 
     let bodyText = await safeBodyText(page);
     await assertNotBlocked(page, bodyText);
 
-    for (let index = 0; index < 4; index += 1) {
+    for (let index = 0; index < 2; index += 1) {
       await page.mouse.wheel(0, 900);
-      await page.waitForTimeout(700);
+      await page.waitForTimeout(500);
     }
 
-    await page.waitForSelector("li.ui-search-layout__item, .ui-search-result__wrapper, .poly-card", { timeout: 10_000 });
+    await page.waitForSelector("li.ui-search-layout__item, .ui-search-result__wrapper, .poly-card", { timeout: 6_000 });
     bodyText = await safeBodyText(page);
     await assertNotBlocked(page, bodyText);
 
@@ -319,15 +319,15 @@ function mapScrapedItem(item) {
 }
 
 async function enrichTopMercadoLivreItems(context, items) {
-  const enriched = [];
-  for (const item of items.slice(0, 3)) {
-    if (typeof item.soldQuantity === "number" && item.soldQuantity > 0) {
-      enriched.push(item);
-      continue;
-    }
-    enriched.push(await enrichMercadoLivreItem(context, item));
-  }
-  return [...enriched, ...items.slice(enriched.length)];
+  const topItems = items.slice(0, 3);
+  const enriched = await Promise.all(
+    topItems.map((item) =>
+      typeof item.soldQuantity === "number" && item.soldQuantity > 0
+        ? item
+        : enrichMercadoLivreItem(context, item),
+    ),
+  );
+  return [...enriched, ...items.slice(topItems.length)];
 }
 
 async function enrichMercadoLivreItem(context, item) {
@@ -369,7 +369,7 @@ function searchUrlFor(query) {
 
 async function safeBodyText(page) {
   try {
-    return await page.locator("body").innerText({ timeout: 8_000 });
+    return await page.locator("body").innerText({ timeout: 5_000 });
   } catch {
     return "";
   }

@@ -24,7 +24,7 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
+import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import confwebLogoUrl from "./assets/confweb-logo.webp";
 
 type Role = "admin" | "user";
@@ -191,6 +191,13 @@ const defaultContacts: Contact[] = [
     is_primary: 1,
     status: "active",
   },
+];
+
+const searchSteps = [
+  "Abrindo o Mercado Livre",
+  "Filtrando produto exato",
+  "Validando anúncios reais",
+  "Preparando resultado",
 ];
 
 async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
@@ -536,10 +543,13 @@ function SearchPage({
   const [query, setQuery] = useState("fone bluetooth");
   const [result, setResult] = useState<SearchResult | null>(null);
   const [loading, setLoading] = useState(false);
+  const [activeQuery, setActiveQuery] = useState(query);
+  const [elapsedMs, setElapsedMs] = useState(0);
   const [error, setError] = useState("");
   const [cost, setCost] = useState(32);
   const [feeRate, setFeeRate] = useState(16);
   const [operationalCost, setOperationalCost] = useState(7);
+  const resultsRef = useRef<HTMLDivElement>(null);
 
   const canSeeMargin = canUseAdmin(user) || (user?.plan && user.plan !== "free");
   const averageTicket = result?.totals.averageTicket || 0;
@@ -549,19 +559,48 @@ function SearchPage({
     return { fee, contribution, percent: averageTicket ? (contribution / averageTicket) * 100 : 0 };
   }, [averageTicket, cost, feeRate, operationalCost]);
 
+  useEffect(() => {
+    if (!loading) {
+      setElapsedMs(0);
+      return;
+    }
+
+    const startedAt = Date.now();
+    setElapsedMs(0);
+    const timer = window.setInterval(() => {
+      setElapsedMs(Date.now() - startedAt);
+    }, 500);
+
+    return () => window.clearInterval(timer);
+  }, [loading]);
+
   const submitSearch = async (event?: FormEvent<HTMLFormElement>) => {
     event?.preventDefault();
     if (!onLoginRequired()) {
       return;
     }
 
+    const cleanQuery = query.trim();
+    if (!cleanQuery) {
+      setError("Digite o produto que deseja validar.");
+      return;
+    }
+
+    setActiveQuery(cleanQuery);
     setLoading(true);
     setError("");
+    setResult(null);
+    window.setTimeout(() => {
+      resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 80);
+    const minimumFeedback = new Promise<void>((resolve) => window.setTimeout(resolve, 1800));
     try {
-      const data = await api<SearchResult>(`/api/search?q=${encodeURIComponent(query)}`);
+      const data = await api<SearchResult>(`/api/search?q=${encodeURIComponent(cleanQuery)}`);
+      await minimumFeedback;
       setResult(data);
       onHistoryRefresh();
     } catch (apiError) {
+      await minimumFeedback;
       setError(apiError instanceof Error ? apiError.message : "Não foi possível buscar agora.");
     } finally {
       setLoading(false);
@@ -578,9 +617,9 @@ function SearchPage({
       <form className="hero-search" onSubmit={submitSearch}>
         <Search size={23} />
         <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Digite uma palavra-chave" />
-        <button type="submit" disabled={loading}>
-          <Search size={20} />
-          {loading ? "Buscando..." : "Buscar demanda"}
+        <button className={loading ? "loading" : ""} type="submit" disabled={loading}>
+          {loading ? <span className="button-spinner" aria-hidden="true" /> : <Search size={20} />}
+          {loading ? "Validando mercado" : "Buscar demanda"}
         </button>
       </form>
 
@@ -594,9 +633,9 @@ function SearchPage({
       </div>
 
       <section className="search-grid">
-        <div className="left-stack">
+        <div className="left-stack" ref={resultsRef}>
           {error && <p className="inline-error">{error}</p>}
-          <ResultsPanel query={query} result={result} />
+          <ResultsPanel query={activeQuery} result={result} loading={loading} elapsedMs={elapsedMs} />
           <PlansPreview settings={settings} />
           <LearnPreview tips={tips} />
         </div>
@@ -620,7 +659,17 @@ function SearchPage({
   );
 }
 
-function ResultsPanel({ query, result }: { query: string; result: SearchResult | null }) {
+function ResultsPanel({
+  query,
+  result,
+  loading = false,
+  elapsedMs = 0,
+}: {
+  query: string;
+  result: SearchResult | null;
+  loading?: boolean;
+  elapsedMs?: number;
+}) {
   const marketUrl = `https://lista.mercadolivre.com.br/${encodeURIComponent(query)}`;
   const items = result?.items ?? [];
   const hasItems = items.length > 0;
@@ -660,7 +709,9 @@ function ResultsPanel({ query, result }: { query: string; result: SearchResult |
         </a>
       </div>
 
-      {!hasItems && (
+      {loading && <SearchProgress query={query} elapsedMs={elapsedMs} />}
+
+      {!loading && !hasItems && (
         <div className={`market-empty ${result && !result.ok ? "warning" : ""}`}>
           <PackageSearch size={34} />
           <strong>{result ? result.message : "Faça uma pesquisa real no Mercado Livre."}</strong>
@@ -668,7 +719,7 @@ function ResultsPanel({ query, result }: { query: string; result: SearchResult |
         </div>
       )}
 
-      {hasItems && (
+      {!loading && hasItems && (
         <div className="result-list">
           {items.map((item, index) => (
             <article className="result-row" key={item.id}>
@@ -701,6 +752,44 @@ function ResultsPanel({ query, result }: { query: string; result: SearchResult |
         </div>
       )}
     </section>
+  );
+}
+
+function SearchProgress({ query, elapsedMs }: { query: string; elapsedMs: number }) {
+  const seconds = Math.floor(elapsedMs / 1000);
+  const currentStep = Math.min(searchSteps.length - 1, Math.floor(seconds / 8));
+  const progress = Math.min(92, 12 + seconds * 2.6);
+  const statusText =
+    seconds < 12
+      ? "Conectando com a página pública e lendo os primeiros anúncios."
+      : seconds < 28
+        ? "Comparando títulos para evitar produto parecido ou medida errada."
+        : "Finalizando os cards; no modo provisório essa etapa pode levar um pouco mais.";
+
+  return (
+    <div className="search-progress" role="status" aria-live="polite">
+      <div className="progress-top">
+        <span className="progress-orbit" aria-hidden="true">
+          <Search size={24} />
+        </span>
+        <div>
+          <strong>Validando "{query}"</strong>
+          <p>{statusText}</p>
+        </div>
+        <b>{seconds}s</b>
+      </div>
+      <div className="progress-track" aria-hidden="true">
+        <i style={{ width: `${progress}%` }} />
+      </div>
+      <ol className="progress-steps">
+        {searchSteps.map((step, index) => (
+          <li className={index < currentStep ? "done" : index === currentStep ? "active" : ""} key={step}>
+            <span>{index + 1}</span>
+            {step}
+          </li>
+        ))}
+      </ol>
+    </div>
   );
 }
 
