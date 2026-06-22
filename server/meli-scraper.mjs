@@ -8,13 +8,14 @@ const SCRAPER_TIMEOUT_MS = Number(process.env.MELI_SCRAPER_TIMEOUT_MS || 24_000)
 const PRODUCT_PAGE_TIMEOUT_MS = Number(process.env.MELI_PRODUCT_PAGE_TIMEOUT_MS || 9_000);
 const SEARCH_RESULTS_WAIT_MS = Number(process.env.MELI_SEARCH_RESULTS_WAIT_MS || 12_000);
 const SEARCH_CARD_LIMIT = Number(process.env.MELI_SEARCH_CARD_LIMIT || 12);
+const CACHE_VERSION = "sales-real-v3";
 const CACHE_FILE = resolve(process.cwd(), "data", "meli-scraper-cache.json");
 const cache = new Map();
 const inFlight = new Map();
 let diskCacheLoaded = false;
 
 export async function searchMercadoLivreScraper(query) {
-  const cacheKey = normalizedProductKey(query);
+  const cacheKey = `${CACHE_VERSION}:${normalizedProductKey(query)}`;
   ensureDiskCacheLoaded();
   const cached = cache.get(cacheKey);
 
@@ -45,7 +46,7 @@ export async function searchMercadoLivreScraper(query) {
 
 async function runScraper(query) {
   let scraped;
-  const cacheKey = normalizedProductKey(query);
+  const cacheKey = `${CACHE_VERSION}:${normalizedProductKey(query)}`;
 
   try {
     scraped = await scrapeSearchPage(query);
@@ -349,7 +350,7 @@ function mapScrapedItem(item) {
     price: item.price,
     soldQuantity: hasSales ? item.soldQuantity : null,
     estimatedSoldQuantity: hasEstimate ? item.estimatedSoldQuantity : null,
-    salesMetricLabel: hasSales ? undefined : hasEstimate ? undefined : "Nao divulgado",
+    salesMetricLabel: hasSales ? undefined : "Nao exibido pelo Mercado Livre",
     revenue: hasSales ? Number((item.price * item.soldQuantity).toFixed(2)) : null,
     estimatedRevenue: hasEstimate ? item.estimatedRevenue : null,
     revenueMetricLabel: hasSales || hasEstimate ? undefined : "Aguardando API",
@@ -383,9 +384,11 @@ async function enrichMercadoLivreItem(context, item) {
     const bodyText = await safeBodyText(page);
     await assertNotBlocked(page, bodyText);
     const htmlText = await page.content().catch(() => "");
-    const soldQuantity = parseSalesFromText(`${bodyText} ${htmlText}`);
-    const price = parseProductPrice(`${bodyText} ${htmlText}`) || item.price;
     const finalUrl = page.url();
+    const directText = await fetchMercadoLivrePageText(finalUrl || href);
+    const combinedText = `${bodyText} ${htmlText} ${directText}`;
+    const soldQuantity = parseSalesFromText(combinedText);
+    const price = parseProductPrice(combinedText) || item.price;
     return {
       ...item,
       href: /mercadolivre\.com\.br/i.test(finalUrl) ? finalUrl : item.href,
@@ -396,6 +399,31 @@ async function enrichMercadoLivreItem(context, item) {
     return item;
   } finally {
     await page.close().catch(() => {});
+  }
+}
+
+async function fetchMercadoLivrePageText(url) {
+  if (!url || !/mercadolivre\.com\.br/i.test(url)) {
+    return "";
+  }
+
+  try {
+    const response = await fetch(url, {
+      headers: {
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.6",
+        "Cache-Control": "no-cache",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+      },
+      redirect: "follow",
+      signal: AbortSignal.timeout(5_000),
+    });
+    if (!response.ok) {
+      return "";
+    }
+    return await response.text();
+  } catch {
+    return "";
   }
 }
 

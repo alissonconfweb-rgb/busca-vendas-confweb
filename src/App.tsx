@@ -75,6 +75,7 @@ type SearchResult = {
     revenue: number;
     averageTicket: number;
     isEstimated?: boolean;
+    actualDemand?: number;
   };
 };
 
@@ -733,8 +734,8 @@ function ResultsPanel({
                 <p>{item.subtitle || "Anúncio ativo no Mercado Livre"}</p>
               </div>
               <Metric
-                label={item.estimatedSoldQuantity ? "Previsão de vendas" : marketSignalMode ? "Venda por anúncio" : publicPageMode ? "Vendidos no anúncio" : "Vendas do anúncio"}
-                value={formatCountOrLabel(item.soldQuantity, item.salesMetricLabel, item.estimatedSoldQuantity)}
+                label={marketSignalMode ? "Venda por anúncio" : publicPageMode ? "Vendidos no anúncio" : "Vendas do anúncio"}
+                value={formatCountOrLabel(item.soldQuantity, item.salesMetricLabel)}
               />
               <Metric label="Preço anúncio" value={money.format(item.price)} />
               <Metric label="Receita estimada" value={formatMoneyOrLabel(item.revenue, item.revenueMetricLabel, item.estimatedRevenue)} />
@@ -803,12 +804,9 @@ function Metric({ label, value }: { label: string; value: string }) {
   );
 }
 
-function formatCountOrLabel(value: number | null | undefined, fallback = "Não divulgado", estimatedValue?: number | null) {
+function formatCountOrLabel(value: number | null | undefined, fallback = "Não divulgado") {
   if (typeof value === "number") {
     return number.format(value);
-  }
-  if (typeof estimatedValue === "number" && estimatedValue > 0) {
-    return `Previsão ${number.format(estimatedValue)}`;
   }
   return fallback;
 }
@@ -828,6 +826,7 @@ function DemandCard({ result }: { result: SearchResult | null }) {
   const publicPageMode = result?.source === "mercado_livre_scraper";
   const championCount = result?.items?.length || 0;
   const forecastMode = Boolean(result?.totals.isEstimated);
+  const actualDemand = result?.totals.actualDemand ?? result?.totals.demand ?? 0;
 
   return (
     <section className="demand-card">
@@ -837,9 +836,9 @@ function DemandCard({ result }: { result: SearchResult | null }) {
       </div>
       <dl>
         <div>
-          <dt>{forecastMode ? "Potencial nos campeões" : marketSignalMode ? "Campeões encontrados" : publicPageMode ? "Vendidos nos campeões" : "Vendas nos campeões"}</dt>
+          <dt>{forecastMode ? "Vendas reais identificadas" : marketSignalMode ? "Campeões encontrados" : publicPageMode ? "Vendidos nos campeões" : "Vendas nos campeões"}</dt>
           <dd className="blue-value">
-            {forecastMode || !marketSignalMode ? number.format(result?.totals.demand || 0) : `${number.format(championCount)} de 3`}
+            {forecastMode ? number.format(actualDemand) : !marketSignalMode ? number.format(result?.totals.demand || 0) : `${number.format(championCount)} de 3`}
           </dd>
         </div>
         <div>
