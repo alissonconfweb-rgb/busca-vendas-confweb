@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import { extname, join, resolve } from "node:path";
 import { db, createSession, deleteSession, findUserByEmail, getSetting, initDatabase, publicUser, setSetting, settingsObject, userFromSession } from "./db.mjs";
 import { loadLocalEnv } from "./env.mjs";
-import { buildMeliAuthorizationUrl, disconnectMeliOAuth, exchangeMeliAuthorizationCode, getMeliRedirectUri, searchMercadoLivre } from "./meli.mjs";
+import { buildMeliAuthorizationUrl, createMeliPkcePair, disconnectMeliOAuth, exchangeMeliAuthorizationCode, getMeliRedirectUri, searchMercadoLivre } from "./meli.mjs";
 import { bootstrapAdminFromEnv } from "./bootstrap-admin.mjs";
 import { syncMeliSettingsFromEnv, validateMeliSettingsInput, isValidMeliClientId, resolveMeliRedirectUri } from "./meli-config.mjs";
 import { hashPassword, hashToken, randomToken, verifyPassword } from "./security.mjs";
@@ -207,16 +207,18 @@ async function handleAdmin(req, res, url, currentUser) {
     }
 
     const state = randomToken();
+    const { codeVerifier, codeChallenge } = createMeliPkcePair();
     const redirectUri = oauthRedirectUriForRequest(url);
     const stateHash = hashToken(state);
     setSetting("meli_oauth_state_hash", stateHash);
     setSetting("meli_oauth_state_user_id", currentUser.id);
     setSetting("meli_oauth_state_created_at", new Date().toISOString());
-    rememberMeliOAuthState(stateHash, currentUser.id);
+    setSetting("meli_oauth_code_verifier", codeVerifier);
+    rememberMeliOAuthState(stateHash, currentUser.id, codeVerifier);
     setSetting("meli_redirect_uri", redirectUri);
     setSetting("meli_last_error", "");
 
-    const authorizationUrl = buildMeliAuthorizationUrl({ state, redirectUri });
+    const authorizationUrl = buildMeliAuthorizationUrl({ state, redirectUri, codeChallenge });
     if (!authorizationUrl) {
       return json(res, 400, { error: "Configure App ID, Secret Key e Redirect URI antes de conectar." });
     }
@@ -427,6 +429,7 @@ function safeSettings(user) {
     delete settings.meli_oauth_state_user_id;
     delete settings.meli_oauth_state_created_at;
     delete settings.meli_oauth_states;
+    delete settings.meli_oauth_code_verifier;
     delete settings.session_secret;
   } else if (settings.meli_access_token) {
     settings.meli_access_token_configured = "true";
@@ -444,6 +447,7 @@ function safeSettings(user) {
     delete settings.meli_oauth_state_user_id;
     delete settings.meli_oauth_state_created_at;
     delete settings.meli_oauth_states;
+    delete settings.meli_oauth_code_verifier;
     delete settings.session_secret;
   }
   return settings;
@@ -466,19 +470,27 @@ async function handleMeliCallback(req, res, url) {
 
   const code = url.searchParams.get("code");
   const state = url.searchParams.get("state");
+  const oauthState = code && state ? consumeMeliOAuthState(state, user.id) : { valid: false, codeVerifier: "" };
 
-  if (!code || !state || !consumeMeliOAuthState(state, user.id)) {
+  if (!code || !state || !oauthState.valid) {
     setSetting("meli_last_error", "Estado OAuth inválido. Tente conectar novamente.");
     frontendUrl.searchParams.set("meli", "invalid_state");
     return redirect(res, frontendUrl.toString());
   }
 
+  if (!oauthState.codeVerifier) {
+    setSetting("meli_last_error", "Chave PKCE expirada. Clique em Conectar Mercado Livre novamente.");
+    frontendUrl.searchParams.set("meli", "error");
+    return redirect(res, frontendUrl.toString());
+  }
+
   try {
-    await exchangeMeliAuthorizationCode({ code, redirectUri: oauthRedirectUriForRequest(url) });
+    await exchangeMeliAuthorizationCode({ code, redirectUri: oauthRedirectUriForRequest(url), codeVerifier: oauthState.codeVerifier });
     setSetting("meli_oauth_state_hash", "");
     setSetting("meli_oauth_state_user_id", "");
     setSetting("meli_oauth_state_created_at", "");
     setSetting("meli_oauth_states", "");
+    setSetting("meli_oauth_code_verifier", "");
     frontendUrl.searchParams.set("meli", "connected");
     return redirect(res, frontendUrl.toString());
   } catch (error) {
@@ -492,7 +504,7 @@ function oauthRedirectUriForRequest(url) {
   return process.env.MELI_REDIRECT_URI || getSetting("meli_redirect_uri") || `${url.origin}/api/meli/callback`;
 }
 
-function rememberMeliOAuthState(stateHash, userId) {
+function rememberMeliOAuthState(stateHash, userId, codeVerifier) {
   const now = Date.now();
   const states = readMeliOAuthStates()
     .filter((entry) => now - Number(entry.createdAt || 0) <= MELI_OAUTH_STATE_TTL_MS)
@@ -502,6 +514,7 @@ function rememberMeliOAuthState(stateHash, userId) {
     hash: stateHash,
     userId: String(userId),
     createdAt: now,
+    codeVerifier,
   });
 
   setSetting("meli_oauth_states", JSON.stringify(states));
@@ -517,6 +530,7 @@ function consumeMeliOAuthState(state, userId) {
     expectedStateHash === stateHash &&
     (!expectedUserId || String(expectedUserId) === String(userId)),
   );
+  let codeVerifier = valid ? getSetting("meli_oauth_code_verifier") : "";
 
   const remainingStates = [];
   for (const entry of readMeliOAuthStates()) {
@@ -526,6 +540,7 @@ function consumeMeliOAuthState(state, userId) {
 
     if (matches) {
       valid = true;
+      codeVerifier = entry.codeVerifier || codeVerifier;
       continue;
     }
     if (fresh) {
@@ -534,7 +549,7 @@ function consumeMeliOAuthState(state, userId) {
   }
 
   setSetting("meli_oauth_states", remainingStates.length ? JSON.stringify(remainingStates) : "");
-  return valid;
+  return { valid, codeVerifier };
 }
 
 function readMeliOAuthStates() {

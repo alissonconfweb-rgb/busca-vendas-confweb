@@ -1,3 +1,4 @@
+import { createHash, randomBytes } from "node:crypto";
 import { getSetting, setSetting } from "./db.mjs";
 import { searchMercadoLivreCatalog } from "./meli-catalog.mjs";
 import { searchMercadoLivreScraper } from "./meli-scraper.mjs";
@@ -134,7 +135,13 @@ function searchWithToken(siteId, params, accessToken) {
   });
 }
 
-export function buildMeliAuthorizationUrl({ state, redirectUri } = {}) {
+export function createMeliPkcePair() {
+  const codeVerifier = randomBytes(64).toString("base64url");
+  const codeChallenge = createHash("sha256").update(codeVerifier).digest("base64url");
+  return { codeVerifier, codeChallenge };
+}
+
+export function buildMeliAuthorizationUrl({ state, redirectUri, codeChallenge } = {}) {
   const clientId = getMeliClientId();
   const finalRedirectUri = redirectUri || getMeliRedirectUri();
 
@@ -149,10 +156,14 @@ export function buildMeliAuthorizationUrl({ state, redirectUri } = {}) {
   if (state) {
     url.searchParams.set("state", state);
   }
+  if (codeChallenge) {
+    url.searchParams.set("code_challenge", codeChallenge);
+    url.searchParams.set("code_challenge_method", "S256");
+  }
   return url.toString();
 }
 
-export async function exchangeMeliAuthorizationCode({ code, redirectUri }) {
+export async function exchangeMeliAuthorizationCode({ code, redirectUri, codeVerifier }) {
   const clientId = getMeliClientId();
   const clientSecret = getMeliClientSecret();
   const finalRedirectUri = redirectUri || getMeliRedirectUri();
@@ -167,6 +178,7 @@ export async function exchangeMeliAuthorizationCode({ code, redirectUri }) {
     client_secret: clientSecret,
     code,
     redirect_uri: finalRedirectUri,
+    ...(codeVerifier ? { code_verifier: codeVerifier } : {}),
   });
   persistTokenData(data);
   return data;
@@ -224,6 +236,11 @@ export function disconnectMeliOAuth() {
     "meli_user_id",
     "meli_oauth_connected_at",
     "meli_last_error",
+    "meli_oauth_code_verifier",
+    "meli_oauth_state_hash",
+    "meli_oauth_state_user_id",
+    "meli_oauth_state_created_at",
+    "meli_oauth_states",
   ]) {
     setSetting(key, "");
   }
