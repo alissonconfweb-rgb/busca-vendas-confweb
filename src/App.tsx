@@ -284,6 +284,14 @@ function ProductApp({ user, onUserChange }: { user: User | null; onUserChange: (
     loadPrivateData();
   }, [user?.id, refreshKey]);
 
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (!params.get("meli") || !user || !canUseAdmin(user)) {
+      return;
+    }
+    setMode("admin");
+  }, [user]);
+
   const requireLogin = () => {
     if (user) {
       return true;
@@ -1117,6 +1125,30 @@ function AdminPanel({ user, onSettingsChange }: { user: User; onSettingsChange: 
     load();
   }, []);
 
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const meli = params.get("meli");
+    if (!meli) {
+      return;
+    }
+
+    const messages: Record<string, string> = {
+      connected: "Mercado Livre conectado com sucesso.",
+      error: "Erro ao conectar o Mercado Livre. Verifique App ID, Secret e Redirect URI.",
+      invalid_state: "Sessão OAuth expirou. Tente conectar novamente.",
+      unauthorized: "Somente o criador pode conectar o Mercado Livre.",
+    };
+
+    if (messages[meli]) {
+      setMessage(messages[meli]);
+      setTab("settings");
+    }
+
+    params.delete("meli");
+    const query = params.toString();
+    window.history.replaceState({}, "", `${window.location.pathname}${query ? `?${query}` : ""}`);
+  }, []);
+
   const afterSave = async (text = "Alteração salva.") => {
     setMessage(text);
     await load();
@@ -1410,6 +1442,8 @@ function AdminSupport({ tickets, afterSave }: { tickets: Ticket[]; afterSave: ()
 
 function AdminSettings({ settings, afterSave }: { settings: SettingsMap; afterSave: (text?: string) => void }) {
   const [busy, setBusy] = useState(false);
+  const [connectError, setConnectError] = useState("");
+  const redirectUri = settings.meli_redirect_uri || `${window.location.origin}/api/meli/callback`;
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -1422,6 +1456,29 @@ function AdminSettings({ settings, afterSave }: { settings: SettingsMap; afterSa
     }
     await api("/api/admin/settings", { method: "PATCH", body: JSON.stringify(payload) });
     afterSave();
+  };
+
+  const connect = async () => {
+    setConnectError("");
+    setBusy(true);
+    try {
+      const response = await fetch("/api/admin/meli/connect", { credentials: "include", redirect: "manual" });
+      if (response.status >= 300 && response.status < 400) {
+        const location = response.headers.get("Location");
+        if (location) {
+          window.location.href = location;
+          return;
+        }
+      }
+      const data = response.status === 204 ? null : await response.json();
+      if (!response.ok) {
+        throw new Error(data?.error || "Não foi possível iniciar a conexão com o Mercado Livre.");
+      }
+    } catch (error) {
+      setConnectError(error instanceof Error ? error.message : "Não foi possível iniciar a conexão.");
+    } finally {
+      setBusy(false);
+    }
   };
 
   const disconnect = async () => {
@@ -1447,14 +1504,15 @@ function AdminSettings({ settings, afterSave }: { settings: SettingsMap; afterSa
             <b>App ID: {settings.meli_client_id ? "configurado" : "pendente"}</b>
             <b>Secret Key: {settings.meli_client_secret_configured ? "configurada" : "pendente"}</b>
           </div>
-          <small>Redirect URI para cadastrar no app: {settings.meli_redirect_uri || "http://127.0.0.1:3001/api/meli/callback"}</small>
+          <small>Redirect URI para cadastrar no app: {redirectUri}</small>
           {settings.meli_last_error && <strong className="oauth-error">{settings.meli_last_error}</strong>}
+          {connectError && <strong className="oauth-error">{connectError}</strong>}
         </div>
         <div className="meli-actions">
-          <a className="connect-button" href="/api/admin/meli/connect">
+          <button className="connect-button" type="button" onClick={connect} disabled={busy}>
             <LogIn size={18} />
             {settings.meli_oauth_connected ? "Reconectar Mercado Livre" : "Conectar Mercado Livre"}
-          </a>
+          </button>
           {settings.meli_oauth_connected && (
             <button type="button" onClick={disconnect} disabled={busy}>
               Desconectar
@@ -1466,7 +1524,14 @@ function AdminSettings({ settings, afterSave }: { settings: SettingsMap; afterSa
       <form className="settings-grid" onSubmit={submit}>
         <label>
           Mercado Livre App ID
-          <input name="meli_client_id" defaultValue={settings.meli_client_id || ""} placeholder="Client ID / App ID" />
+          <input
+            name="meli_client_id"
+            defaultValue={settings.meli_client_id || ""}
+            placeholder="Ex.: 1234567890123456"
+            inputMode="numeric"
+            pattern="[0-9]*"
+          />
+          <small className="field-hint">Número da aplicação no DevCenter. Não use o e-mail da conta.</small>
         </label>
         <label>
           Mercado Livre Secret Key
@@ -1477,7 +1542,8 @@ function AdminSettings({ settings, afterSave }: { settings: SettingsMap; afterSa
         </label>
         <label>
           Redirect URI
-          <input name="meli_redirect_uri" defaultValue={settings.meli_redirect_uri || "http://127.0.0.1:3001/api/meli/callback"} />
+          <input name="meli_redirect_uri" defaultValue={redirectUri} readOnly />
+          <small className="field-hint">Cadastre exatamente esta URL no app do Mercado Livre.</small>
         </label>
         <label>
           Site Mercado Livre
