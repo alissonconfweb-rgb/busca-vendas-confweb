@@ -4,7 +4,8 @@ import { buildProductQuerySpec, matchesProductQuery, normalizedProductKey } from
 
 const CACHE_TTL_MS = Number(process.env.MELI_SCRAPER_CACHE_MS || 60 * 60 * 1000);
 const STALE_CACHE_TTL_MS = Number(process.env.MELI_SCRAPER_STALE_CACHE_MS || 6 * 60 * 60 * 1000);
-const SCRAPER_TIMEOUT_MS = Number(process.env.MELI_SCRAPER_TIMEOUT_MS || 45_000);
+const SCRAPER_TIMEOUT_MS = Number(process.env.MELI_SCRAPER_TIMEOUT_MS || 30_000);
+const PRODUCT_PAGE_TIMEOUT_MS = Number(process.env.MELI_PRODUCT_PAGE_TIMEOUT_MS || 7_000);
 const CACHE_FILE = resolve(process.cwd(), "data", "meli-scraper-cache.json");
 const cache = new Map();
 const inFlight = new Map();
@@ -258,13 +259,18 @@ async function scrapeSearchPage(query) {
         });
     });
 
-    const mappedItems = items.map((item) => ({
+    const mappedItems = items.map((item, index) => ({
       ...item,
+      position: index + 1,
       id: extractItemId(item.href) || normalizedProductKey(item.title),
       price: Number(item.price) > 0 ? Number(item.price) : parseCardPrice(item.text),
       soldQuantity: parseSalesFromText(item.text),
     }));
-    const enrichedItems = await enrichTopMercadoLivreItems(context, mappedItems);
+    const spec = buildProductQuerySpec(query);
+    const exactItems = mappedItems
+      .map((item) => ({ ...item, match: matchesProductQuery(item.title, spec) }))
+      .filter((item) => item.match.ok && item.price > 0);
+    const enrichedItems = await enrichTopMercadoLivreItems(context, dedupeAndRank(exactItems).slice(0, 3));
 
     return {
       totalAvailable: parseTotalAvailable(bodyText) || items.length,
@@ -314,7 +320,7 @@ function mapScrapedItem(item) {
 
 async function enrichTopMercadoLivreItems(context, items) {
   const enriched = [];
-  for (const item of items.slice(0, 8)) {
+  for (const item of items.slice(0, 3)) {
     if (typeof item.soldQuantity === "number" && item.soldQuantity > 0) {
       enriched.push(item);
       continue;
@@ -332,8 +338,8 @@ async function enrichMercadoLivreItem(context, item) {
 
   const page = await context.newPage();
   try {
-    await page.goto(href, { waitUntil: "domcontentloaded", timeout: 18_000 });
-    await page.waitForTimeout(900);
+    await page.goto(href, { waitUntil: "domcontentloaded", timeout: PRODUCT_PAGE_TIMEOUT_MS });
+    await page.waitForTimeout(500);
     const bodyText = await safeBodyText(page);
     await assertNotBlocked(page, bodyText);
     const htmlText = await page.content().catch(() => "");
