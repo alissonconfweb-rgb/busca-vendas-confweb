@@ -241,13 +241,40 @@ async function postToken(payload) {
   });
 
   const text = await response.text();
-  const data = text ? JSON.parse(text) : {};
+  const data = parseMeliTokenResponse(text, response.status);
 
   if (!response.ok) {
-    throw new Error(data.message || data.error_description || data.error || `Mercado Livre OAuth respondeu ${response.status}.`);
+    throw new Error(describeMeliTokenError(response.status, data, text));
+  }
+
+  if (!data.access_token) {
+    throw new Error(describeMeliTokenError(response.status, data, text, "Mercado Livre OAuth nao retornou access_token."));
   }
 
   return data;
+}
+
+function parseMeliTokenResponse(text, status) {
+  if (!text || !text.trim()) {
+    return {};
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(`Mercado Livre OAuth respondeu ${status}, mas retornou JSON invalido: ${text.slice(0, 180)}`);
+  }
+}
+
+function describeMeliTokenError(status, data, text, fallback = "") {
+  const detail = data.message || data.error_description || data.error || fallback;
+  if (detail) {
+    return `Mercado Livre OAuth respondeu ${status}: ${detail}`;
+  }
+  if (!text || !text.trim()) {
+    return `Mercado Livre OAuth respondeu ${status} sem corpo de resposta. Confira Secret Key, Redirect URI e tente reconectar.`;
+  }
+  return `Mercado Livre OAuth respondeu ${status}: ${text.slice(0, 180)}`;
 }
 
 function persistTokenData(data) {

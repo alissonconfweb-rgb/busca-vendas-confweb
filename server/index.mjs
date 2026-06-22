@@ -211,6 +211,7 @@ async function handleAdmin(req, res, url, currentUser) {
     setSetting("meli_oauth_state_user_id", currentUser.id);
     setSetting("meli_oauth_state_created_at", new Date().toISOString());
     setSetting("meli_redirect_uri", redirectUri);
+    setSetting("meli_last_error", "");
 
     const authorizationUrl = buildMeliAuthorizationUrl({ state, redirectUri });
     if (!authorizationUrl) {
@@ -298,6 +299,9 @@ async function handleAdmin(req, res, url, currentUser) {
         continue;
       }
       setSetting(key, value);
+    }
+    if (Object.keys(body).some((key) => key.startsWith("meli_"))) {
+      setSetting("meli_last_error", "");
     }
     return json(res, 200, safeSettings({ role: "admin" }));
   }
