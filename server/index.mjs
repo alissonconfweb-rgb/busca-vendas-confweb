@@ -17,6 +17,7 @@ const IS_PRODUCTION = process.env.NODE_ENV === "production";
 const COOKIE = "bv_session";
 const CREATOR_EMAIL = (process.env.CREATOR_EMAIL || "alisson.confweb@gmail.com").toLowerCase();
 const DIST_DIR = resolve(process.cwd(), "dist");
+const MELI_OAUTH_STATE_TTL_MS = 15 * 60 * 1000;
 
 bootstrapAdminFromEnv(db);
 syncMeliSettingsFromEnv();
@@ -207,9 +208,11 @@ async function handleAdmin(req, res, url, currentUser) {
 
     const state = randomToken();
     const redirectUri = oauthRedirectUriForRequest(url);
-    setSetting("meli_oauth_state_hash", hashToken(state));
+    const stateHash = hashToken(state);
+    setSetting("meli_oauth_state_hash", stateHash);
     setSetting("meli_oauth_state_user_id", currentUser.id);
     setSetting("meli_oauth_state_created_at", new Date().toISOString());
+    rememberMeliOAuthState(stateHash, currentUser.id);
     setSetting("meli_redirect_uri", redirectUri);
     setSetting("meli_last_error", "");
 
@@ -423,6 +426,7 @@ function safeSettings(user) {
     delete settings.meli_oauth_state_hash;
     delete settings.meli_oauth_state_user_id;
     delete settings.meli_oauth_state_created_at;
+    delete settings.meli_oauth_states;
     delete settings.session_secret;
   } else if (settings.meli_access_token) {
     settings.meli_access_token_configured = "true";
@@ -439,6 +443,7 @@ function safeSettings(user) {
     delete settings.meli_oauth_state_hash;
     delete settings.meli_oauth_state_user_id;
     delete settings.meli_oauth_state_created_at;
+    delete settings.meli_oauth_states;
     delete settings.session_secret;
   }
   return settings;
@@ -461,9 +466,8 @@ async function handleMeliCallback(req, res, url) {
 
   const code = url.searchParams.get("code");
   const state = url.searchParams.get("state");
-  const expectedStateHash = getSetting("meli_oauth_state_hash");
 
-  if (!code || !state || !expectedStateHash || hashToken(state) !== expectedStateHash) {
+  if (!code || !state || !consumeMeliOAuthState(state, user.id)) {
     setSetting("meli_last_error", "Estado OAuth inválido. Tente conectar novamente.");
     frontendUrl.searchParams.set("meli", "invalid_state");
     return redirect(res, frontendUrl.toString());
@@ -474,6 +478,7 @@ async function handleMeliCallback(req, res, url) {
     setSetting("meli_oauth_state_hash", "");
     setSetting("meli_oauth_state_user_id", "");
     setSetting("meli_oauth_state_created_at", "");
+    setSetting("meli_oauth_states", "");
     frontendUrl.searchParams.set("meli", "connected");
     return redirect(res, frontendUrl.toString());
   } catch (error) {
@@ -485,6 +490,60 @@ async function handleMeliCallback(req, res, url) {
 
 function oauthRedirectUriForRequest(url) {
   return process.env.MELI_REDIRECT_URI || getSetting("meli_redirect_uri") || `${url.origin}/api/meli/callback`;
+}
+
+function rememberMeliOAuthState(stateHash, userId) {
+  const now = Date.now();
+  const states = readMeliOAuthStates()
+    .filter((entry) => now - Number(entry.createdAt || 0) <= MELI_OAUTH_STATE_TTL_MS)
+    .slice(-8);
+
+  states.push({
+    hash: stateHash,
+    userId: String(userId),
+    createdAt: now,
+  });
+
+  setSetting("meli_oauth_states", JSON.stringify(states));
+}
+
+function consumeMeliOAuthState(state, userId) {
+  const stateHash = hashToken(state);
+  const now = Date.now();
+  const expectedStateHash = getSetting("meli_oauth_state_hash");
+  const expectedUserId = getSetting("meli_oauth_state_user_id");
+  let valid = Boolean(
+    expectedStateHash &&
+    expectedStateHash === stateHash &&
+    (!expectedUserId || String(expectedUserId) === String(userId)),
+  );
+
+  const remainingStates = [];
+  for (const entry of readMeliOAuthStates()) {
+    const fresh = now - Number(entry.createdAt || 0) <= MELI_OAUTH_STATE_TTL_MS;
+    const belongsToUser = !entry.userId || String(entry.userId) === String(userId);
+    const matches = fresh && belongsToUser && entry.hash === stateHash;
+
+    if (matches) {
+      valid = true;
+      continue;
+    }
+    if (fresh) {
+      remainingStates.push(entry);
+    }
+  }
+
+  setSetting("meli_oauth_states", remainingStates.length ? JSON.stringify(remainingStates) : "");
+  return valid;
+}
+
+function readMeliOAuthStates() {
+  try {
+    const states = JSON.parse(getSetting("meli_oauth_states") || "[]");
+    return Array.isArray(states) ? states : [];
+  } catch {
+    return [];
+  }
 }
 
 function publicUserWithPermissions(user) {

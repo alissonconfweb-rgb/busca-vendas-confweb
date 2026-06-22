@@ -1461,24 +1461,7 @@ function AdminSettings({ settings, afterSave }: { settings: SettingsMap; afterSa
   const connect = async () => {
     setConnectError("");
     setBusy(true);
-    try {
-      const response = await fetch("/api/admin/meli/connect", { credentials: "include", redirect: "manual" });
-      if (response.status >= 300 && response.status < 400) {
-        const location = response.headers.get("Location");
-        if (location) {
-          window.location.href = location;
-          return;
-        }
-      }
-      const data = response.status === 204 ? null : await response.json();
-      if (!response.ok) {
-        throw new Error(data?.error || "Não foi possível iniciar a conexão com o Mercado Livre.");
-      }
-    } catch (error) {
-      setConnectError(error instanceof Error ? error.message : "Não foi possível iniciar a conexão.");
-    } finally {
-      setBusy(false);
-    }
+    window.location.href = "/api/admin/meli/connect";
   };
 
   const disconnect = async () => {
