@@ -9,6 +9,7 @@
     "api": "node server/index.mjs",
     "admin:create": "node server/create-admin.mjs",
     "build": "tsc && vite build",
+    "postinstall": "playwright install chromium",
     "start": "node server/index.mjs",
     "preview": "vite preview --host 127.0.0.1"
   },

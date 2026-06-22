@@ -47,6 +47,7 @@ export async function searchMercadoLivre(query) {
         source: scraped.source,
         message: scraped.message,
       });
+      setSetting("meli_last_error", `Fallback publico falhou: ${scraped.message}`);
     }
 
     return {
@@ -87,6 +88,7 @@ export async function searchMercadoLivre(query) {
           source: scraped.source,
           message: scraped.message,
         });
+        setSetting("meli_last_error", `Fallback publico falhou: ${scraped.message}`);
       }
 
       const catalog = await searchMercadoLivreCatalog({ query, accessToken, siteId });
