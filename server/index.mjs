@@ -298,7 +298,7 @@ async function handleAdmin(req, res, url, currentUser) {
       if (keepWhenBlank.has(key) && !String(value || "").trim() && getSetting(key)) {
         continue;
       }
-      setSetting(key, value);
+      setSetting(key, normalizeSettingValue(key, value));
     }
     if (Object.keys(body).some((key) => key.startsWith("meli_"))) {
       setSetting("meli_last_error", "");
@@ -586,6 +586,13 @@ function nullableNumber(value) {
     return null;
   }
   return Number(value);
+}
+
+function normalizeSettingValue(key, value) {
+  if (key.startsWith("meli_") || key === "frontend_origin") {
+    return String(value || "").trim();
+  }
+  return value;
 }
 
 function serveStatic(req, res, url) {

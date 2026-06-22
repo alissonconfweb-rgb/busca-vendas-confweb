@@ -213,7 +213,7 @@ export async function getValidMeliAccessToken() {
 }
 
 export function getMeliRedirectUri() {
-  return process.env.MELI_REDIRECT_URI || getSetting("meli_redirect_uri");
+  return (process.env.MELI_REDIRECT_URI || getSetting("meli_redirect_uri") || "").trim();
 }
 
 export function disconnectMeliOAuth() {
@@ -295,13 +295,13 @@ function persistTokenData(data) {
 }
 
 function getMeliClientId() {
-  return process.env.MELI_CLIENT_ID || getSetting("meli_client_id");
+  return (process.env.MELI_CLIENT_ID || getSetting("meli_client_id") || "").trim();
 }
 
 function getMeliClientSecret() {
-  return process.env.MELI_CLIENT_SECRET || getSetting("meli_client_secret");
+  return (process.env.MELI_CLIENT_SECRET || getSetting("meli_client_secret") || "").trim();
 }
 
 function getMeliRefreshToken() {
-  return process.env.MELI_REFRESH_TOKEN || getSetting("meli_refresh_token");
+  return (process.env.MELI_REFRESH_TOKEN || getSetting("meli_refresh_token") || "").trim();
 }
