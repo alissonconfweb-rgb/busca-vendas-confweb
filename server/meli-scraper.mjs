@@ -275,7 +275,7 @@ async function safeBodyText(page) {
 
 async function assertNotBlocked(page, bodyText) {
   const title = await page.title().catch(() => "");
-  const normalized = normalizedProductKey(`${title} ${bodyText}`);
+  const normalized = normalizedProductKey(`${page.url()} ${title} ${bodyText}`);
   const blocked = [
     "captcha",
     "complete-esta-etapa",

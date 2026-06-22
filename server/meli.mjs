@@ -67,22 +67,39 @@ export async function searchMercadoLivre(query) {
     const body = await response.text();
     if (response.status === 403) {
       const scraperEnabled = (process.env.MELI_SCRAPER_ENABLED || getSetting("meli_scraper_enabled") || "true") !== "false";
+      let scraped = null;
       if (scraperEnabled) {
-        const scraped = await searchMercadoLivreScraper(query);
+        scraped = await searchMercadoLivreScraper(query);
         if (scraped.ok) {
           return scraped;
         }
+        console.warn("[meli] Search API blocked and public-page fallback failed", {
+          source: scraped.source,
+          message: scraped.message,
+        });
       }
 
       const catalog = await searchMercadoLivreCatalog({ query, accessToken, siteId });
       if (catalog.ok) {
         return catalog;
       }
+      console.warn("[meli] Catalog fallback failed after Search API block", {
+        source: catalog.source,
+        message: catalog.message,
+      });
+
+      const fallbackMessages = [
+        "OAuth conectado, mas o Mercado Livre bloqueou a API oficial de busca para este app.",
+        scraped?.message,
+        catalog.message,
+      ].filter(Boolean);
 
       return {
         ok: false,
         source: "meli_forbidden",
-        message: "OAuth conectado, mas o Mercado Livre bloqueou o endpoint de busca de anúncios para este app. Revise as permissões no DevCenter ou solicite liberação de acesso à API de Search.",
+        metricsMode: "market_signal",
+        salesAvailable: false,
+        message: fallbackMessages.join(" "),
         items: [],
         totalAvailable: 0,
         totals: { demand: 0, revenue: 0, averageTicket: 0 },
