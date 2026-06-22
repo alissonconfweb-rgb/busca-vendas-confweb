@@ -4,6 +4,7 @@ import { extname, join, resolve } from "node:path";
 import { db, createSession, deleteSession, findUserByEmail, getSetting, initDatabase, publicUser, setSetting, settingsObject, userFromSession } from "./db.mjs";
 import { loadLocalEnv } from "./env.mjs";
 import { buildMeliAuthorizationUrl, disconnectMeliOAuth, exchangeMeliAuthorizationCode, getMeliRedirectUri, searchMercadoLivre } from "./meli.mjs";
+import { bootstrapAdminFromEnv } from "./bootstrap-admin.mjs";
 import { hashPassword, hashToken, randomToken, verifyPassword } from "./security.mjs";
 
 loadLocalEnv();
@@ -13,9 +14,10 @@ const PORT = Number(process.env.PORT || 3001);
 const HOST = process.env.HOST || "0.0.0.0";
 const IS_PRODUCTION = process.env.NODE_ENV === "production";
 const COOKIE = "bv_session";
-const CREATOR_EMAIL = (process.env.CREATOR_EMAIL || "alisson.confweb@gamail.com").toLowerCase();
+const CREATOR_EMAIL = (process.env.CREATOR_EMAIL || "alisson.confweb@gmail.com").toLowerCase();
 const DIST_DIR = resolve(process.cwd(), "dist");
 
+bootstrapAdminFromEnv(db);
 db.prepare("UPDATE users SET role = 'admin', status = 'active', updated_at = CURRENT_TIMESTAMP WHERE lower(email) = ?").run(CREATOR_EMAIL);
 
 const server = createServer(async (req, res) => {

@@ -13,4 +13,8 @@ services:
       - key: NODE_ENV
         value: production
       - key: CREATOR_EMAIL
-        value: alisson.confweb@gamail.com
+        value: alisson.confweb@gmail.com
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
