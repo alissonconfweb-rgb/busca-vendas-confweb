@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { getSetting, setSetting } from "./db.mjs";
 import { searchMercadoLivreCatalog } from "./meli-catalog.mjs";
 import { searchMercadoLivreScraper } from "./meli-scraper.mjs";
+import { isOxylabsConfigured, searchMercadoLivreOxylabs } from "./oxylabs.mjs";
 import { buildProductQuerySpec, matchesProductQuery } from "./product-match.mjs";
 
 const currencyFormatter = new Intl.NumberFormat("pt-BR", {
@@ -34,6 +35,19 @@ function mapItem(item) {
 }
 
 export async function searchMercadoLivre(query) {
+  if (isOxylabsConfigured()) {
+    try {
+      const oxylabs = await searchMercadoLivreOxylabs(query);
+      if (oxylabs.ok) {
+        setSetting("oxylabs_last_error", "");
+        return oxylabs;
+      }
+      setSetting("oxylabs_last_error", oxylabs.message || "Oxylabs nao retornou metricas para essa busca.");
+    } catch (error) {
+      setSetting("oxylabs_last_error", error instanceof Error ? error.message : "Falha ao consultar Oxylabs.");
+    }
+  }
+
   let accessToken = await getValidMeliAccessToken();
   const siteId = process.env.MELI_SITE_ID || getSetting("meli_site_id") || "MLB";
 

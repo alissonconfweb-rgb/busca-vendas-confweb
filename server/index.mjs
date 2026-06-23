@@ -6,6 +6,7 @@ import { loadLocalEnv } from "./env.mjs";
 import { buildMeliAuthorizationUrl, createMeliPkcePair, disconnectMeliOAuth, exchangeMeliAuthorizationCode, getMeliRedirectUri, searchMercadoLivre } from "./meli.mjs";
 import { bootstrapAdminFromEnv } from "./bootstrap-admin.mjs";
 import { syncMeliSettingsFromEnv, validateMeliSettingsInput, isValidMeliClientId, resolveMeliRedirectUri } from "./meli-config.mjs";
+import { syncOxylabsSettingsFromEnv, testOxylabsConnection } from "./oxylabs.mjs";
 import { hashPassword, hashToken, randomToken, verifyPassword } from "./security.mjs";
 
 loadLocalEnv();
@@ -30,6 +31,7 @@ const PUBLIC_SETTING_KEYS = new Set([
 
 bootstrapAdminFromEnv(db);
 syncMeliSettingsFromEnv();
+syncOxylabsSettingsFromEnv();
 db.prepare("UPDATE users SET role = 'admin', status = 'active', updated_at = CURRENT_TIMESTAMP WHERE lower(email) = ?").run(CREATOR_EMAIL);
 
 const server = createServer(async (req, res) => {
@@ -249,6 +251,18 @@ async function handleAdmin(req, res, url, currentUser) {
     return json(res, 200, safeSettings(currentUser));
   }
 
+  if (path === "oxylabs/test" && method === "POST") {
+    try {
+      const result = await testOxylabsConnection();
+      setSetting("oxylabs_last_error", "");
+      return json(res, 200, { ...result, message: "Oxylabs conectado com sucesso." });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Falha ao testar Oxylabs.";
+      setSetting("oxylabs_last_error", message);
+      return json(res, 400, { ok: false, error: message });
+    }
+  }
+
   if (path === "summary" && method === "GET") {
     const users = db.prepare("SELECT COUNT(*) AS total FROM users").get().total;
     const searches = db.prepare("SELECT COUNT(*) AS total FROM search_history").get().total;
@@ -312,7 +326,7 @@ async function handleAdmin(req, res, url, currentUser) {
     } catch (error) {
       return json(res, 400, { error: error instanceof Error ? error.message : "Configuração inválida." });
     }
-    const keepWhenBlank = new Set(["meli_access_token", "meli_refresh_token", "meli_client_secret"]);
+    const keepWhenBlank = new Set(["meli_access_token", "meli_refresh_token", "meli_client_secret", "oxylabs_password"]);
     for (const [key, value] of Object.entries(body)) {
       if (keepWhenBlank.has(key) && !String(value || "").trim() && getSetting(key)) {
         continue;
@@ -321,6 +335,9 @@ async function handleAdmin(req, res, url, currentUser) {
     }
     if (Object.keys(body).some((key) => key.startsWith("meli_"))) {
       setSetting("meli_last_error", "");
+    }
+    if (Object.keys(body).some((key) => key.startsWith("oxylabs_"))) {
+      setSetting("oxylabs_last_error", "");
     }
     return json(res, 200, safeSettings({ role: "admin" }));
   }
@@ -442,6 +459,12 @@ function safeSettings(user) {
     settings.meli_access_token = "";
   }
   if (canUseAdmin(user)) {
+    settings.oxylabs_username = settings.oxylabs_username || process.env.OXYLABS_USERNAME || "";
+    settings.oxylabs_endpoint = settings.oxylabs_endpoint || process.env.OXYLABS_ENDPOINT || "https://realtime.oxylabs.io/v1/queries";
+    settings.oxylabs_geo_location = settings.oxylabs_geo_location || process.env.OXYLABS_GEO_LOCATION || "Brazil";
+    settings.oxylabs_password_configured = settings.oxylabs_password || process.env.OXYLABS_PASSWORD ? "true" : "";
+    settings.oxylabs_connected = settings.oxylabs_username && settings.oxylabs_password_configured ? "true" : "";
+    settings.oxylabs_password = "";
     settings.meli_access_token_configured = settings.meli_access_token || process.env.MELI_ACCESS_TOKEN ? "true" : settings.meli_access_token_configured || "";
     settings.meli_refresh_token_configured = settings.meli_refresh_token || process.env.MELI_REFRESH_TOKEN ? "true" : "";
     settings.meli_client_secret_configured = settings.meli_client_secret || process.env.MELI_CLIENT_SECRET ? "true" : "";
@@ -488,7 +511,7 @@ function publicSearchResult(result) {
     return result;
   }
 
-  if (result.source === "meli_forbidden" || result.source?.startsWith("mercado_livre_")) {
+  if (result.source === "meli_forbidden" || result.source?.startsWith("mercado_livre_") || result.source?.startsWith("oxylabs_")) {
     return {
       ...result,
       source: "market_data_pending",
@@ -711,7 +734,7 @@ function nullableNumber(value) {
 }
 
 function normalizeSettingValue(key, value) {
-  if (key.startsWith("meli_") || key === "frontend_origin") {
+  if (key.startsWith("meli_") || key.startsWith("oxylabs_") || key === "frontend_origin") {
     return String(value || "").trim();
   }
   return value;

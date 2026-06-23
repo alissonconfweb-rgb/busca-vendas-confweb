@@ -1522,6 +1522,16 @@ article.table-row {
     grid-template-columns: 1fr;
   }
 
+  .meli-connect-card {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .meli-actions {
+    min-width: 0;
+    width: 100%;
+  }
+
   .search-heading p {
     text-align: left;
   }

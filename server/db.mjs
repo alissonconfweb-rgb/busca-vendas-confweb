@@ -112,6 +112,8 @@ function seedDefaults() {
     scale_monthly: "39.90",
     scale_yearly: "359.10",
     commercial_cta: "Falar com Comercial Confweb",
+    oxylabs_endpoint: "https://realtime.oxylabs.io/v1/queries",
+    oxylabs_geo_location: "Brazil",
     meli_site_id: "MLB",
     meli_redirect_uri: "http://127.0.0.1:3001/api/meli/callback",
   };

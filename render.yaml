@@ -26,3 +26,11 @@ services:
         value: "0"
       - key: MELI_REFRESH_TOKEN
         sync: false
+      - key: OXYLABS_USERNAME
+        sync: false
+      - key: OXYLABS_PASSWORD
+        sync: false
+      - key: OXYLABS_ENDPOINT
+        value: https://realtime.oxylabs.io/v1/queries
+      - key: OXYLABS_GEO_LOCATION
+        value: Brazil

@@ -693,7 +693,7 @@ function ResultsPanel({
   const items = result?.items ?? [];
   const hasItems = items.length > 0;
   const marketSignalMode = result?.metricsMode === "market_signal" || result?.salesAvailable === false;
-  const publicPageMode = result?.source === "mercado_livre_scraper";
+  const publicPageMode = result?.source === "mercado_livre_scraper" || result?.source === "oxylabs_mercado_livre";
   const salesPotential = result?.totals.revenue || 0;
   const commercialHref = whatsappHref(contacts, query, salesPotential);
   const sourceText = result
@@ -1313,7 +1313,7 @@ function AdminPanel({ user, onSettingsChange }: { user: User; onSettingsChange: 
       <div className="admin-header">
         <div>
           <h1>Painel admin</h1>
-          <p>Controle operação, financeiro, usuários, suporte, dicas e integração Mercado Livre.</p>
+          <p>Controle operacao, financeiro, usuarios, suporte, dicas e integracao Oxylabs.</p>
         </div>
         {message && <span>{message}</span>}
       </div>
@@ -1582,32 +1582,28 @@ function AdminSupport({ tickets, afterSave }: { tickets: Ticket[]; afterSave: ()
 function AdminSettings({ settings, afterSave }: { settings: SettingsMap; afterSave: (text?: string) => void }) {
   const [busy, setBusy] = useState(false);
   const [connectError, setConnectError] = useState("");
-  const redirectUri = settings.meli_redirect_uri || `${window.location.origin}/api/meli/callback`;
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const form = event.currentTarget;
     const payload = formJson(form);
-    for (const key of ["meli_access_token", "meli_refresh_token", "meli_client_secret"]) {
+    for (const key of ["oxylabs_password"]) {
       if (!payload[key]) {
         delete payload[key];
       }
     }
     await api("/api/admin/settings", { method: "PATCH", body: JSON.stringify(payload) });
-    afterSave();
+    afterSave("Configuracoes Oxylabs salvas.");
   };
 
-  const connect = async () => {
+  const testOxylabs = async () => {
     setConnectError("");
     setBusy(true);
-    window.location.href = "/api/admin/meli/connect";
-  };
-
-  const disconnect = async () => {
-    setBusy(true);
     try {
-      await api("/api/admin/meli/disconnect", { method: "POST" });
-      afterSave("Mercado Livre desconectado.");
+      const data = await api<{ message?: string }>("/api/admin/oxylabs/test", { method: "POST" });
+      afterSave(data.message || "Oxylabs conectado com sucesso.");
+    } catch (error) {
+      setConnectError(error instanceof Error ? error.message : "Falha ao testar Oxylabs.");
     } finally {
       setBusy(false);
     }
@@ -1617,59 +1613,49 @@ function AdminSettings({ settings, afterSave }: { settings: SettingsMap; afterSa
     <div className="admin-section">
       <section className="meli-connect-card">
         <div>
-          <span>{settings.meli_oauth_connected ? "Conectado" : "Aguardando conexão"}</span>
-          <h2>Mercado Livre OAuth</h2>
+          <span>{settings.oxylabs_connected ? "Conectado" : "Aguardando credenciais"}</span>
+          <h2>Oxylabs Web Scraper API</h2>
           <p>
-            Configure as credenciais do app Mercado Livre, salve e clique em conectar. Os compradores não veem nem preenchem esses dados.
+            Configure o usuario e senha da Oxylabs. Os compradores nao veem nem preenchem esses dados; eles so pesquisam o produto.
           </p>
           <div className="credential-status">
-            <b>App ID: {settings.meli_client_id ? "configurado" : "pendente"}</b>
-            <b>Secret Key: {settings.meli_client_secret_configured ? "configurada" : "pendente"}</b>
+            <b>Usuario: {settings.oxylabs_username ? "configurado" : "pendente"}</b>
+            <b>Senha: {settings.oxylabs_password_configured ? "configurada" : "pendente"}</b>
           </div>
-          <small>Redirect URI para cadastrar no app: {redirectUri}</small>
-          {settings.meli_last_error && <strong className="oauth-error">{settings.meli_last_error}</strong>}
+          <small>Fonte principal das pesquisas: Mercado Livre via Oxylabs. Os fallbacks ficam ocultos no servidor.</small>
+          {settings.oxylabs_last_error && <strong className="oauth-error">{settings.oxylabs_last_error}</strong>}
           {connectError && <strong className="oauth-error">{connectError}</strong>}
         </div>
         <div className="meli-actions">
-          <button className="connect-button" type="button" onClick={connect} disabled={busy}>
+          <button className="connect-button" type="button" onClick={testOxylabs} disabled={busy || !settings.oxylabs_connected}>
             <LogIn size={18} />
-            {settings.meli_oauth_connected ? "Reconectar Mercado Livre" : "Conectar Mercado Livre"}
+            {busy ? "Testando..." : "Testar Oxylabs"}
           </button>
-          {settings.meli_oauth_connected && (
-            <button type="button" onClick={disconnect} disabled={busy}>
-              Desconectar
-            </button>
-          )}
         </div>
       </section>
 
       <form className="settings-grid" onSubmit={submit}>
         <label>
-          Mercado Livre App ID
-          <input
-            name="meli_client_id"
-            defaultValue={settings.meli_client_id || ""}
-            placeholder="Ex.: 1234567890123456"
-            inputMode="numeric"
-            pattern="[0-9]*"
-          />
-          <small className="field-hint">Número da aplicação no DevCenter. Não use o e-mail da conta.</small>
+          Oxylabs Username
+          <input name="oxylabs_username" defaultValue={settings.oxylabs_username || ""} placeholder="Usuario da API Oxylabs" />
+          <small className="field-hint">Web Scraper API &gt; Users &gt; Username.</small>
         </label>
         <label>
-          Mercado Livre Secret Key
-          <input name="meli_client_secret" type="password" placeholder={settings.meli_client_secret_configured ? "Secret configurado" : "Secret Key"} />
+          Oxylabs Password
+          <input name="oxylabs_password" type="password" placeholder={settings.oxylabs_password_configured ? "Senha configurada" : "Senha da API Oxylabs"} />
           <small className="field-hint">
-            {settings.meli_client_secret_configured ? "Secret Key já configurada. Deixe em branco para manter." : "Cole a Secret Key do app Mercado Livre e salve antes de conectar."}
+            {settings.oxylabs_password_configured ? "Senha ja configurada. Deixe em branco para manter." : "Cole a senha do API User da Oxylabs."}
           </small>
         </label>
         <label>
-          Redirect URI
-          <input name="meli_redirect_uri" defaultValue={redirectUri} readOnly />
-          <small className="field-hint">Cadastre exatamente esta URL no app do Mercado Livre.</small>
+          Regiao da consulta
+          <input name="oxylabs_geo_location" defaultValue={settings.oxylabs_geo_location || "Brazil"} />
+          <small className="field-hint">Use Brazil para buscar como usuario brasileiro.</small>
         </label>
         <label>
-          Site Mercado Livre
-          <input name="meli_site_id" defaultValue={settings.meli_site_id || "MLB"} />
+          Endpoint Oxylabs
+          <input name="oxylabs_endpoint" defaultValue={settings.oxylabs_endpoint || "https://realtime.oxylabs.io/v1/queries"} />
+          <small className="field-hint">Padrao: realtime.oxylabs.io/v1/queries.</small>
         </label>
         <label>
           Plano 10 pesquisas mensal
@@ -1691,11 +1677,7 @@ function AdminSettings({ settings, afterSave }: { settings: SettingsMap; afterSa
           CTA comercial
           <input name="commercial_cta" defaultValue={settings.commercial_cta} />
         </label>
-        <label>
-          Token manual (fallback)
-          <input name="meli_access_token" type="password" placeholder={settings.meli_access_token_configured ? "Token configurado" : "Opcional"} />
-        </label>
-        <button type="submit">Salvar configurações</button>
+        <button type="submit">Salvar configuracoes</button>
       </form>
     </div>
   );
