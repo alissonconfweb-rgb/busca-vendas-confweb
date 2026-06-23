@@ -639,7 +639,7 @@ function SearchPage({
       <section className="search-grid">
         <div className="left-stack" ref={resultsRef}>
           {error && <p className="inline-error">{error}</p>}
-          <ResultsPanel query={activeQuery} result={result} loading={loading} elapsedMs={elapsedMs} />
+          <ResultsPanel query={activeQuery} result={result} loading={loading} elapsedMs={elapsedMs} contacts={contacts} />
           <PlansPreview settings={settings} />
           <LearnPreview tips={tips} />
         </div>
@@ -663,22 +663,39 @@ function SearchPage({
   );
 }
 
+function whatsappHref(contacts: Contact[], query: string, salesPotential: number) {
+  const contact = contacts.find((item) => /whats/i.test(item.channel)) || contacts[0];
+  const digits = (contact?.value || "").replace(/\D/g, "");
+  const phone = digits.startsWith("55") ? digits : digits ? `55${digits}` : "5511999999999";
+  const message = [
+    `Olá, Confweb! Pesquisei "${query}" no Busca Vendas.`,
+    `Vi potencial de ${money.format(salesPotential)} nos 3 anúncios campeões.`,
+    "Quero ajuda para vender nos marketplaces.",
+  ].join(" ");
+
+  return `https://wa.me/${phone}?text=${encodeURIComponent(message)}`;
+}
+
 function ResultsPanel({
   query,
   result,
   loading = false,
   elapsedMs = 0,
+  contacts,
 }: {
   query: string;
   result: SearchResult | null;
   loading?: boolean;
   elapsedMs?: number;
+  contacts: Contact[];
 }) {
   const marketUrl = `https://lista.mercadolivre.com.br/${encodeURIComponent(query)}`;
   const items = result?.items ?? [];
   const hasItems = items.length > 0;
   const marketSignalMode = result?.metricsMode === "market_signal" || result?.salesAvailable === false;
   const publicPageMode = result?.source === "mercado_livre_scraper";
+  const salesPotential = result?.totals.revenue || 0;
+  const commercialHref = whatsappHref(contacts, query, salesPotential);
   const sourceText = result
     ? result.ok
       ? publicPageMode
@@ -734,23 +751,28 @@ function ResultsPanel({
                 <p>{item.subtitle || "Anúncio ativo no Mercado Livre"}</p>
               </div>
               <Metric
-                label={marketSignalMode ? "Venda por anúncio" : publicPageMode ? "Vendidos no anúncio" : "Vendas do anúncio"}
-                value={formatCountOrLabel(item.soldQuantity, item.salesMetricLabel)}
+                label="Qtd. vendas"
+                value={formatCountOrLabel(item.soldQuantity, item.salesMetricLabel, item.estimatedSoldQuantity)}
               />
-              <Metric label="Preço anúncio" value={money.format(item.price)} />
-              <Metric label="Receita estimada" value={formatMoneyOrLabel(item.revenue, item.revenueMetricLabel, item.estimatedRevenue)} />
+              <Metric label="Preço" value={money.format(item.price)} />
+              <Metric label="Receita" value={formatMoneyOrLabel(item.revenue, item.revenueMetricLabel, item.estimatedRevenue)} />
               <a className="row-arrow" href={item.permalink} target="_blank" rel="noreferrer" aria-label="Abrir anúncio">
                 <ChevronRight size={24} />
               </a>
             </article>
           ))}
-          <a className="more-market" href={marketUrl} target="_blank" rel="noreferrer">
-            Ver mais anúncios desse produto no Mercado Livre
-            <ChevronRight size={17} />
-          </a>
-          <p className="market-note">
-            {`${number.format(items.length)} anúncio(s) campeão(ões) selecionado(s) com filtro exato do produto.`}
-          </p>
+          <div className="market-cta">
+            <div>
+              <strong>
+                Seu produto tem potencial: {money.format(salesPotential)} em vendas.
+              </strong>
+              <p>Bora pegar uma fatia desse mercado? Venda nos maiores marketplaces do Brasil com a Confweb.</p>
+            </div>
+            <a href={commercialHref} target="_blank" rel="noreferrer">
+              Falar com a Confweb
+              <MessageCircle size={18} />
+            </a>
+          </div>
         </div>
       )}
     </section>
@@ -804,9 +826,12 @@ function Metric({ label, value }: { label: string; value: string }) {
   );
 }
 
-function formatCountOrLabel(value: number | null | undefined, fallback = "Não divulgado") {
+function formatCountOrLabel(value: number | null | undefined, fallback = "Não divulgado", estimatedValue?: number | null) {
   if (typeof value === "number") {
     return number.format(value);
+  }
+  if (typeof estimatedValue === "number" && estimatedValue > 0) {
+    return number.format(estimatedValue);
   }
   return fallback;
 }
@@ -816,17 +841,13 @@ function formatMoneyOrLabel(value: number | null | undefined, fallback = "Aguard
     return money.format(value);
   }
   if (typeof estimatedValue === "number" && estimatedValue > 0) {
-    return `Previsão ${money.format(estimatedValue)}`;
+    return money.format(estimatedValue);
   }
   return fallback;
 }
 
 function DemandCard({ result }: { result: SearchResult | null }) {
-  const marketSignalMode = result?.metricsMode === "market_signal" || result?.salesAvailable === false;
-  const publicPageMode = result?.source === "mercado_livre_scraper";
   const championCount = result?.items?.length || 0;
-  const forecastMode = Boolean(result?.totals.isEstimated);
-  const actualDemand = result?.totals.actualDemand ?? result?.totals.demand ?? 0;
 
   return (
     <section className="demand-card">
@@ -836,14 +857,14 @@ function DemandCard({ result }: { result: SearchResult | null }) {
       </div>
       <dl>
         <div>
-          <dt>{forecastMode ? "Vendas reais identificadas" : marketSignalMode ? "Campeões encontrados" : publicPageMode ? "Vendidos nos campeões" : "Vendas nos campeões"}</dt>
+          <dt>Vendas totais nos 3</dt>
           <dd className="blue-value">
-            {forecastMode ? number.format(actualDemand) : !marketSignalMode ? number.format(result?.totals.demand || 0) : `${number.format(championCount)} de 3`}
+            {number.format(result?.totals.demand || 0)}
           </dd>
         </div>
         <div>
-          <dt>Receita total estimada</dt>
-          <dd className="orange-value">{forecastMode || !marketSignalMode ? money.format(result?.totals.revenue || 0) : "Aguardando API"}</dd>
+          <dt>Receita total dos 3</dt>
+          <dd className="orange-value">{money.format(result?.totals.revenue || 0)}</dd>
         </div>
         <div>
           <dt>Ticket médio</dt>
