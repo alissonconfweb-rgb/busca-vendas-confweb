@@ -7,9 +7,10 @@ Este projeto roda como uma aplicacao Node.js unica: o backend serve a API e tamb
 1. Crie um `.env` a partir de `.env.example`.
 2. Configure `SESSION_SECRET`, `CREATOR_EMAIL`, `ADMIN_EMAIL` e `ADMIN_PASSWORD`.
 3. Defina `PUBLIC_URL` com o dominio final em HTTPS.
-4. Rode `npm install`, `npm run build` e `npm start`.
-5. Acesse `/api/health` e confirme `{"ok":true}`.
-6. Entre com o admin e configure contatos comerciais, planos e integracoes.
+4. Se usar SQLite, garanta disco persistente e configure `DB_PATH`.
+5. Rode `npm install`, `npm run build` e `npm start`.
+6. Acesse `/api/health` e confirme `{"ok":true}`.
+7. Entre com o admin e configure contatos comerciais, planos e integracoes.
 
 ## Render
 
@@ -28,7 +29,25 @@ Passos:
 3. Aguarde o build.
 4. Abra `https://seu-app.onrender.com/api/health`.
 
-Observacao: se usar SQLite em producao, configure disco persistente. Sem disco persistente, dados locais podem ser perdidos em recriacao de ambiente.
+Observacao importante: se usar SQLite em producao, configure um disco persistente. Sem disco persistente, usuarios, pesquisas, configuracoes e tickets podem ser perdidos em redeploy/restart.
+
+No Render, discos persistentes ficam disponiveis apenas em servicos pagos. Depois de ativar o plano pago:
+
+1. Abra o servico no Render.
+2. Va em **Disks**.
+3. Crie um disco com mount path:
+
+```text
+/var/data
+```
+
+4. Configure a variavel:
+
+```env
+DB_PATH=/var/data/busca-vendas.sqlite
+```
+
+5. Redeploy o servico.
 
 ## VPS Ou Servidor Dedicado
 

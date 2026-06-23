@@ -4,7 +4,9 @@ import { dirname, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { hashToken, randomToken } from "./security.mjs";
 
-const DB_PATH = resolve(process.cwd(), "data", "busca-vendas.sqlite");
+const DB_PATH = process.env.DB_PATH
+  ? resolve(process.env.DB_PATH)
+  : resolve(process.cwd(), "data", "busca-vendas.sqlite");
 const SESSION_TTL_DAYS = Number(process.env.SESSION_TTL_DAYS || 365);
 const SESSION_TTL_MS = Math.max(1, SESSION_TTL_DAYS) * 24 * 60 * 60 * 1000;
 mkdirSync(dirname(DB_PATH), { recursive: true });

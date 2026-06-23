@@ -96,7 +96,7 @@ O banco fica em:
 data/busca-vendas.sqlite
 ```
 
-Em producao, faca backup da pasta `data`. Em plataformas com disco efemero, configure volume persistente ou migre para um banco externo antes de vender em escala.
+Em producao, faca backup da pasta `data`. Em plataformas com disco efemero, configure volume persistente ou migre para um banco externo antes de vender em escala. Tambem e possivel definir `DB_PATH=/var/data/busca-vendas.sqlite` para apontar o SQLite para um disco persistente.
 
 ## Contribuicao
 
