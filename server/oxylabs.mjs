@@ -475,35 +475,41 @@ function parseJson(text) {
 
 function describeOxylabsError(status, data, text) {
   const detail = data?.message || data?.error || data?.detail || String(text || "").slice(0, 180);
+  if (status === 401) {
+    return "Oxylabs recusou as credenciais. Use o Username e Password do API User em Web Scraper API > Users, nao o e-mail/senha de login do painel Oxylabs. Salve novamente no painel admin e teste.";
+  }
+  if (status === 403) {
+    return "Oxylabs autenticou, mas bloqueou o acesso. Verifique se a Web Scraper API esta ativa no plano e se o usuario tem permissao para usar o endpoint Realtime.";
+  }
   return `Oxylabs respondeu ${status}: ${detail || "sem detalhe"}`;
 }
 
 function oxylabsCredentials() {
   return {
-    username: (process.env.OXYLABS_USERNAME || getSetting("oxylabs_username") || "").trim(),
-    password: (process.env.OXYLABS_PASSWORD || getSetting("oxylabs_password") || "").trim(),
+    username: (getSetting("oxylabs_username") || process.env.OXYLABS_USERNAME || "").trim(),
+    password: (getSetting("oxylabs_password") || process.env.OXYLABS_PASSWORD || "").trim(),
   };
 }
 
 function oxylabsEndpoint() {
-  return (process.env.OXYLABS_ENDPOINT || getSetting("oxylabs_endpoint") || DEFAULT_ENDPOINT).trim();
+  return (getSetting("oxylabs_endpoint") || process.env.OXYLABS_ENDPOINT || DEFAULT_ENDPOINT).trim();
 }
 
 function oxylabsGeoLocation() {
-  return (process.env.OXYLABS_GEO_LOCATION || getSetting("oxylabs_geo_location") || DEFAULT_GEO).trim();
+  return (getSetting("oxylabs_geo_location") || process.env.OXYLABS_GEO_LOCATION || DEFAULT_GEO).trim();
 }
 
 export function syncOxylabsSettingsFromEnv() {
-  if (process.env.OXYLABS_USERNAME) {
+  if (process.env.OXYLABS_USERNAME && !getSetting("oxylabs_username")) {
     setSetting("oxylabs_username", process.env.OXYLABS_USERNAME.trim());
   }
-  if (process.env.OXYLABS_PASSWORD) {
+  if (process.env.OXYLABS_PASSWORD && !getSetting("oxylabs_password")) {
     setSetting("oxylabs_password", process.env.OXYLABS_PASSWORD.trim());
   }
-  if (process.env.OXYLABS_ENDPOINT) {
+  if (process.env.OXYLABS_ENDPOINT && !getSetting("oxylabs_endpoint")) {
     setSetting("oxylabs_endpoint", process.env.OXYLABS_ENDPOINT.trim());
   }
-  if (process.env.OXYLABS_GEO_LOCATION) {
+  if (process.env.OXYLABS_GEO_LOCATION && !getSetting("oxylabs_geo_location")) {
     setSetting("oxylabs_geo_location", process.env.OXYLABS_GEO_LOCATION.trim());
   }
 }
