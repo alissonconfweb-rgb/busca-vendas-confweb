@@ -360,6 +360,7 @@ function App() {
 function ProductApp({ user, onUserChange }: { user: User | null; onUserChange: (user: User | null) => void }) {
   const [mode, setMode] = useState<Mode>("search");
   const [loginOpen, setLoginOpen] = useState(false);
+  const [loginMode, setLoginMode] = useState<"login" | "register">("login");
   const [settings, setSettings] = useState<SettingsMap>(defaultSettings);
   const [tips, setTips] = useState<Tip[]>(defaultTips);
   const [tickets, setTickets] = useState<Ticket[]>([]);
@@ -419,11 +420,16 @@ function ProductApp({ user, onUserChange }: { user: User | null; onUserChange: (
     setMode("admin");
   }, [user]);
 
+  const openAuth = (authMode: "login" | "register" = "login") => {
+    setLoginMode(authMode);
+    setLoginOpen(true);
+  };
+
   const requireLogin = () => {
     if (user) {
       return true;
     }
-    setLoginOpen(true);
+    openAuth("register");
     return false;
   };
 
@@ -440,14 +446,15 @@ function ProductApp({ user, onUserChange }: { user: User | null; onUserChange: (
         user={user}
         settings={settings}
         onMode={setMode}
-        onLogin={() => setLoginOpen(true)}
+        onLogin={() => openAuth("login")}
+        onRegister={() => openAuth("register")}
         onLogout={logout}
       />
       <main className="bv-main">
         <TopBar
           user={user}
           onMode={setMode}
-          onLogin={() => setLoginOpen(true)}
+          onLogin={() => openAuth("login")}
           onLogout={logout}
         />
         {mode === "search" && (
@@ -478,6 +485,7 @@ function ProductApp({ user, onUserChange }: { user: User | null; onUserChange: (
       </main>
       {loginOpen && (
         <LoginModal
+          initialMode={loginMode}
           onClose={() => setLoginOpen(false)}
           onLogin={(loggedUser) => {
             onUserChange(loggedUser);
@@ -516,6 +524,7 @@ function Sidebar({
   settings,
   onMode,
   onLogin,
+  onRegister,
   onLogout,
 }: {
   mode: Mode;
@@ -523,6 +532,7 @@ function Sidebar({
   settings: SettingsMap;
   onMode: (mode: Mode) => void;
   onLogin: () => void;
+  onRegister: () => void;
   onLogout: () => void;
 }) {
   const navItems: { mode: Mode; label: string; Icon: LucideIcon }[] = [
@@ -540,7 +550,7 @@ function Sidebar({
   return (
     <aside className="bv-sidebar">
       <BrandMark />
-      <AccountSummary user={user} onLogin={onLogin} onLogout={onLogout} />
+      <AccountSummary user={user} onLogout={onLogout} />
       <nav className="sidebar-nav" aria-label="Navegação principal">
         {navItems.map(({ mode: itemMode, label, Icon }) => (
           <button
@@ -554,7 +564,7 @@ function Sidebar({
           </button>
         ))}
       </nav>
-      <PlanStatus user={user} settings={settings} onLogin={onLogin} />
+      <PlanStatus user={user} settings={settings} onRegister={onRegister} onPlans={() => onMode("plans")} />
       <button className="help-card" type="button" onClick={() => onMode("support")}>
         <HelpCircle size={24} />
         <span>
@@ -569,13 +579,15 @@ function Sidebar({
 
 function AccountSummary({
   user,
-  onLogin,
   onLogout,
 }: {
   user: User | null;
-  onLogin: () => void;
   onLogout: () => void;
 }) {
+  if (!user) {
+    return null;
+  }
+
   const initials = user?.name
     ? user.name
         .split(" ")
@@ -591,12 +603,12 @@ function AccountSummary({
     <section className="account-card" aria-label="Perfil do usuario">
       <div className="account-avatar">{initials}</div>
       <div>
-        <span>{user ? "Perfil" : "Acesso"}</span>
-        <strong>{user?.name || "Visitante"}</strong>
-        <small>{user ? `${planLabel} - ${user.email}` : "Entre para pesquisar produtos"}</small>
+        <span>Perfil</span>
+        <strong>{user.name}</strong>
+        <small>{`${planLabel} - ${user.email}`}</small>
       </div>
-      <button type="button" onClick={user ? onLogout : onLogin} aria-label={user ? "Sair da conta" : "Entrar na conta"}>
-        {user ? <LogOut size={18} /> : <LogIn size={18} />}
+      <button type="button" onClick={onLogout} aria-label="Sair da conta">
+        <LogOut size={18} />
       </button>
     </section>
   );
@@ -647,13 +659,36 @@ function TopBar({
   );
 }
 
-function PlanStatus({ user, settings, onLogin }: { user: User | null; settings: SettingsMap; onLogin: () => void }) {
-  const planLabel = user?.plan === "scale" ? "Ilimitado" : user?.plan === "starter" ? "10 pesquisas" : "Grátis";
-  const limit = user?.search_limit ?? 1;
-  const used = user?.searches_used ?? 0;
-  const remaining = user?.search_limit === null ? "Sem limite" : `${Math.max(0, limit - used)} de ${limit}`;
+function PlanStatus({
+  user,
+  settings,
+  onRegister,
+  onPlans,
+}: {
+  user: User | null;
+  settings: SettingsMap;
+  onRegister: () => void;
+  onPlans: () => void;
+}) {
+  if (!user) {
+    return (
+      <section className="plan-card auth-card">
+        <span>Pesquisa grátis</span>
+        <strong>1 busca</strong>
+        <small>Cadastre-se para liberar sua primeira consulta completa.</small>
+        <button type="button" onClick={onRegister}>
+          Criar conta grátis
+        </button>
+      </section>
+    );
+  }
+
+  const planLabel = user.plan === "scale" ? "Ilimitado" : user.plan === "starter" ? "10 pesquisas" : "Grátis";
+  const limit = user.search_limit ?? 1;
+  const used = user.searches_used ?? 0;
+  const remaining = user.search_limit === null ? "Sem limite" : `${Math.max(0, limit - used)} de ${limit}`;
   const usage =
-    user?.search_limit === null
+    user.search_limit === null
       ? 100
       : Math.max(0, Math.min(100, ((limit - used) / Math.max(1, limit)) * 100));
 
@@ -666,13 +701,12 @@ function PlanStatus({ user, settings, onLogin }: { user: User | null; settings: 
       <div className="usage-track">
         <i style={{ width: `${usage}%` }} />
       </div>
-      <button type="button" onClick={onLogin}>
-        {user ? `Planos desde ${money.format(Number(settings.starter_monthly || 19.9))}` : "Ver planos"}
+      <button type="button" onClick={onPlans}>
+        {`Planos desde ${money.format(Number(settings.starter_monthly || 19.9))}`}
       </button>
     </section>
   );
 }
-
 function SearchPage({
   user,
   settings,
@@ -1316,10 +1350,18 @@ function AccessPrompt({ title, onLoginRequired }: { title: string; onLoginRequir
   );
 }
 
-function LoginModal({ onClose, onLogin }: { onClose: () => void; onLogin: (user: User) => void }) {
+function LoginModal({
+  initialMode,
+  onClose,
+  onLogin,
+}: {
+  initialMode: "login" | "register";
+  onClose: () => void;
+  onLogin: (user: User) => void;
+}) {
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const [authMode, setAuthMode] = useState<"login" | "register">("login");
+  const [authMode, setAuthMode] = useState<"login" | "register">(initialMode);
   const [showPassword, setShowPassword] = useState(false);
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {

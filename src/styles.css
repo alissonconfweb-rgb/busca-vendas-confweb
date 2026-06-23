@@ -217,6 +217,11 @@ textarea:focus {
   padding: 16px 14px 14px;
 }
 
+.plan-card.auth-card {
+  margin-top: auto;
+  background: linear-gradient(135deg, #fff, var(--orange-soft));
+}
+
 .plan-card span,
 .plan-card small {
   color: var(--muted);
@@ -228,6 +233,10 @@ textarea:focus {
   color: var(--orange);
   font-size: 21px;
   line-height: 1;
+}
+
+.plan-card.auth-card strong {
+  color: var(--blue-dark);
 }
 
 .plan-card b {
