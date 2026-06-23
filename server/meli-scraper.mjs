@@ -8,7 +8,7 @@ const SCRAPER_TIMEOUT_MS = Number(process.env.MELI_SCRAPER_TIMEOUT_MS || 24_000)
 const PRODUCT_PAGE_TIMEOUT_MS = Number(process.env.MELI_PRODUCT_PAGE_TIMEOUT_MS || 18_000);
 const SEARCH_RESULTS_WAIT_MS = Number(process.env.MELI_SEARCH_RESULTS_WAIT_MS || 12_000);
 const SEARCH_CARD_LIMIT = Number(process.env.MELI_SEARCH_CARD_LIMIT || 12);
-const CACHE_VERSION = "sales-real-v7";
+const CACHE_VERSION = "sales-real-v8";
 const CACHE_FILE = resolve(process.cwd(), "data", "meli-scraper-cache.json");
 const cache = new Map();
 const inFlight = new Map();
@@ -387,15 +387,17 @@ async function enrichMercadoLivreItem(context, item, options = {}) {
 
   const page = await context.newPage();
   try {
-    let detail = await readMercadoLivreProductPage(page, href);
-    let soldQuantity = parseSalesFromText(detail.text);
-    let price = parseProductPrice(detail.text) || item.price;
+    let detail = { bodyText: "", finalUrl: href, text: "" };
+    let soldQuantity = null;
+    let price = item.price;
 
-    const cleanHref = cleanMercadoLivreProductUrl(detail.finalUrl || href);
-    if (!soldQuantity && cleanHref) {
-      detail = await readMercadoLivreProductPage(page, cleanHref);
+    for (const detailUrl of productDetailUrls(item, href)) {
+      detail = await readMercadoLivreProductPage(page, detailUrl);
       soldQuantity = parseSalesFromText(detail.text);
       price = parseProductPrice(detail.text) || price;
+      if (soldQuantity) {
+        break;
+      }
     }
 
     if (!soldQuantity) {
@@ -441,6 +443,30 @@ function cleanMercadoLivreProductUrl(href) {
   } catch {
     return "";
   }
+}
+
+function productDetailUrls(item, href) {
+  const urls = [href];
+  const cleanHref = cleanMercadoLivreProductUrl(href);
+  if (cleanHref) {
+    urls.push(cleanHref);
+  }
+
+  const itemId = extractItemId(href) || item.id;
+  const itemPageUrl = mercadoLivreItemPageUrl(itemId);
+  if (itemPageUrl) {
+    urls.push(itemPageUrl);
+  }
+
+  return [...new Set(urls.filter(Boolean))];
+}
+
+function mercadoLivreItemPageUrl(itemId) {
+  const match = String(itemId || "").match(/^MLB(\d+)$/i);
+  if (!match) {
+    return "";
+  }
+  return `https://produto.mercadolivre.com.br/MLB-${match[1]}-_JM`;
 }
 
 async function enrichMercadoLivreItemWithApi(item, options = {}) {
