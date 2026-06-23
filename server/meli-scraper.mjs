@@ -8,14 +8,14 @@ const SCRAPER_TIMEOUT_MS = Number(process.env.MELI_SCRAPER_TIMEOUT_MS || 24_000)
 const PRODUCT_PAGE_TIMEOUT_MS = Number(process.env.MELI_PRODUCT_PAGE_TIMEOUT_MS || 18_000);
 const SEARCH_RESULTS_WAIT_MS = Number(process.env.MELI_SEARCH_RESULTS_WAIT_MS || 12_000);
 const SEARCH_CARD_LIMIT = Number(process.env.MELI_SEARCH_CARD_LIMIT || 12);
-const CACHE_VERSION = "sales-real-v5";
+const CACHE_VERSION = "sales-real-v7";
 const CACHE_FILE = resolve(process.cwd(), "data", "meli-scraper-cache.json");
 const cache = new Map();
 const inFlight = new Map();
 let diskCacheLoaded = false;
 
-export async function searchMercadoLivreScraper(query) {
-  const cacheKey = `${CACHE_VERSION}:${normalizedProductKey(query)}`;
+export async function searchMercadoLivreScraper(query, options = {}) {
+  const cacheKey = scraperCacheKey(query, options);
   ensureDiskCacheLoaded();
   const cached = cache.get(cacheKey);
 
@@ -30,7 +30,7 @@ export async function searchMercadoLivreScraper(query) {
     return inFlight.get(cacheKey);
   }
 
-  const promise = runScraper(query)
+  const promise = runScraper(query, options)
     .then((result) => {
       if (result.ok) {
         cache.set(cacheKey, { createdAt: Date.now(), result });
@@ -44,12 +44,12 @@ export async function searchMercadoLivreScraper(query) {
   return promise;
 }
 
-async function runScraper(query) {
+async function runScraper(query, options = {}) {
   let scraped;
-  const cacheKey = `${CACHE_VERSION}:${normalizedProductKey(query)}`;
+  const cacheKey = scraperCacheKey(query, options);
 
   try {
-    scraped = await scrapeSearchPage(query);
+    scraped = await scrapeSearchPage(query, options);
   } catch (error) {
     const stale = cache.get(cacheKey);
     if (stale && Date.now() - stale.createdAt < STALE_CACHE_TTL_MS) {
@@ -128,6 +128,11 @@ async function runScraper(query) {
   };
 }
 
+function scraperCacheKey(query, options = {}) {
+  const mode = options.accessToken ? "oauth" : "public";
+  return `${CACHE_VERSION}:${mode}:${normalizedProductKey(query)}`;
+}
+
 function ensureDiskCacheLoaded() {
   if (diskCacheLoaded) {
     return;
@@ -165,7 +170,7 @@ function persistDiskCache() {
   }
 }
 
-async function scrapeSearchPage(query) {
+async function scrapeSearchPage(query, options = {}) {
   const { chromium } = await import("playwright");
   const browser = await chromium.launch({
     headless: true,
@@ -280,7 +285,7 @@ async function scrapeSearchPage(query) {
     const exactItems = mappedItems
       .map((item) => ({ ...item, match: matchesProductQuery(item.title, spec) }))
       .filter((item) => item.match.ok && item.price > 0);
-    const enrichedItems = await enrichTopMercadoLivreItems(context, dedupeAndRank(exactItems).slice(0, 3));
+    const enrichedItems = await enrichTopMercadoLivreItems(context, dedupeAndRank(exactItems).slice(0, 3), options);
 
     return {
       totalAvailable: parseTotalAvailable(bodyText) || items.length,
@@ -354,42 +359,51 @@ function mapScrapedItem(item) {
   };
 }
 
-async function enrichTopMercadoLivreItems(context, items) {
+async function enrichTopMercadoLivreItems(context, items, options = {}) {
   const topItems = items.slice(0, 3);
-  const enriched = await Promise.all(
-    topItems.map((item) =>
+  const enriched = [];
+
+  for (const item of topItems) {
+    enriched.push(
       typeof item.soldQuantity === "number" && item.soldQuantity > 0
         ? item
-        : enrichMercadoLivreItem(context, item),
-    ),
-  );
+        : await enrichMercadoLivreItem(context, item, options),
+    );
+  }
+
   return [...enriched, ...items.slice(topItems.length)];
 }
 
-async function enrichMercadoLivreItem(context, item) {
+async function enrichMercadoLivreItem(context, item, options = {}) {
   const href = item.href || "";
   if (!href || !/mercadolivre\.com\.br/i.test(href)) {
     return item;
   }
 
+  const apiItem = await enrichMercadoLivreItemWithApi(item, options);
+  if (typeof apiItem.soldQuantity === "number" && apiItem.soldQuantity > 0) {
+    return apiItem;
+  }
+
   const page = await context.newPage();
   try {
-    await page.goto(href, { waitUntil: "domcontentloaded", timeout: PRODUCT_PAGE_TIMEOUT_MS });
-    await page.waitForLoadState("networkidle", { timeout: 6_000 }).catch(() => {});
-    await page.waitForTimeout(1_200);
-    const bodyText = await safeBodyText(page);
-    const htmlText = await page.content().catch(() => "");
-    const finalUrl = page.url();
-    const directText = await fetchMercadoLivrePageText(finalUrl || href);
-    const combinedText = `${bodyText} ${htmlText} ${directText}`;
-    const soldQuantity = parseSalesFromText(combinedText);
-    const price = parseProductPrice(combinedText) || item.price;
+    let detail = await readMercadoLivreProductPage(page, href);
+    let soldQuantity = parseSalesFromText(detail.text);
+    let price = parseProductPrice(detail.text) || item.price;
+
+    const cleanHref = cleanMercadoLivreProductUrl(detail.finalUrl || href);
+    if (!soldQuantity && cleanHref) {
+      detail = await readMercadoLivreProductPage(page, cleanHref);
+      soldQuantity = parseSalesFromText(detail.text);
+      price = parseProductPrice(detail.text) || price;
+    }
+
     if (!soldQuantity) {
-      await assertNotBlocked(page, bodyText);
+      await assertNotBlocked(page, detail.bodyText);
     }
     return {
       ...item,
-      href: /mercadolivre\.com\.br/i.test(finalUrl) ? finalUrl : item.href,
+      href: /mercadolivre\.com\.br/i.test(detail.finalUrl) ? cleanMercadoLivreProductUrl(detail.finalUrl) || detail.finalUrl : item.href,
       price,
       soldQuantity: soldQuantity || item.soldQuantity,
     };
@@ -397,6 +411,89 @@ async function enrichMercadoLivreItem(context, item) {
     return enrichMercadoLivreItemWithFetch(item, href);
   } finally {
     await page.close().catch(() => {});
+  }
+}
+
+async function readMercadoLivreProductPage(page, href) {
+  await page.goto(href, { waitUntil: "domcontentloaded", timeout: PRODUCT_PAGE_TIMEOUT_MS });
+  await page.waitForLoadState("networkidle", { timeout: 6_000 }).catch(() => {});
+  await page.waitForTimeout(1_200);
+  const bodyText = await safeBodyText(page);
+  const htmlText = await page.content().catch(() => "");
+  const finalUrl = page.url();
+  const directText = await fetchMercadoLivrePageText(finalUrl || href);
+  return {
+    bodyText,
+    finalUrl,
+    text: `${bodyText} ${htmlText} ${directText}`,
+  };
+}
+
+function cleanMercadoLivreProductUrl(href) {
+  try {
+    const url = new URL(href);
+    if (!/mercadolivre\.com\.br/i.test(url.hostname)) {
+      return "";
+    }
+    url.hash = "";
+    url.search = "";
+    return url.toString();
+  } catch {
+    return "";
+  }
+}
+
+async function enrichMercadoLivreItemWithApi(item, options = {}) {
+  const accessToken = options.accessToken;
+  const itemId = extractItemId(item.href) || item.id;
+  if (!accessToken || !/^MLB\d+$/i.test(itemId || "")) {
+    return item;
+  }
+
+  const apiItem = await fetchMeliJson(`https://api.mercadolibre.com/items/${itemId}`, accessToken);
+  if (apiItem) {
+    const soldQuantity = Number(apiItem.sold_quantity ?? apiItem.soldQuantity ?? apiItem.initial_quantity_sold ?? 0);
+    const price = Number(apiItem.price ?? item.price);
+    return {
+      ...item,
+      href: apiItem.permalink || item.href,
+      price: Number.isFinite(price) && price > 0 ? price : item.price,
+      soldQuantity: Number.isFinite(soldQuantity) && soldQuantity > 0 ? soldQuantity : item.soldQuantity,
+    };
+  }
+
+  const productId = extractProductId(item.href);
+  if (!productId) {
+    return item;
+  }
+
+  const product = await fetchMeliJson(`https://api.mercadolibre.com/products/${productId}`, accessToken);
+  const productSoldQuantity = Number(product?.sold_quantity ?? product?.soldQuantity ?? product?.quantity_sold ?? 0);
+  const productPrice = Number(product?.buy_box_winner?.price ?? product?.price ?? item.price);
+
+  return {
+    ...item,
+    price: Number.isFinite(productPrice) && productPrice > 0 ? productPrice : item.price,
+    soldQuantity: Number.isFinite(productSoldQuantity) && productSoldQuantity > 0 ? productSoldQuantity : item.soldQuantity,
+  };
+}
+
+async function fetchMeliJson(url, accessToken) {
+  try {
+    const response = await fetch(url, {
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${accessToken}`,
+        "User-Agent": "BuscaVendasConfweb/1.0",
+      },
+      signal: AbortSignal.timeout(8_000),
+    });
+    if (!response.ok) {
+      return null;
+    }
+    return await response.json();
+  } catch {
+    return null;
   }
 }
 
@@ -578,6 +675,15 @@ function extractItemId(href) {
   if (item) {
     return item[1].toUpperCase();
   }
+  const product = text.match(/\/p\/(MLB\d+)/i);
+  if (product) {
+    return product[1].toUpperCase();
+  }
+  return "";
+}
+
+function extractProductId(href) {
+  const text = decodeURIComponent(String(href || ""));
   const product = text.match(/\/p\/(MLB\d+)/i);
   if (product) {
     return product[1].toUpperCase();

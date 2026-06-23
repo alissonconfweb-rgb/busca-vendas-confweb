@@ -80,7 +80,7 @@ export async function searchMercadoLivre(query) {
     if (response.status === 403) {
       let scraped = null;
       if (isMeliScraperEnabled()) {
-        scraped = await searchMercadoLivreScraper(query);
+        scraped = await searchMercadoLivreScraper(query, { accessToken, siteId });
         if (scraped.ok) {
           return scraped;
         }
