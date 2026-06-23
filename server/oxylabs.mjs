@@ -8,7 +8,7 @@ const WEB_UNBLOCKER_ENDPOINT = "https://unblock.oxylabs.io:60000";
 const DEFAULT_GEO = "Brazil";
 const WEB_UNBLOCKER_MODE = "web_unblocker";
 const WEB_SCRAPER_API_MODE = "web_scraper_api";
-const PRODUCT_LIMIT = Number(process.env.OXYLABS_PRODUCT_LIMIT || 8);
+const PRODUCT_LIMIT = Number(process.env.OXYLABS_PRODUCT_LIMIT || 3);
 
 export function isOxylabsConfigured() {
   const { username, password } = oxylabsCredentials();
@@ -55,11 +55,7 @@ export async function searchMercadoLivreOxylabs(query) {
     .map((item, index) => ({ ...item, position: index + 1, match: matchesProductQuery(item.title, querySpec) }))
     .filter((item) => item.match.ok && item.price > 0);
   const uniqueCandidates = dedupe(candidates).slice(0, PRODUCT_LIMIT);
-  const enriched = [];
-
-  for (const item of uniqueCandidates) {
-    enriched.push(await enrichItem(item));
-  }
+  const enriched = await Promise.all(uniqueCandidates.map((item) => enrichItem(item)));
 
   const items = enriched
     .filter((item) => item.title && item.price > 0)
@@ -136,7 +132,7 @@ async function enrichItem(item) {
 
 async function fetchOxylabsMercadoLivreSearch(query) {
   if (oxylabsMode() === WEB_UNBLOCKER_MODE) {
-    return fetchViaOxylabsProxy(searchUrlFor(query));
+    return fetchViaOxylabsProxy(searchUrlFor(query), { render: true });
   }
 
   const searchData = await requestOxylabs({
@@ -150,7 +146,7 @@ async function fetchOxylabsMercadoLivreSearch(query) {
 
 async function fetchOxylabsMercadoLivrePage(url) {
   if (oxylabsMode() === WEB_UNBLOCKER_MODE) {
-    return fetchViaOxylabsProxy(url);
+    return fetchViaOxylabsProxy(url, { render: true });
   }
 
   const data = await requestOxylabs({
@@ -189,7 +185,7 @@ async function requestOxylabs(payload) {
   return data;
 }
 
-async function fetchViaOxylabsProxy(url) {
+async function fetchViaOxylabsProxy(url, options = {}) {
   const { username, password } = oxylabsCredentials();
   if (!username || !password) {
     throw new Error("Configure usuario e senha da Oxylabs no painel admin.");
@@ -200,17 +196,22 @@ async function fetchViaOxylabsProxy(url) {
   const timeoutMs = oxylabsTimeoutMs();
 
   return new Promise((resolvePromise, rejectPromise) => {
+    const headers = {
+      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36",
+      "X-Oxylabs-Geo-Location": oxylabsGeoLocation(),
+    };
+    if (options.render) {
+      headers["x-oxylabs-render"] = "html";
+      headers["x-oxylabs-browser-instructions"] = JSON.stringify([{ type: "wait", wait_time_s: oxylabsRenderWaitSeconds() }]);
+    }
+
     const request = https.get(url, {
       agent,
       rejectUnauthorized: false,
       timeout: timeoutMs,
-      headers: {
-        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36",
-        "X-Oxylabs-Geo-Location": oxylabsGeoLocation(),
-        "x-oxylabs-force-headers": "1",
-      },
+      headers,
     }, (response) => {
       let text = "";
       response.setEncoding("utf8");
@@ -389,6 +390,19 @@ function parseImage(text) {
 
 function parsePrice(text) {
   const source = decodeText(text);
+  const currentPriceBlock = firstMatch(source, [
+    /<div[^>]+class=["'][^"']*poly-price__current[^"']*["'][\s\S]*?(?=<span[^>]+class=["'][^"']*poly-price__disc_label|<\/div>)/i,
+  ]);
+  const currentPrice = parseMercadoLivreMoney(currentPriceBlock);
+  if (currentPrice > 0) {
+    return currentPrice;
+  }
+
+  const ariaPrice = parseMercadoLivreMoney(source, { requireNow: true });
+  if (ariaPrice > 0) {
+    return ariaPrice;
+  }
+
   const value = parseNumberValue(firstMatch(source, [
     /itemprop=["']price["'][^>]*content=["']([\d.,]+)/i,
     /"price"\s*:\s*"?([\d.,]+)"?/i,
@@ -396,6 +410,36 @@ function parsePrice(text) {
     /R\$\s*([\d.]+,\d{2})/i,
   ]));
   return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+function parseMercadoLivreMoney(source, options = {}) {
+  const text = String(source || "");
+  const ariaNow = text.match(options.requireNow
+    ? /aria-label=["']Agora:\s*([\d.]+)\s*reais(?:\s*com\s*(\d{1,2})\s*centavos?)?/i
+    : /aria-label=["'](?:Agora:\s*)?([\d.]+)\s*reais(?:\s*com\s*(\d{1,2})\s*centavos?)?/i);
+  if (ariaNow) {
+    return moneyPartsToNumber(ariaNow[1], ariaNow[2]);
+  }
+
+  const fraction = firstMatch(text, [
+    /data-andes-money-amount-fraction=["']true["'][^>]*>\s*([\d.]+)/i,
+    /andes-money-amount__fraction[^>]*>\s*([\d.]+)/i,
+  ]);
+  if (!fraction) {
+    return 0;
+  }
+  const cents = firstMatch(text, [
+    /data-andes-money-amount-cents=["']true["'][^>]*>\s*(\d{1,2})/i,
+    /andes-money-amount__cents[^>]*>\s*(\d{1,2})/i,
+  ]);
+  return moneyPartsToNumber(fraction, cents);
+}
+
+function moneyPartsToNumber(reais, cents) {
+  const whole = Number(String(reais || "").replace(/\./g, ""));
+  const decimal = cents ? Number(String(cents).padEnd(2, "0").slice(0, 2)) / 100 : 0;
+  const value = whole + decimal;
+  return Number.isFinite(value) ? value : 0;
 }
 
 function parseSalesFromText(text) {
@@ -600,6 +644,10 @@ function withProxyCredentials(endpoint, username, password) {
 
 function oxylabsTimeoutMs() {
   return Number(process.env.OXYLABS_TIMEOUT_MS || getSetting("oxylabs_timeout_ms") || 120_000);
+}
+
+function oxylabsRenderWaitSeconds() {
+  return Number(process.env.OXYLABS_RENDER_WAIT_SECONDS || getSetting("oxylabs_render_wait_seconds") || 5);
 }
 
 function oxylabsEndpoint() {
