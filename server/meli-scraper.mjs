@@ -5,10 +5,10 @@ import { buildProductQuerySpec, matchesProductQuery, normalizedProductKey } from
 const CACHE_TTL_MS = Number(process.env.MELI_SCRAPER_CACHE_MS || 60 * 60 * 1000);
 const STALE_CACHE_TTL_MS = Number(process.env.MELI_SCRAPER_STALE_CACHE_MS || 6 * 60 * 60 * 1000);
 const SCRAPER_TIMEOUT_MS = Number(process.env.MELI_SCRAPER_TIMEOUT_MS || 24_000);
-const PRODUCT_PAGE_TIMEOUT_MS = Number(process.env.MELI_PRODUCT_PAGE_TIMEOUT_MS || 9_000);
+const PRODUCT_PAGE_TIMEOUT_MS = Number(process.env.MELI_PRODUCT_PAGE_TIMEOUT_MS || 18_000);
 const SEARCH_RESULTS_WAIT_MS = Number(process.env.MELI_SEARCH_RESULTS_WAIT_MS || 12_000);
 const SEARCH_CARD_LIMIT = Number(process.env.MELI_SEARCH_CARD_LIMIT || 12);
-const CACHE_VERSION = "sales-real-v3";
+const CACHE_VERSION = "sales-real-v5";
 const CACHE_FILE = resolve(process.cwd(), "data", "meli-scraper-cache.json");
 const cache = new Map();
 const inFlight = new Map();
@@ -78,12 +78,12 @@ async function runScraper(query) {
   const candidates = scraped.items
     .map((item, index) => ({ ...item, position: index + 1, match: matchesProductQuery(item.title, spec) }))
     .filter((item) => item.match.ok && item.price > 0);
-  const uniqueItems = addSalesEstimates(dedupeAndRank(candidates).slice(0, 3));
+  const uniqueItems = dedupeAndRankChampions(candidates).slice(0, 3);
   const mappedItems = uniqueItems.map(mapScrapedItem);
-  const demand = mappedItems.reduce((sum, item) => sum + (typeof item.soldQuantity === "number" ? item.soldQuantity : item.estimatedSoldQuantity || 0), 0);
-  const revenue = mappedItems.reduce((sum, item) => sum + (typeof item.revenue === "number" ? item.revenue : item.estimatedRevenue || 0), 0);
+  const demand = mappedItems.reduce((sum, item) => sum + (typeof item.soldQuantity === "number" ? item.soldQuantity : 0), 0);
+  const revenue = mappedItems.reduce((sum, item) => sum + (typeof item.revenue === "number" ? item.revenue : 0), 0);
   const actualDemand = mappedItems.reduce((sum, item) => sum + (typeof item.soldQuantity === "number" ? item.soldQuantity : 0), 0);
-  const hasEstimated = mappedItems.some((item) => typeof item.estimatedSoldQuantity === "number" && item.estimatedSoldQuantity > 0);
+  const hasEstimated = false;
   const hasSales = demand > 0;
   const averageTicket = hasSales
     ? revenue / demand
@@ -305,39 +305,35 @@ function dedupeAndRank(items) {
   return [...byKey.values()].sort((a, b) => rankingScore(a) - rankingScore(b));
 }
 
+function dedupeAndRankChampions(items) {
+  const byKey = new Map();
+
+  for (const item of items) {
+    const key = item.id || normalizedProductKey(item.title);
+    const current = byKey.get(key);
+    if (!current || championScore(item) < championScore(current)) {
+      byKey.set(key, item);
+    }
+  }
+
+  return [...byKey.values()].sort((a, b) => championScore(a) - championScore(b));
+}
+
+function championScore(item) {
+  const soldQuantity = typeof item.soldQuantity === "number" && item.soldQuantity > 0 ? item.soldQuantity : 0;
+  if (soldQuantity > 0) {
+    return -soldQuantity + rankingScore(item) / 1000;
+  }
+  return rankingScore(item);
+}
+
 function rankingScore(item) {
   const salesBonus = typeof item.soldQuantity === "number" && item.soldQuantity > 0 ? Math.min(item.soldQuantity / 100, 100) : 0;
   return item.position + (item.isAd ? 20 : 0) - (item.bestSeller ? 8 : 0) - salesBonus;
 }
 
-function addSalesEstimates(items) {
-  const actualSales = items
-    .map((item) => item.soldQuantity)
-    .filter((value) => typeof value === "number" && value > 0);
-  const anchor = actualSales.length ? Math.min(Math.max(...actualSales), 10_000) : 0;
-  const defaults = [1200, 600, 300];
-  const ratios = [0.3, 0.12, 0.06];
-  const caps = [5000, 2500, 1200];
-
-  return items.map((item, index) => {
-    if (typeof item.soldQuantity === "number" && item.soldQuantity > 0) {
-      return item;
-    }
-    const baseline = defaults[index] || 150;
-    const anchored = anchor ? Math.round(anchor * (ratios[index] || 0.04)) : 0;
-    const bestSellerBoost = item.bestSeller ? 350 : 0;
-    const estimatedSoldQuantity = Math.min(caps[index] || 800, Math.max(baseline, anchored + bestSellerBoost));
-    return {
-      ...item,
-      estimatedSoldQuantity,
-      estimatedRevenue: Number((item.price * estimatedSoldQuantity).toFixed(2)),
-    };
-  });
-}
-
 function mapScrapedItem(item) {
   const hasSales = typeof item.soldQuantity === "number" && item.soldQuantity > 0;
-  const hasEstimate = typeof item.estimatedSoldQuantity === "number" && item.estimatedSoldQuantity > 0;
 
   return {
     id: item.id,
@@ -349,11 +345,11 @@ function mapScrapedItem(item) {
     image: String(item.image || "").replace("http://", "https://"),
     price: item.price,
     soldQuantity: hasSales ? item.soldQuantity : null,
-    estimatedSoldQuantity: hasEstimate ? item.estimatedSoldQuantity : null,
+    estimatedSoldQuantity: null,
     salesMetricLabel: hasSales ? undefined : "Nao exibido pelo Mercado Livre",
     revenue: hasSales ? Number((item.price * item.soldQuantity).toFixed(2)) : null,
-    estimatedRevenue: hasEstimate ? item.estimatedRevenue : null,
-    revenueMetricLabel: hasSales || hasEstimate ? undefined : "Aguardando API",
+    estimatedRevenue: null,
+    revenueMetricLabel: hasSales ? undefined : "Aguardando API",
     permalink: item.href || searchUrlFor(item.title),
   };
 }
@@ -379,16 +375,18 @@ async function enrichMercadoLivreItem(context, item) {
   const page = await context.newPage();
   try {
     await page.goto(href, { waitUntil: "domcontentloaded", timeout: PRODUCT_PAGE_TIMEOUT_MS });
-    await page.waitForLoadState("networkidle", { timeout: 3_000 }).catch(() => {});
-    await page.waitForTimeout(800);
+    await page.waitForLoadState("networkidle", { timeout: 6_000 }).catch(() => {});
+    await page.waitForTimeout(1_200);
     const bodyText = await safeBodyText(page);
-    await assertNotBlocked(page, bodyText);
     const htmlText = await page.content().catch(() => "");
     const finalUrl = page.url();
     const directText = await fetchMercadoLivrePageText(finalUrl || href);
     const combinedText = `${bodyText} ${htmlText} ${directText}`;
     const soldQuantity = parseSalesFromText(combinedText);
     const price = parseProductPrice(combinedText) || item.price;
+    if (!soldQuantity) {
+      await assertNotBlocked(page, bodyText);
+    }
     return {
       ...item,
       href: /mercadolivre\.com\.br/i.test(finalUrl) ? finalUrl : item.href,
@@ -396,10 +394,21 @@ async function enrichMercadoLivreItem(context, item) {
       soldQuantity: soldQuantity || item.soldQuantity,
     };
   } catch {
-    return item;
+    return enrichMercadoLivreItemWithFetch(item, href);
   } finally {
     await page.close().catch(() => {});
   }
+}
+
+async function enrichMercadoLivreItemWithFetch(item, href) {
+  const directText = await fetchMercadoLivrePageText(href);
+  const soldQuantity = parseSalesFromText(directText);
+  const price = parseProductPrice(directText) || item.price;
+  return {
+    ...item,
+    price,
+    soldQuantity: soldQuantity || item.soldQuantity,
+  };
 }
 
 async function fetchMercadoLivrePageText(url) {
@@ -469,7 +478,8 @@ function parseTotalAvailable(text) {
 }
 
 function parseSalesFromText(text) {
-  const normalized = normalizedProductKey(String(text || ""));
+  const rawText = normalizeHtmlText(text);
+  const normalized = normalizedProductKey(rawText);
   const patterns = [
     /"(?:(?:sold_quantity)|(?:soldQuantity)|(?:quantity_sold)|(?:units_sold))"\s*:\s*(\d+)/i,
     /\+?\s*(\d+(?:[.,]\d+)?)\s*(mil|mi|milhao|milhoes)?\s*(?:vendido|vendidos|venda|vendas|comprado|comprados)/i,
@@ -477,7 +487,7 @@ function parseSalesFromText(text) {
   ];
 
   for (let index = 0; index < patterns.length; index += 1) {
-    const match = normalized.match(patterns[index]) || String(text || "").match(patterns[index]);
+    const match = normalized.match(patterns[index]) || rawText.match(patterns[index]);
     if (!match) {
       continue;
     }
@@ -490,6 +500,15 @@ function parseSalesFromText(text) {
   }
 
   return null;
+}
+
+function normalizeHtmlText(text) {
+  return String(text || "")
+    .replace(/\\u00a0/gi, " ")
+    .replace(/\\u002b/gi, "+")
+    .replace(/&nbsp;|&#160;/gi, " ")
+    .replace(/&#43;|&plus;/gi, "+")
+    .replace(/\u00a0/g, " ");
 }
 
 function salesUnitMultiplier(unit) {

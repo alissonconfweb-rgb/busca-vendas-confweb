@@ -752,10 +752,10 @@ function ResultsPanel({
               </div>
               <Metric
                 label="Qtd. vendas"
-                value={formatCountOrLabel(item.soldQuantity, item.salesMetricLabel, item.estimatedSoldQuantity)}
+                value={formatCountOrLabel(item.soldQuantity, item.salesMetricLabel)}
               />
               <Metric label="Preço" value={money.format(item.price)} />
-              <Metric label="Receita" value={formatMoneyOrLabel(item.revenue, item.revenueMetricLabel, item.estimatedRevenue)} />
+              <Metric label="Receita" value={formatMoneyOrLabel(item.revenue, item.revenueMetricLabel)} />
               <a className="row-arrow" href={item.permalink} target="_blank" rel="noreferrer" aria-label="Abrir anúncio">
                 <ChevronRight size={24} />
               </a>
@@ -826,22 +826,16 @@ function Metric({ label, value }: { label: string; value: string }) {
   );
 }
 
-function formatCountOrLabel(value: number | null | undefined, fallback = "Não divulgado", estimatedValue?: number | null) {
+function formatCountOrLabel(value: number | null | undefined, fallback = "Não divulgado") {
   if (typeof value === "number") {
     return number.format(value);
-  }
-  if (typeof estimatedValue === "number" && estimatedValue > 0) {
-    return number.format(estimatedValue);
   }
   return fallback;
 }
 
-function formatMoneyOrLabel(value: number | null | undefined, fallback = "Aguardando API", estimatedValue?: number | null) {
+function formatMoneyOrLabel(value: number | null | undefined, fallback = "Aguardando API") {
   if (typeof value === "number") {
     return money.format(value);
-  }
-  if (typeof estimatedValue === "number" && estimatedValue > 0) {
-    return money.format(estimatedValue);
   }
   return fallback;
 }
