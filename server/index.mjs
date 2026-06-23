@@ -4,6 +4,7 @@ import { extname, join, resolve } from "node:path";
 import { db, createSession, deleteSession, findUserByEmail, getSetting, initDatabase, publicUser, setSetting, settingsObject, userFromSession } from "./db.mjs";
 import { loadLocalEnv } from "./env.mjs";
 import { buildMeliAuthorizationUrl, createMeliPkcePair, disconnectMeliOAuth, exchangeMeliAuthorizationCode, getMeliRedirectUri, searchMercadoLivre } from "./meli.mjs";
+import { buildMarketEstimate, shouldUseMarketEstimate } from "./market-estimate.mjs";
 import { bootstrapAdminFromEnv } from "./bootstrap-admin.mjs";
 import { syncMeliSettingsFromEnv, validateMeliSettingsInput, isValidMeliClientId, resolveMeliRedirectUri } from "./meli-config.mjs";
 import { syncOxylabsSettingsFromEnv, testOxylabsConnection } from "./oxylabs.mjs";
@@ -19,6 +20,7 @@ const COOKIE = "bv_session";
 const CREATOR_EMAIL = (process.env.CREATOR_EMAIL || "alisson.confweb@gmail.com").toLowerCase();
 const DIST_DIR = resolve(process.cwd(), "dist");
 const MELI_OAUTH_STATE_TTL_MS = 15 * 60 * 1000;
+const SEARCH_RESPONSE_TIMEOUT_MS = Number(process.env.SEARCH_RESPONSE_TIMEOUT_MS || 85_000);
 const PUBLIC_SETTING_KEYS = new Set([
   "app_name",
   "starter_monthly",
@@ -187,7 +189,10 @@ async function handleSearch(req, res, user, query) {
     return json(res, 402, { error: "Limite de pesquisas atingido. Faça upgrade para continuar." });
   }
 
-  const result = await searchMercadoLivre(cleanQuery);
+  let result = await searchWithResponseGuard(cleanQuery);
+  if (shouldUseMarketEstimate(result)) {
+    result = buildMarketEstimate(cleanQuery, result?.message || "Nao foi possivel concluir a leitura real agora.");
+  }
   const responseResult = canUseAdmin(user) ? result : publicSearchResult(result);
   db.prepare(`
     INSERT INTO search_history (user_id, query, source, total_demand, total_revenue, payload)
@@ -206,6 +211,37 @@ async function handleSearch(req, res, user, query) {
   }
 
   return json(res, 200, responseResult);
+}
+
+async function searchWithResponseGuard(query) {
+  let settled = false;
+  let timeoutId;
+  const realSearch = searchMercadoLivre(query)
+    .then((result) => {
+      settled = true;
+      return result;
+    })
+    .catch((error) => {
+      settled = true;
+      return buildMarketEstimate(
+        query,
+        error instanceof Error ? error.message : "Falha inesperada ao consultar a fonte real.",
+      );
+    });
+
+  const timeout = new Promise((resolve) => {
+    timeoutId = setTimeout(() => {
+      if (!settled) {
+        resolve(buildMarketEstimate(query, "A leitura real ultrapassou o tempo ideal de resposta."));
+      }
+    }, SEARCH_RESPONSE_TIMEOUT_MS);
+  });
+
+  const result = await Promise.race([realSearch, timeout]);
+  if (timeoutId) {
+    clearTimeout(timeoutId);
+  }
+  return result;
 }
 
 async function handleAdmin(req, res, url, currentUser) {
@@ -503,6 +539,10 @@ function publicSettings(settings) {
 }
 
 function publicSearchResult(result) {
+  if (result?.source === "market_estimate") {
+    return result;
+  }
+
   if (!result || result.ok) {
     if (result?.metricsMode === "market_signal" || result?.salesAvailable === false) {
       return {

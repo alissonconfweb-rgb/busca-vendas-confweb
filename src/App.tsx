@@ -204,6 +204,39 @@ const searchSteps = [
   "Selecionando Top 3",
 ];
 
+const clientEstimateProfiles = [
+  {
+    match: ["mochila", "bolsa"],
+    family: "Mochila masculina",
+    note: "Boa categoria para entrada: compra recorrente, volta as aulas, rotina corporativa e viagem.",
+    scenarios: [
+      { label: "Mochila escolar/resistente", price: 79.9, units: 260 },
+      { label: "Mochila notebook/impermeavel", price: 119.9, units: 200 },
+      { label: "Mochila premium/couro sintetico", price: 219.9, units: 70 },
+    ],
+  },
+  {
+    match: ["fone", "headphone", "earbud", "bluetooth"],
+    family: "Fone Bluetooth",
+    note: "Categoria de alto giro, mas com concorrencia forte e sensibilidade a preco.",
+    scenarios: [
+      { label: "Fone Bluetooth entrada", price: 39.9, units: 800 },
+      { label: "Fone TWS intermediario", price: 69.9, units: 500 },
+      { label: "Headphone/Fone premium", price: 119.9, units: 180 },
+    ],
+  },
+  {
+    match: ["caixa", "som", "speaker"],
+    family: "Caixa de som Bluetooth",
+    note: "Produto com bom ticket medio; venda depende de prova social, preco e entrega rapida.",
+    scenarios: [
+      { label: "Caixa portatil compacta", price: 89.9, units: 300 },
+      { label: "Caixa media bluetooth", price: 149.9, units: 180 },
+      { label: "Caixa potente/premium", price: 249.9, units: 90 },
+    ],
+  },
+];
+
 async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(path, {
     credentials: "include",
@@ -220,6 +253,78 @@ async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   }
 
   return data as T;
+}
+
+function buildClientMarketEstimate(query: string, reason = ""): SearchResult {
+  const normalized = normalizeSearchText(query);
+  const profile = clientEstimateProfiles.find((item) => item.match.some((word) => normalized.includes(word))) || {
+    family: titleCase(query.trim() || "Produto pesquisado"),
+    note: "Estimativa criada por faixa de ticket e comportamento comum de marketplace.",
+    scenarios: [
+      { label: "Faixa de entrada", price: 69.9, units: 180 },
+      { label: "Faixa intermediaria", price: 119.9, units: 120 },
+      { label: "Faixa premium", price: 199.9, units: 55 },
+    ],
+  };
+  const image = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='96' height='96' viewBox='0 0 96 96'%3E%3Crect width='96' height='96' rx='20' fill='%23f4f8fc'/%3E%3Cpath d='M27 38h42v30H27z' fill='%23fff' stroke='%232f6fab' stroke-width='4'/%3E%3Cpath d='M35 38c0-9 5-15 13-15s13 6 13 15' fill='none' stroke='%23ff7e21' stroke-width='4' stroke-linecap='round'/%3E%3Ccircle cx='64' cy='64' r='10' fill='%23ff7e21'/%3E%3Cpath d='M60 64h8M64 60v8' stroke='%23fff' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E";
+  const items = profile.scenarios.map((scenario, index) => {
+    const revenue = Number((scenario.price * scenario.units).toFixed(2));
+    return {
+      id: `client-estimate-${index}-${normalized.replace(/\s+/g, "-") || "produto"}`,
+      title: `${profile.family} - ${scenario.label}`,
+      subtitle: "Raio-x estrategico Confweb - estimativa sem API",
+      image,
+      price: scenario.price,
+      soldQuantity: scenario.units,
+      estimatedSoldQuantity: scenario.units,
+      salesMetricLabel: "Estimativa mensal",
+      revenue,
+      estimatedRevenue: revenue,
+      revenueMetricLabel: "Receita projetada",
+      permalink: `https://lista.mercadolivre.com.br/${encodeURIComponent(query.trim().replace(/\s+/g, "-"))}`,
+    };
+  });
+  const demand = items.reduce((sum, item) => sum + item.soldQuantity, 0);
+  const revenue = Number(items.reduce((sum, item) => sum + item.revenue, 0).toFixed(2));
+
+  return {
+    ok: true,
+    source: "market_estimate",
+    metricsMode: "market_signal",
+    salesAvailable: false,
+    message: reason
+      ? `A leitura real nao respondeu agora. Entregamos um raio-x estrategico para triagem: ${profile.note}`
+      : `Raio-x estrategico para triagem: ${profile.note}`,
+    items,
+    exactMatches: 0,
+    totalAvailable: items.length,
+    totals: {
+      demand,
+      revenue,
+      averageTicket: demand ? revenue / demand : 0,
+      isEstimated: true,
+      actualDemand: 0,
+    },
+  };
+}
+
+function normalizeSearchText(text: string) {
+  return text
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function titleCase(text: string) {
+  return text
+    .toLowerCase()
+    .split(" ")
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
 }
 
 function formJson(form: HTMLFormElement) {
@@ -605,7 +710,13 @@ function SearchPage({
       onHistoryRefresh();
     } catch (apiError) {
       await minimumFeedback;
-      setError(apiError instanceof Error ? apiError.message : "Não foi possível buscar agora.");
+      if (apiError instanceof ApiError && [401, 402].includes(apiError.status)) {
+        setError(apiError.message);
+        return;
+      }
+      const reason = apiError instanceof Error ? apiError.message : "Nao foi possivel buscar agora.";
+      setResult(buildClientMarketEstimate(cleanQuery, reason));
+      setError("");
     } finally {
       setLoading(false);
     }
@@ -694,9 +805,12 @@ function ResultsPanel({
   const hasItems = items.length > 0;
   const marketSignalMode = result?.metricsMode === "market_signal" || result?.salesAvailable === false;
   const publicPageMode = result?.source === "mercado_livre_scraper" || result?.source === "oxylabs_mercado_livre";
+  const estimateMode = result?.source === "market_estimate";
   const salesPotential = result?.totals.revenue || 0;
   const commercialHref = whatsappHref(contacts, query, salesPotential);
-  const sourceText = result
+  const sourceText = estimateMode
+    ? "Fonte: raio-x estrategico Confweb - sem API"
+    : result
     ? result.ok
       ? publicPageMode
         ? "Fonte: Mercado Livre - página pública"
@@ -721,7 +835,7 @@ function ResultsPanel({
     <section className="market-panel">
       <div className="panel-head">
         <div>
-          <h2>Top 3 anúncios campeões</h2>
+          <h2>{estimateMode ? "Raio-x de oportunidade" : "Top 3 anuncios campeoes"}</h2>
           <p>{sourceText}</p>
         </div>
         <a href={marketUrl} target="_blank" rel="noreferrer">
@@ -751,11 +865,11 @@ function ResultsPanel({
                 <p>{item.subtitle || "Anúncio ativo no Mercado Livre"}</p>
               </div>
               <Metric
-                label="Qtd. vendas"
+                label={estimateMode ? "Venda estimada" : "Qtd. vendas"}
                 value={formatCountOrLabel(item.soldQuantity, item.salesMetricLabel)}
               />
               <Metric label="Preço" value={money.format(item.price)} />
-              <Metric label="Receita" value={formatMoneyOrLabel(item.revenue, item.revenueMetricLabel)} />
+              <Metric label={estimateMode ? "Receita projetada" : "Receita"} value={formatMoneyOrLabel(item.revenue, item.revenueMetricLabel)} />
               <a className="row-arrow" href={item.permalink} target="_blank" rel="noreferrer" aria-label="Abrir anúncio">
                 <ChevronRight size={24} />
               </a>
@@ -764,9 +878,9 @@ function ResultsPanel({
           <div className="market-cta">
             <div>
               <strong>
-                Seu produto tem potencial: {money.format(salesPotential)} em vendas.
+                Seu produto tem potencial{estimateMode ? " estimado" : ""}: {money.format(salesPotential)} em vendas.
               </strong>
-              <p>Bora pegar uma fatia desse mercado? Venda nos maiores marketplaces do Brasil com a Confweb.</p>
+              <p>{estimateMode ? "Use este raio-x como triagem inicial. Quando a leitura real responder, exibimos os anuncios e vendas publicas." : "Bora pegar uma fatia desse mercado? Venda nos maiores marketplaces do Brasil com a Confweb."}</p>
             </div>
             <a href={commercialHref} target="_blank" rel="noreferrer">
               Falar com a Confweb
@@ -842,6 +956,7 @@ function formatMoneyOrLabel(value: number | null | undefined, fallback = "Aguard
 
 function DemandCard({ result }: { result: SearchResult | null }) {
   const championCount = result?.items?.length || 0;
+  const estimateMode = result?.source === "market_estimate";
 
   return (
     <section className="demand-card">
@@ -851,13 +966,13 @@ function DemandCard({ result }: { result: SearchResult | null }) {
       </div>
       <dl>
         <div>
-          <dt>Vendas totais nos 3</dt>
+          <dt>{estimateMode ? "Vendas projetadas" : "Vendas totais nos 3"}</dt>
           <dd className="blue-value">
             {number.format(result?.totals.demand || 0)}
           </dd>
         </div>
         <div>
-          <dt>Receita total dos 3</dt>
+          <dt>{estimateMode ? "Receita projetada" : "Receita total dos 3"}</dt>
           <dd className="orange-value">{money.format(result?.totals.revenue || 0)}</dd>
         </div>
         <div>
@@ -865,7 +980,7 @@ function DemandCard({ result }: { result: SearchResult | null }) {
           <dd>{money.format(result?.totals.averageTicket || 0)}</dd>
         </div>
         <div>
-          <dt>Anúncios campeões</dt>
+          <dt>{estimateMode ? "Cenarios analisados" : "Anuncios campeoes"}</dt>
           <dd>{championCount ? `${number.format(championCount)} selecionados` : "0"}</dd>
         </div>
       </dl>
