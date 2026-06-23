@@ -1,4 +1,5 @@
-import { ProxyAgent, fetch as undiciFetch } from "undici";
+import https from "node:https";
+import { HttpsProxyAgent } from "https-proxy-agent";
 import { getSetting, setSetting } from "./db.mjs";
 import { buildProductQuerySpec, matchesProductQuery, normalizedProductKey } from "./product-match.mjs";
 
@@ -176,7 +177,7 @@ async function requestOxylabs(payload) {
       "User-Agent": "BuscaVendasConfweb/1.0",
     },
     body: JSON.stringify(payload),
-    signal: AbortSignal.timeout(Number(process.env.OXYLABS_TIMEOUT_MS || 60_000)),
+    signal: AbortSignal.timeout(oxylabsTimeoutMs()),
   });
   const text = await response.text();
   const data = parseJson(text);
@@ -194,31 +195,45 @@ async function fetchViaOxylabsProxy(url) {
     throw new Error("Configure usuario e senha da Oxylabs no painel admin.");
   }
 
-  const dispatcher = new ProxyAgent({
-    uri: oxylabsEndpoint(),
-    token: `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}`,
-    proxyTls: { rejectUnauthorized: false },
-    requestTls: { rejectUnauthorized: false },
-  });
+  const proxyUrl = withProxyCredentials(oxylabsEndpoint(), username, password);
+  const agent = new HttpsProxyAgent(proxyUrl, { rejectUnauthorized: false });
+  const timeoutMs = oxylabsTimeoutMs();
 
-  try {
-    const response = await undiciFetch(url, {
-      dispatcher,
+  return new Promise((resolvePromise, rejectPromise) => {
+    const request = https.get(url, {
+      agent,
+      rejectUnauthorized: false,
+      timeout: timeoutMs,
       headers: {
         Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36",
+        "X-Oxylabs-Geo-Location": oxylabsGeoLocation(),
+        "x-oxylabs-force-headers": "1",
       },
-      signal: AbortSignal.timeout(Number(process.env.OXYLABS_TIMEOUT_MS || 60_000)),
+    }, (response) => {
+      let text = "";
+      response.setEncoding("utf8");
+      response.on("data", (chunk) => {
+        text += chunk;
+      });
+      response.on("end", () => {
+        const status = response.statusCode || 0;
+        if (status < 200 || status >= 300) {
+          rejectPromise(new Error(describeOxylabsError(status, parseJsonSafe(text), text)));
+          return;
+        }
+        resolvePromise(text);
+      });
     });
-    const text = await response.text();
-    if (!response.ok) {
-      throw new Error(describeOxylabsError(response.status, parseJsonSafe(text), text));
-    }
-    return text;
-  } finally {
-    await dispatcher.close().catch(() => {});
-  }
+
+    request.on("timeout", () => {
+      request.destroy(new Error(`Oxylabs demorou mais de ${Math.round(timeoutMs / 1000)}s para responder. Tente novamente; se repetir, verifique se a conta Web Unblocker esta ativa.`));
+    });
+    request.on("error", (error) => {
+      rejectPromise(error);
+    });
+  });
 }
 
 function extractSearchItems(html) {
@@ -546,10 +561,13 @@ function parseJsonSafe(text) {
 function describeOxylabsError(status, data, text) {
   const detail = data?.message || data?.error || data?.detail || String(text || "").slice(0, 180);
   if (status === 401) {
-    return "Oxylabs recusou as credenciais. Use o Username e Password do API User em Web Scraper API > Users, nao o e-mail/senha de login do painel Oxylabs. Salve novamente no painel admin e teste.";
+    return "Oxylabs recusou as credenciais. Use o Nome de usuario e a Senha do Web Unblocker, nao o e-mail/senha de login do painel Oxylabs. Salve novamente no painel admin e teste.";
+  }
+  if (status === 407) {
+    return "Oxylabs recusou a autenticacao do proxy. Confira usuario e senha do Web Unblocker e salve novamente no painel admin.";
   }
   if (status === 403) {
-    return "Oxylabs autenticou, mas bloqueou o acesso. Verifique se a Web Scraper API esta ativa no plano e se o usuario tem permissao para usar o endpoint Realtime.";
+    return "Oxylabs autenticou, mas bloqueou o acesso. Verifique se o Web Unblocker esta ativo no plano e se o usuario tem permissao para usar o endpoint.";
   }
   return `Oxylabs respondeu ${status}: ${detail || "sem detalhe"}`;
 }
@@ -571,6 +589,17 @@ function oxylabsMode() {
 
 function rawOxylabsEndpoint() {
   return (getSetting("oxylabs_endpoint") || process.env.OXYLABS_ENDPOINT || "").trim();
+}
+
+function withProxyCredentials(endpoint, username, password) {
+  const url = new URL(endpoint);
+  url.username = username;
+  url.password = password;
+  return url.toString();
+}
+
+function oxylabsTimeoutMs() {
+  return Number(process.env.OXYLABS_TIMEOUT_MS || getSetting("oxylabs_timeout_ms") || 120_000);
 }
 
 function oxylabsEndpoint() {
