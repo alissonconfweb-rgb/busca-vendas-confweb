@@ -441,6 +441,7 @@ function ProductApp({ user, onUserChange }: { user: User | null; onUserChange: (
         settings={settings}
         onMode={setMode}
         onLogin={() => setLoginOpen(true)}
+        onLogout={logout}
       />
       <main className="bv-main">
         <TopBar
@@ -515,12 +516,14 @@ function Sidebar({
   settings,
   onMode,
   onLogin,
+  onLogout,
 }: {
   mode: Mode;
   user: User | null;
   settings: SettingsMap;
   onMode: (mode: Mode) => void;
   onLogin: () => void;
+  onLogout: () => void;
 }) {
   const navItems: { mode: Mode; label: string; Icon: LucideIcon }[] = [
     { mode: "search", label: "Nova pesquisa", Icon: Search },
@@ -537,6 +540,7 @@ function Sidebar({
   return (
     <aside className="bv-sidebar">
       <BrandMark />
+      <AccountSummary user={user} onLogin={onLogin} onLogout={onLogout} />
       <nav className="sidebar-nav" aria-label="Navegação principal">
         {navItems.map(({ mode: itemMode, label, Icon }) => (
           <button
@@ -560,6 +564,41 @@ function Sidebar({
         <ChevronRight size={18} />
       </button>
     </aside>
+  );
+}
+
+function AccountSummary({
+  user,
+  onLogin,
+  onLogout,
+}: {
+  user: User | null;
+  onLogin: () => void;
+  onLogout: () => void;
+}) {
+  const initials = user?.name
+    ? user.name
+        .split(" ")
+        .filter(Boolean)
+        .slice(0, 2)
+        .map((part) => part[0])
+        .join("")
+        .toUpperCase()
+    : "BV";
+  const planLabel = user?.plan === "scale" ? "Ilimitado" : user?.plan === "starter" ? "10 pesquisas" : "Gratis";
+
+  return (
+    <section className="account-card" aria-label="Perfil do usuario">
+      <div className="account-avatar">{initials}</div>
+      <div>
+        <span>{user ? "Perfil" : "Acesso"}</span>
+        <strong>{user?.name || "Visitante"}</strong>
+        <small>{user ? `${planLabel} - ${user.email}` : "Entre para pesquisar produtos"}</small>
+      </div>
+      <button type="button" onClick={user ? onLogout : onLogin} aria-label={user ? "Sair da conta" : "Entrar na conta"}>
+        {user ? <LogOut size={18} /> : <LogIn size={18} />}
+      </button>
+    </section>
   );
 }
 
@@ -1083,7 +1122,7 @@ function MiniPlan({ title, price, note, featured = false }: { title: string; pri
 
 function LearnPreview({ tips }: { tips: Tip[] }) {
   return (
-    <section className="wide-panel">
+    <section className="wide-panel learn-preview">
       <div className="panel-head compact">
         <div>
           <h2>Aprenda a vender online com menos risco</h2>
