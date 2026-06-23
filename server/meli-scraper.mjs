@@ -1,6 +1,11 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { buildProductQuerySpec, matchesProductQuery, normalizedProductKey } from "./product-match.mjs";
+import {
+  buildProductQuerySpec,
+  matchesProductQuery,
+  normalizedProductKey,
+  normalizeProductSearchQuery,
+} from "./product-match.mjs";
 
 const CACHE_TTL_MS = Number(process.env.MELI_SCRAPER_CACHE_MS || 60 * 60 * 1000);
 const STALE_CACHE_TTL_MS = Number(process.env.MELI_SCRAPER_STALE_CACHE_MS || 6 * 60 * 60 * 1000);
@@ -560,10 +565,7 @@ async function fetchMercadoLivrePageText(url) {
 }
 
 function searchUrlFor(query) {
-  const slug = String(query || "")
-    .trim()
-    .replace(/\s+/g, "-")
-    .replace(/-+/g, "-");
+  const slug = normalizeProductSearchQuery(query).replace(/\s+/g, "-").replace(/-+/g, "-");
   return `https://lista.mercadolivre.com.br/${encodeURIComponent(slug).replace(/%2D/g, "-")}`;
 }
 

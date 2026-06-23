@@ -1,4 +1,4 @@
-import { buildProductQuerySpec, matchesProductQuery } from "./product-match.mjs";
+import { buildProductQuerySpec, matchesProductQuery, normalizeProductSearchQuery } from "./product-match.mjs";
 
 export async function searchMercadoLivreCatalog({ query, accessToken, siteId = "MLB" }) {
   if (!accessToken) {
@@ -6,7 +6,7 @@ export async function searchMercadoLivreCatalog({ query, accessToken, siteId = "
   }
 
   const productsResponse = await fetchJson(
-    `https://api.mercadolibre.com/products/search?site_id=${encodeURIComponent(siteId)}&q=${encodeURIComponent(query)}&limit=40`,
+    `https://api.mercadolibre.com/products/search?site_id=${encodeURIComponent(siteId)}&q=${encodeURIComponent(normalizeProductSearchQuery(query))}&limit=40`,
     accessToken,
   );
 

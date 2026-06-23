@@ -18,6 +18,15 @@ const STOPWORDS = new Set([
 ]);
 
 const BUNDLE_WORDS = ["kit", "combo", "conjunto", "pack", "pacote"];
+const TOKEN_CORRECTIONS = new Map([
+  ["bluetooh", "bluetooth"],
+  ["bluethoot", "bluetooth"],
+  ["bluetoth", "bluetooth"],
+  ["bluetooht", "bluetooth"],
+  ["bluetoot", "bluetooth"],
+  ["blutooht", "bluetooth"],
+  ["blutooth", "bluetooth"],
+]);
 const SUPPLEMENT_EXTRA_TERMS = [
   "albumina",
   "bcaa",
@@ -38,13 +47,15 @@ const STORAGE_RE_SOURCE = "(\\d+(?:[,.]\\d+)?)\\s*(gb|giga|gigabytes|tb|tera|ter
 
 export function buildProductQuerySpec(query) {
   const normalizedQuery = normalizeText(query);
+  const correctedNormalizedQuery = normalizeCorrectedText(query);
   const measures = extractMeasures(query);
   const tokens = tokenizeProductText(query);
   const allowsBundle = hasBundleSignal(query);
 
   return {
     original: String(query || "").trim(),
-    normalized: normalizedQuery,
+    normalized: correctedNormalizedQuery,
+    rawNormalized: normalizedQuery,
     tokens,
     measures,
     allowsBundle,
@@ -62,7 +73,7 @@ export function matchesProductQuery(title, specOrQuery) {
   }
 
   for (const token of spec.tokens) {
-    if (!titleTokens.has(token) && !normalizedTitle.includes(token)) {
+    if (!tokenMatchesTitle(token, titleTokens, normalizedTitle)) {
       return { ok: false, reason: `Termo ausente: ${token}` };
     }
   }
@@ -86,10 +97,15 @@ export function normalizedProductKey(text) {
   return normalizeText(text).replace(/\s+/g, "-");
 }
 
+export function normalizeProductSearchQuery(text) {
+  return normalizeCorrectedText(text);
+}
+
 export function tokenizeProductText(text) {
   const withoutMeasures = stripMeasures(text);
   return normalizeText(withoutMeasures)
     .split(" ")
+    .map(correctToken)
     .map((token) => token.trim())
     .filter((token) => token && !STOPWORDS.has(token));
 }
@@ -178,6 +194,55 @@ function hasBundleSignal(text) {
 function hasUnrequestedSupplementTerms(title, normalizedQuery) {
   const normalizedTitle = normalizeText(title);
   return SUPPLEMENT_EXTRA_TERMS.some((term) => !normalizedQuery.includes(term) && normalizedTitle.includes(term));
+}
+
+function tokenMatchesTitle(token, titleTokens, normalizedTitle) {
+  if (titleTokens.has(token) || normalizedTitle.includes(token)) {
+    return true;
+  }
+
+  if (token.length < 6) {
+    return false;
+  }
+
+  return [...titleTokens].some((titleToken) =>
+    Math.abs(titleToken.length - token.length) <= 1 && levenshteinDistance(titleToken, token) <= 1,
+  );
+}
+
+function normalizeCorrectedText(text) {
+  return normalizeText(text)
+    .split(" ")
+    .map(correctToken)
+    .join(" ")
+    .trim();
+}
+
+function correctToken(token) {
+  return TOKEN_CORRECTIONS.get(token) || token;
+}
+
+function levenshteinDistance(a, b) {
+  if (a === b) {
+    return 0;
+  }
+
+  const previous = Array.from({ length: b.length + 1 }, (_, index) => index);
+  const current = new Array(b.length + 1);
+
+  for (let i = 1; i <= a.length; i += 1) {
+    current[0] = i;
+    for (let j = 1; j <= b.length; j += 1) {
+      current[j] = Math.min(
+        previous[j] + 1,
+        current[j - 1] + 1,
+        previous[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1),
+      );
+    }
+    previous.splice(0, previous.length, ...current);
+  }
+
+  return previous[b.length];
 }
 
 function normalizeMeasureText(text) {

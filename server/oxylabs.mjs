@@ -1,7 +1,12 @@
 import https from "node:https";
 import { HttpsProxyAgent } from "https-proxy-agent";
 import { getSetting, setSetting } from "./db.mjs";
-import { buildProductQuerySpec, matchesProductQuery, normalizedProductKey } from "./product-match.mjs";
+import {
+  buildProductQuerySpec,
+  matchesProductQuery,
+  normalizedProductKey,
+  normalizeProductSearchQuery,
+} from "./product-match.mjs";
 
 const WEB_SCRAPER_API_ENDPOINT = "https://realtime.oxylabs.io/v1/queries";
 const WEB_UNBLOCKER_ENDPOINT = "https://unblock.oxylabs.io:60000";
@@ -532,7 +537,7 @@ function extractProductId(href) {
 }
 
 function searchUrlFor(query) {
-  const slug = String(query || "").trim().replace(/\s+/g, "-").replace(/-+/g, "-");
+  const slug = normalizeProductSearchQuery(query).replace(/\s+/g, "-").replace(/-+/g, "-");
   return `https://lista.mercadolivre.com.br/${encodeURIComponent(slug).replace(/%2D/g, "-")}`;
 }
 

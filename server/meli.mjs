@@ -3,7 +3,7 @@ import { getSetting, setSetting } from "./db.mjs";
 import { searchMercadoLivreCatalog } from "./meli-catalog.mjs";
 import { searchMercadoLivreScraper } from "./meli-scraper.mjs";
 import { isOxylabsConfigured, searchMercadoLivreOxylabs } from "./oxylabs.mjs";
-import { buildProductQuerySpec, matchesProductQuery } from "./product-match.mjs";
+import { buildProductQuerySpec, matchesProductQuery, normalizeProductSearchQuery } from "./product-match.mjs";
 
 const currencyFormatter = new Intl.NumberFormat("pt-BR", {
   currency: "BRL",
@@ -75,7 +75,7 @@ export async function searchMercadoLivre(query) {
   }
 
   const params = new URLSearchParams({
-    q: query,
+    q: normalizeProductSearchQuery(query),
     limit: "3",
     sort: "sold_quantity_desc",
   });
