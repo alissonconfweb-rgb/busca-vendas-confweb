@@ -30,7 +30,9 @@ services:
         sync: false
       - key: OXYLABS_PASSWORD
         sync: false
+      - key: OXYLABS_MODE
+        value: web_unblocker
       - key: OXYLABS_ENDPOINT
-        value: https://realtime.oxylabs.io/v1/queries
+        value: https://unblock.oxylabs.io:60000
       - key: OXYLABS_GEO_LOCATION
         value: Brazil

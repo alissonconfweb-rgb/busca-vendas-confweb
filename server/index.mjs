@@ -459,8 +459,15 @@ function safeSettings(user) {
     settings.meli_access_token = "";
   }
   if (canUseAdmin(user)) {
+    settings.oxylabs_mode = settings.oxylabs_mode || process.env.OXYLABS_MODE || "web_unblocker";
     settings.oxylabs_username = settings.oxylabs_username || process.env.OXYLABS_USERNAME || "";
-    settings.oxylabs_endpoint = settings.oxylabs_endpoint || process.env.OXYLABS_ENDPOINT || "https://realtime.oxylabs.io/v1/queries";
+    settings.oxylabs_endpoint = settings.oxylabs_endpoint || process.env.OXYLABS_ENDPOINT || "https://unblock.oxylabs.io:60000";
+    if (settings.oxylabs_mode === "web_unblocker" && settings.oxylabs_endpoint === "https://realtime.oxylabs.io/v1/queries") {
+      settings.oxylabs_endpoint = "https://unblock.oxylabs.io:60000";
+    }
+    if (settings.oxylabs_mode === "web_scraper_api" && settings.oxylabs_endpoint === "https://unblock.oxylabs.io:60000") {
+      settings.oxylabs_endpoint = "https://realtime.oxylabs.io/v1/queries";
+    }
     settings.oxylabs_geo_location = settings.oxylabs_geo_location || process.env.OXYLABS_GEO_LOCATION || "Brazil";
     settings.oxylabs_password_configured = settings.oxylabs_password || process.env.OXYLABS_PASSWORD ? "true" : "";
     settings.oxylabs_connected = settings.oxylabs_username && settings.oxylabs_password_configured ? "true" : "";

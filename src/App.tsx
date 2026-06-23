@@ -1582,6 +1582,10 @@ function AdminSupport({ tickets, afterSave }: { tickets: Ticket[]; afterSave: ()
 function AdminSettings({ settings, afterSave }: { settings: SettingsMap; afterSave: (text?: string) => void }) {
   const [busy, setBusy] = useState(false);
   const [connectError, setConnectError] = useState("");
+  const [oxylabsMode, setOxylabsMode] = useState(settings.oxylabs_mode || "web_unblocker");
+  const oxylabsEndpoint = oxylabsMode === "web_unblocker"
+    ? "https://unblock.oxylabs.io:60000"
+    : "https://realtime.oxylabs.io/v1/queries";
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -1614,15 +1618,15 @@ function AdminSettings({ settings, afterSave }: { settings: SettingsMap; afterSa
       <section className="meli-connect-card">
         <div>
           <span>{settings.oxylabs_connected ? "Conectado" : "Aguardando credenciais"}</span>
-          <h2>Oxylabs Web Scraper API</h2>
+          <h2>Oxylabs Web Unblocker</h2>
           <p>
-            Configure o usuario e senha da Oxylabs. Os compradores nao veem nem preenchem esses dados; eles so pesquisam o produto.
+            Configure o usuario e senha do produto Oxylabs que voce criou. Os compradores nao veem nem preenchem esses dados.
           </p>
           <div className="credential-status">
             <b>Usuario: {settings.oxylabs_username ? "configurado" : "pendente"}</b>
             <b>Senha: {settings.oxylabs_password_configured ? "configurada" : "pendente"}</b>
           </div>
-          <small>Fonte principal das pesquisas: Mercado Livre via Oxylabs. Os fallbacks ficam ocultos no servidor.</small>
+          <small>Para a tela "Integracao com o Desbloqueador Web", use Web Unblocker Proxy.</small>
           {settings.oxylabs_last_error && <strong className="oauth-error">{settings.oxylabs_last_error}</strong>}
           {connectError && <strong className="oauth-error">{connectError}</strong>}
         </div>
@@ -1636,9 +1640,17 @@ function AdminSettings({ settings, afterSave }: { settings: SettingsMap; afterSa
 
       <form className="settings-grid" onSubmit={submit}>
         <label>
+          Tipo de integracao
+          <select name="oxylabs_mode" value={oxylabsMode} onChange={(event) => setOxylabsMode(event.target.value)}>
+            <option value="web_unblocker">Web Unblocker Proxy</option>
+            <option value="web_scraper_api">Web Scraper API Realtime</option>
+          </select>
+          <small className="field-hint">Use Web Unblocker Proxy para as credenciais do print da Oxylabs.</small>
+        </label>
+        <label>
           Oxylabs Username
           <input name="oxylabs_username" defaultValue={settings.oxylabs_username || ""} placeholder="Usuario da API Oxylabs" />
-          <small className="field-hint">Web Scraper API &gt; Users &gt; Username.</small>
+          <small className="field-hint">Copie o Nome de usuario exibido na Oxylabs.</small>
         </label>
         <label>
           Oxylabs Password
@@ -1654,8 +1666,10 @@ function AdminSettings({ settings, afterSave }: { settings: SettingsMap; afterSa
         </label>
         <label>
           Endpoint Oxylabs
-          <input name="oxylabs_endpoint" defaultValue={settings.oxylabs_endpoint || "https://realtime.oxylabs.io/v1/queries"} />
-          <small className="field-hint">Padrao: realtime.oxylabs.io/v1/queries.</small>
+          <input key={oxylabsMode} name="oxylabs_endpoint" defaultValue={oxylabsEndpoint} />
+          <small className="field-hint">
+            {oxylabsMode === "web_unblocker" ? "Padrao do Desbloqueador Web: unblock.oxylabs.io:60000." : "Padrao da API Realtime: realtime.oxylabs.io/v1/queries."}
+          </small>
         </label>
         <label>
           Plano 10 pesquisas mensal

@@ -1,8 +1,12 @@
+import { ProxyAgent, fetch as undiciFetch } from "undici";
 import { getSetting, setSetting } from "./db.mjs";
 import { buildProductQuerySpec, matchesProductQuery, normalizedProductKey } from "./product-match.mjs";
 
-const DEFAULT_ENDPOINT = "https://realtime.oxylabs.io/v1/queries";
+const WEB_SCRAPER_API_ENDPOINT = "https://realtime.oxylabs.io/v1/queries";
+const WEB_UNBLOCKER_ENDPOINT = "https://unblock.oxylabs.io:60000";
 const DEFAULT_GEO = "Brazil";
+const WEB_UNBLOCKER_MODE = "web_unblocker";
+const WEB_SCRAPER_API_MODE = "web_scraper_api";
 const PRODUCT_LIMIT = Number(process.env.OXYLABS_PRODUCT_LIMIT || 8);
 
 export function isOxylabsConfigured() {
@@ -11,6 +15,15 @@ export function isOxylabsConfigured() {
 }
 
 export async function testOxylabsConnection() {
+  if (oxylabsMode() === WEB_UNBLOCKER_MODE) {
+    const text = await fetchViaOxylabsProxy("https://ip.oxylabs.io/location");
+    return {
+      ok: true,
+      status: 200,
+      sample: text.slice(0, 120),
+    };
+  }
+
   const data = await requestOxylabs({
     source: "universal",
     url: "https://sandbox.oxylabs.io/products/1",
@@ -35,13 +48,7 @@ export async function searchMercadoLivreOxylabs(query) {
     };
   }
 
-  const searchData = await requestOxylabs({
-    source: "mercadolivre_search",
-    query,
-    geo_location: oxylabsGeoLocation(),
-    parse: false,
-  });
-  const searchHtml = extractOxylabsContent(searchData);
+  const searchHtml = await fetchOxylabsMercadoLivreSearch(query);
   const querySpec = buildProductQuerySpec(query);
   const candidates = extractSearchItems(searchHtml)
     .map((item, index) => ({ ...item, position: index + 1, match: matchesProductQuery(item.title, querySpec) }))
@@ -106,13 +113,7 @@ async function enrichItem(item) {
   let detailText = "";
 
   for (const url of detailUrls) {
-    const data = await requestOxylabs({
-      source: "mercadolivre",
-      url,
-      geo_location: oxylabsGeoLocation(),
-      parse: false,
-    }).catch(() => null);
-    detailText = data ? extractOxylabsContent(data) : "";
+    detailText = await fetchOxylabsMercadoLivrePage(url).catch(() => "");
     if (parseSalesFromText(detailText)) {
       break;
     }
@@ -130,6 +131,34 @@ async function enrichItem(item) {
     price,
     soldQuantity,
   };
+}
+
+async function fetchOxylabsMercadoLivreSearch(query) {
+  if (oxylabsMode() === WEB_UNBLOCKER_MODE) {
+    return fetchViaOxylabsProxy(searchUrlFor(query));
+  }
+
+  const searchData = await requestOxylabs({
+    source: "mercadolivre_search",
+    query,
+    geo_location: oxylabsGeoLocation(),
+    parse: false,
+  });
+  return extractOxylabsContent(searchData);
+}
+
+async function fetchOxylabsMercadoLivrePage(url) {
+  if (oxylabsMode() === WEB_UNBLOCKER_MODE) {
+    return fetchViaOxylabsProxy(url);
+  }
+
+  const data = await requestOxylabs({
+    source: "mercadolivre",
+    url,
+    geo_location: oxylabsGeoLocation(),
+    parse: false,
+  });
+  return extractOxylabsContent(data);
 }
 
 async function requestOxylabs(payload) {
@@ -157,6 +186,39 @@ async function requestOxylabs(payload) {
   }
 
   return data;
+}
+
+async function fetchViaOxylabsProxy(url) {
+  const { username, password } = oxylabsCredentials();
+  if (!username || !password) {
+    throw new Error("Configure usuario e senha da Oxylabs no painel admin.");
+  }
+
+  const dispatcher = new ProxyAgent({
+    uri: oxylabsEndpoint(),
+    token: `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}`,
+    proxyTls: { rejectUnauthorized: false },
+    requestTls: { rejectUnauthorized: false },
+  });
+
+  try {
+    const response = await undiciFetch(url, {
+      dispatcher,
+      headers: {
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36",
+      },
+      signal: AbortSignal.timeout(Number(process.env.OXYLABS_TIMEOUT_MS || 60_000)),
+    });
+    const text = await response.text();
+    if (!response.ok) {
+      throw new Error(describeOxylabsError(response.status, parseJsonSafe(text), text));
+    }
+    return text;
+  } finally {
+    await dispatcher.close().catch(() => {});
+  }
 }
 
 function extractSearchItems(html) {
@@ -473,6 +535,14 @@ function parseJson(text) {
   }
 }
 
+function parseJsonSafe(text) {
+  try {
+    return text ? JSON.parse(text) : {};
+  } catch {
+    return {};
+  }
+}
+
 function describeOxylabsError(status, data, text) {
   const detail = data?.message || data?.error || data?.detail || String(text || "").slice(0, 180);
   if (status === 401) {
@@ -491,8 +561,31 @@ function oxylabsCredentials() {
   };
 }
 
+function oxylabsMode() {
+  const configured = (getSetting("oxylabs_mode") || process.env.OXYLABS_MODE || "").trim();
+  if (configured === WEB_SCRAPER_API_MODE || configured === "realtime") {
+    return WEB_SCRAPER_API_MODE;
+  }
+  return WEB_UNBLOCKER_MODE;
+}
+
+function rawOxylabsEndpoint() {
+  return (getSetting("oxylabs_endpoint") || process.env.OXYLABS_ENDPOINT || "").trim();
+}
+
 function oxylabsEndpoint() {
-  return (getSetting("oxylabs_endpoint") || process.env.OXYLABS_ENDPOINT || DEFAULT_ENDPOINT).trim();
+  const mode = oxylabsMode();
+  const configured = rawOxylabsEndpoint();
+  if (!configured) {
+    return mode === WEB_UNBLOCKER_MODE ? WEB_UNBLOCKER_ENDPOINT : WEB_SCRAPER_API_ENDPOINT;
+  }
+  if (mode === WEB_UNBLOCKER_MODE && configured === WEB_SCRAPER_API_ENDPOINT) {
+    return WEB_UNBLOCKER_ENDPOINT;
+  }
+  if (mode === WEB_SCRAPER_API_MODE && configured === WEB_UNBLOCKER_ENDPOINT) {
+    return WEB_SCRAPER_API_ENDPOINT;
+  }
+  return configured;
 }
 
 function oxylabsGeoLocation() {
@@ -500,6 +593,9 @@ function oxylabsGeoLocation() {
 }
 
 export function syncOxylabsSettingsFromEnv() {
+  if (process.env.OXYLABS_MODE && !getSetting("oxylabs_mode")) {
+    setSetting("oxylabs_mode", process.env.OXYLABS_MODE.trim());
+  }
   if (process.env.OXYLABS_USERNAME && !getSetting("oxylabs_username")) {
     setSetting("oxylabs_username", process.env.OXYLABS_USERNAME.trim());
   }
