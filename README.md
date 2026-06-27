@@ -77,6 +77,7 @@ Nunca commite `.env`, banco SQLite real, arquivos de build ou credenciais.
 ## Deploy
 
 Consulte o guia completo em [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+Para o servidor/cPanel da Confweb, use tambem [docs/CPANEL_CONFWEB.md](docs/CPANEL_CONFWEB.md).
 
 Resumo do processo:
 

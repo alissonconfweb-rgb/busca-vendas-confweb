@@ -84,6 +84,8 @@ Depois instale SSL com Certbot ou pelo painel do provedor.
 
 ## cPanel
 
+Para o servidor da Confweb e o subdominio `buscavendas.confweb.com.br`, siga o guia especifico em [CPANEL_CONFWEB.md](CPANEL_CONFWEB.md).
+
 Funciona apenas se o cPanel oferecer:
 
 - Node.js `22.5` ou superior.

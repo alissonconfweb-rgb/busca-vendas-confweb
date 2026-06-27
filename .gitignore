@@ -5,6 +5,7 @@ data
 .env.local
 .render-cli
 .render-cli.zip
+_deploy
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
