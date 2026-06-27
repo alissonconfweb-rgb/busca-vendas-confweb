@@ -22,6 +22,8 @@ services:
         sync: false
       - key: SESSION_TTL_DAYS
         value: "365"
+      - key: DB_PATH
+        sync: false
       - key: SEARCH_RESPONSE_TIMEOUT_MS
         value: "85000"
       - key: PLAYWRIGHT_BROWSERS_PATH

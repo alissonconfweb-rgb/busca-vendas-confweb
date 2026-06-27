@@ -22,6 +22,7 @@ export function initDatabase() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
       email TEXT NOT NULL UNIQUE,
+      phone TEXT,
       password_hash TEXT NOT NULL,
       role TEXT NOT NULL DEFAULT 'user',
       status TEXT NOT NULL DEFAULT 'active',
@@ -102,7 +103,15 @@ export function initDatabase() {
     );
   `);
 
+  ensureColumn("users", "phone", "TEXT");
   seedDefaults();
+}
+
+function ensureColumn(table, column, definition) {
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all();
+  if (!columns.some((item) => item.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
 }
 
 function seedDefaults() {

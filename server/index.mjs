@@ -89,6 +89,7 @@ async function route(req, res) {
     const body = await readJson(req);
     const email = required(body.email).toLowerCase();
     const password = required(body.password);
+    const phone = required(body.phone);
     if (password.length < 6) {
       return json(res, 400, { error: "A senha precisa ter pelo menos 6 caracteres." });
     }
@@ -97,9 +98,9 @@ async function route(req, res) {
     }
 
     const result = db.prepare(`
-      INSERT INTO users (name, email, password_hash, role, status, plan, search_limit)
-      VALUES (?, ?, ?, 'user', 'active', 'free', 1)
-    `).run(required(body.name), email, hashPassword(password));
+      INSERT INTO users (name, email, phone, password_hash, role, status, plan, search_limit)
+      VALUES (?, ?, ?, ?, 'user', 'active', 'free', 1)
+    `).run(required(body.name), email, phone, hashPassword(password));
     const user = db.prepare("SELECT * FROM users WHERE id = ?").get(result.lastInsertRowid);
     const session = createSession(user.id);
     setCookie(res, session.token, session.expires);
@@ -310,7 +311,7 @@ async function handleAdmin(req, res, url, currentUser) {
   }
 
   if (path === "users" && method === "GET") {
-    return json(res, 200, db.prepare("SELECT id, name, email, role, status, plan, search_limit, searches_used, created_at FROM users ORDER BY id DESC").all());
+    return json(res, 200, db.prepare("SELECT id, name, email, phone, role, status, plan, search_limit, searches_used, created_at FROM users ORDER BY id DESC").all());
   }
 
   if (path === "users" && method === "POST") {
@@ -318,20 +319,22 @@ async function handleAdmin(req, res, url, currentUser) {
     const plan = body.plan || "free";
     const searchLimit = plan === "scale" ? null : nullableNumber(body.search_limit ?? (plan === "starter" ? 10 : 1));
     const email = required(body.email);
+    const phone = String(body.phone || "").trim();
     const role = isCreator(currentUser) && (body.role === "admin" || email.toLowerCase() === CREATOR_EMAIL) ? "admin" : "user";
     const result = db.prepare(`
-      INSERT INTO users (name, email, password_hash, role, status, plan, search_limit)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO users (name, email, phone, password_hash, role, status, plan, search_limit)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       required(body.name),
       email,
+      phone,
       hashPassword(required(body.password)),
       role,
       body.status || "active",
       plan,
       searchLimit,
     );
-    return json(res, 201, db.prepare("SELECT id, name, email, role, status, plan, search_limit, searches_used, created_at FROM users WHERE id = ?").get(result.lastInsertRowid));
+    return json(res, 201, db.prepare("SELECT id, name, email, phone, role, status, plan, search_limit, searches_used, created_at FROM users WHERE id = ?").get(result.lastInsertRowid));
   }
 
   const userMatch = path.match(/^users\/(\d+)$/);
@@ -347,9 +350,9 @@ async function handleAdmin(req, res, url, currentUser) {
         ? body.role
         : target.role;
     db.prepare(`
-      UPDATE users SET name = ?, status = ?, plan = ?, search_limit = ?, role = ?, updated_at = CURRENT_TIMESTAMP
+      UPDATE users SET name = ?, phone = ?, status = ?, plan = ?, search_limit = ?, role = ?, updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
-    `).run(body.name, body.status, body.plan, nullableNumber(body.search_limit), role, Number(userMatch[1]));
+    `).run(body.name, String(body.phone || "").trim(), body.status, body.plan, nullableNumber(body.search_limit), role, Number(userMatch[1]));
     return json(res, 200, { ok: true });
   }
 

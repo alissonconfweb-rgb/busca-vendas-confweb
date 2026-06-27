@@ -35,6 +35,7 @@ type User = {
   id: number;
   name: string;
   email: string;
+  phone?: string | null;
   role: Role;
   status: string;
   plan: Plan;
@@ -550,6 +551,14 @@ function Sidebar({
   return (
     <aside className="bv-sidebar">
       <BrandMark />
+      <MobileProfileMenu
+        user={user}
+        settings={settings}
+        onLogin={onLogin}
+        onRegister={onRegister}
+        onLogout={onLogout}
+        onPlans={() => onMode("plans")}
+      />
       <AccountSummary user={user} onLogout={onLogout} />
       <nav className="sidebar-nav" aria-label="Navegação principal">
         {navItems.map(({ mode: itemMode, label, Icon }) => (
@@ -577,6 +586,93 @@ function Sidebar({
   );
 }
 
+function userInitials(user: User | null) {
+  return user?.name
+    ? user.name
+        .split(" ")
+        .filter(Boolean)
+        .slice(0, 2)
+        .map((part) => part[0])
+        .join("")
+        .toUpperCase()
+    : "BV";
+}
+
+function userPlanInfo(user: User | null) {
+  if (!user) {
+    return {
+      planLabel: "Pesquisa grátis",
+      remaining: "1 busca",
+      usage: 100,
+    };
+  }
+
+  const planLabel = user.plan === "scale" ? "Ilimitado" : user.plan === "starter" ? "10 pesquisas" : "Grátis";
+  const limit = user.search_limit ?? 1;
+  const used = user.searches_used ?? 0;
+  const remaining = user.search_limit === null ? "Sem limite" : `${Math.max(0, limit - used)} de ${limit}`;
+  const usage =
+    user.search_limit === null
+      ? 100
+      : Math.max(0, Math.min(100, ((limit - used) / Math.max(1, limit)) * 100));
+
+  return { planLabel, remaining, usage };
+}
+
+function MobileProfileMenu({
+  user,
+  settings,
+  onLogin,
+  onRegister,
+  onLogout,
+  onPlans,
+}: {
+  user: User | null;
+  settings: SettingsMap;
+  onLogin: () => void;
+  onRegister: () => void;
+  onLogout: () => void;
+  onPlans: () => void;
+}) {
+  const { planLabel, remaining, usage } = userPlanInfo(user);
+
+  return (
+    <details className="mobile-profile-menu">
+      <summary aria-label={user ? "Abrir perfil" : "Entrar ou criar conta"}>
+        <span className="account-avatar">{user ? userInitials(user) : <UserRound size={18} />}</span>
+      </summary>
+      <div className="mobile-profile-panel">
+        <div>
+          <span>{user ? "Perfil" : "Acesso"}</span>
+          <strong>{user?.name || "Criar conta grátis"}</strong>
+          <small>{user?.email || "Cadastre-se para liberar sua primeira busca."}</small>
+          {user?.phone && <small>{user.phone}</small>}
+        </div>
+        <div className="mobile-plan-summary">
+          <span>Plano atual</span>
+          <strong>{planLabel}</strong>
+          <small>Pesquisas restantes: {remaining}</small>
+          <div className="usage-track">
+            <i style={{ width: `${usage}%` }} />
+          </div>
+        </div>
+        <button type="button" onClick={user ? onPlans : onRegister}>
+          {user ? `Planos desde ${money.format(Number(settings.starter_monthly || 19.9))}` : "Criar conta grátis"}
+        </button>
+        {user ? (
+          <button className="ghost-action" type="button" onClick={onLogout}>
+            Sair da conta
+          </button>
+        ) : (
+          <button className="ghost-action" type="button" onClick={onLogin}>
+            Entrar
+          </button>
+        )}
+      </div>
+    </details>
+  );
+}
+
 function AccountSummary({
   user,
   onLogout,
@@ -588,16 +684,8 @@ function AccountSummary({
     return null;
   }
 
-  const initials = user?.name
-    ? user.name
-        .split(" ")
-        .filter(Boolean)
-        .slice(0, 2)
-        .map((part) => part[0])
-        .join("")
-        .toUpperCase()
-    : "BV";
-  const planLabel = user?.plan === "scale" ? "Ilimitado" : user?.plan === "starter" ? "10 pesquisas" : "Gratis";
+  const initials = userInitials(user);
+  const { planLabel } = userPlanInfo(user);
 
   return (
     <section className="account-card" aria-label="Perfil do usuario">
@@ -683,14 +771,7 @@ function PlanStatus({
     );
   }
 
-  const planLabel = user.plan === "scale" ? "Ilimitado" : user.plan === "starter" ? "10 pesquisas" : "Grátis";
-  const limit = user.search_limit ?? 1;
-  const used = user.searches_used ?? 0;
-  const remaining = user.search_limit === null ? "Sem limite" : `${Math.max(0, limit - used)} de ${limit}`;
-  const usage =
-    user.search_limit === null
-      ? 100
-      : Math.max(0, Math.min(100, ((limit - used) / Math.max(1, limit)) * 100));
+  const { planLabel, remaining, usage } = userPlanInfo(user);
 
   return (
     <section className="plan-card">
@@ -798,8 +879,8 @@ function SearchPage({
   return (
     <div className="bv-page">
       <section className="search-heading">
-        <h1>Descubra se vale vender antes de comprar estoque</h1>
-        <p>Digite uma palavra-chave e valide a demanda antes de comprar estoque.</p>
+        <h1>Descubra se vale a pena vender seu produto</h1>
+        <p>Digite o produto e veja se existe demanda antes de comprar estoque.</p>
       </section>
 
       <form className="hero-search" onSubmit={submitSearch}>
@@ -1407,6 +1488,12 @@ function LoginModal({
           E-mail
           <input name="email" type="email" placeholder="seu@email.com" required />
         </label>
+        {authMode === "register" && (
+          <label>
+            Telefone
+            <input name="phone" type="tel" placeholder="(11) 99999-9999" autoComplete="tel" required />
+          </label>
+        )}
         <label>
           Senha
           <div className="password-field">
@@ -1576,6 +1663,7 @@ function AdminUsers({ currentUser, users, afterSave }: { currentUser: User; user
       <form className="admin-form" onSubmit={create}>
         <input name="name" placeholder="Nome" required />
         <input name="email" type="email" placeholder="E-mail" required />
+        <input name="phone" type="tel" placeholder="Telefone" />
         <input name="password" type="password" placeholder="Senha inicial" required />
         <select name="plan" defaultValue="free">
           <option value="free">Grátis</option>
@@ -1598,7 +1686,11 @@ function AdminUsers({ currentUser, users, afterSave }: { currentUser: User; user
           return (
             <form className="table-row" key={item.id} onSubmit={(event) => update(event, item.id)}>
               <input name="name" defaultValue={item.name} />
-              <strong>{item.email}</strong>
+              <div className="user-contact-cell">
+                <strong>{item.email}</strong>
+                <small>{item.phone || "Sem telefone"}</small>
+              </div>
+              <input name="phone" type="tel" defaultValue={item.phone || ""} placeholder="Telefone" />
               <select name="status" defaultValue={item.status}>
                 <option value="active">Ativo</option>
                 <option value="blocked">Bloqueado</option>
