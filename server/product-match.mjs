@@ -83,7 +83,7 @@ export function matchesProductQuery(title, specOrQuery) {
   }
 
   if (!spec.allowsBundle && hasBundleSignal(title)) {
-    return { ok: false, reason: "Resultado parece kit/combo, mas a busca nao pediu kit." };
+    return { ok: false, reason: "Resultado parece kit/combo, mas a busca não pediu kit." };
   }
 
   if (spec.isCreatineQuery && hasUnrequestedSupplementTerms(title, spec.normalized)) {

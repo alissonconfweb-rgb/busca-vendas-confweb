@@ -17,7 +17,7 @@ const PRODUCT_LIMIT = Number(process.env.OXYLABS_PRODUCT_LIMIT || 3);
 
 export function isOxylabsConfigured() {
   const { username, password } = oxylabsCredentials();
-  return Boolean(username && password);
+  return oxylabsEnabled() && Boolean(username && password);
 }
 
 export async function testOxylabsConnection() {
@@ -47,7 +47,7 @@ export async function searchMercadoLivreOxylabs(query) {
       source: "oxylabs_not_configured",
       metricsMode: "market_signal",
       salesAvailable: false,
-      message: "Oxylabs ainda nao foi configurado no painel admin.",
+      message: "Oxylabs ainda não foi configurado no painel admin.",
       items: [],
       totalAvailable: 0,
       totals: { demand: 0, revenue: 0, averageTicket: 0 },
@@ -95,8 +95,8 @@ export async function searchMercadoLivreOxylabs(query) {
     metricsMode: demand > 0 ? "sales" : "market_signal",
     salesAvailable: demand > 0,
     message: demand > 0
-      ? "Dados reais extraidos via Oxylabs a partir das paginas publicas do Mercado Livre."
-      : "Anuncios reais encontrados via Oxylabs, mas o Mercado Livre nao exibiu vendas publicas nesses anuncios.",
+      ? "Dados reais extraídos via Oxylabs a partir das páginas públicas do Mercado Livre."
+      : "Anúncios reais encontrados via Oxylabs, mas o Mercado Livre não exibiu vendas públicas nesses anúncios.",
     items,
     exactMatches: items.length,
     totalAvailable: parseTotalAvailable(searchHtml) || candidates.length,
@@ -166,7 +166,7 @@ async function fetchOxylabsMercadoLivrePage(url) {
 async function requestOxylabs(payload) {
   const { username, password } = oxylabsCredentials();
   if (!username || !password) {
-    throw new Error("Configure usuario e senha da Oxylabs no painel admin.");
+    throw new Error("Configure usuário e senha da Oxylabs no painel admin.");
   }
 
   const response = await fetch(oxylabsEndpoint(), {
@@ -193,7 +193,7 @@ async function requestOxylabs(payload) {
 async function fetchViaOxylabsProxy(url, options = {}) {
   const { username, password } = oxylabsCredentials();
   if (!username || !password) {
-    throw new Error("Configure usuario e senha da Oxylabs no painel admin.");
+    throw new Error("Configure usuário e senha da Oxylabs no painel admin.");
   }
 
   const proxyUrl = withProxyCredentials(oxylabsEndpoint(), username, password);
@@ -610,13 +610,13 @@ function parseJsonSafe(text) {
 function describeOxylabsError(status, data, text) {
   const detail = data?.message || data?.error || data?.detail || String(text || "").slice(0, 180);
   if (status === 401) {
-    return "Oxylabs recusou as credenciais. Use o Nome de usuario e a Senha do Web Unblocker, nao o e-mail/senha de login do painel Oxylabs. Salve novamente no painel admin e teste.";
+    return "Oxylabs recusou as credenciais. Use o nome de usuário e a senha do Web Unblocker, não o e-mail/senha de login do painel Oxylabs. Salve novamente no painel admin e teste.";
   }
   if (status === 407) {
-    return "Oxylabs recusou a autenticacao do proxy. Confira usuario e senha do Web Unblocker e salve novamente no painel admin.";
+    return "Oxylabs recusou a autenticação do proxy. Confira usuário e senha do Web Unblocker e salve novamente no painel admin.";
   }
   if (status === 403) {
-    return "Oxylabs autenticou, mas bloqueou o acesso. Verifique se o Web Unblocker esta ativo no plano e se o usuario tem permissao para usar o endpoint.";
+    return "Oxylabs autenticou, mas bloqueou o acesso. Verifique se o Web Unblocker está ativo no plano e se o usuário tem permissão para usar o endpoint.";
   }
   return `Oxylabs respondeu ${status}: ${detail || "sem detalhe"}`;
 }
@@ -626,6 +626,11 @@ function oxylabsCredentials() {
     username: (getSetting("oxylabs_username") || process.env.OXYLABS_USERNAME || "").trim(),
     password: (getSetting("oxylabs_password") || process.env.OXYLABS_PASSWORD || "").trim(),
   };
+}
+
+function oxylabsEnabled() {
+  const configured = (getSetting("oxylabs_enabled") || process.env.OXYLABS_ENABLED || "false").trim().toLowerCase();
+  return ["true", "1", "yes", "sim"].includes(configured);
 }
 
 function oxylabsMode() {
@@ -675,6 +680,9 @@ function oxylabsGeoLocation() {
 }
 
 export function syncOxylabsSettingsFromEnv() {
+  if (process.env.OXYLABS_ENABLED && !getSetting("oxylabs_enabled")) {
+    setSetting("oxylabs_enabled", process.env.OXYLABS_ENABLED.trim());
+  }
   if (process.env.OXYLABS_MODE && !getSetting("oxylabs_mode")) {
     setSetting("oxylabs_mode", process.env.OXYLABS_MODE.trim());
   }

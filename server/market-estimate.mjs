@@ -5,7 +5,7 @@ const GENERIC_PROFILE = {
   note: "Estimativa criada por faixa de ticket e comportamento comum de marketplace.",
   scenarios: [
     { label: "Faixa de entrada", price: 69.9, units: 180 },
-    { label: "Faixa intermediaria", price: 119.9, units: 120 },
+    { label: "Faixa intermediária", price: 119.9, units: 120 },
     { label: "Faixa premium", price: 199.9, units: 55 },
   ],
 };
@@ -14,40 +14,40 @@ const PROFILES = [
   {
     match: ["mochila", "bolsa"],
     family: "Mochila masculina",
-    note: "Boa categoria para entrada: compra recorrente, volta as aulas, rotina corporativa e viagem.",
+    note: "Boa categoria para entrada: compra recorrente, volta às aulas, rotina corporativa e viagem.",
     scenarios: [
       { label: "Mochila escolar/resistente", price: 79.9, units: 260 },
-      { label: "Mochila notebook/impermeavel", price: 119.9, units: 200 },
-      { label: "Mochila premium/couro sintetico", price: 219.9, units: 70 },
+      { label: "Mochila notebook/impermeável", price: 119.9, units: 200 },
+      { label: "Mochila premium/couro sintético", price: 219.9, units: 70 },
     ],
   },
   {
     match: ["fone", "headphone", "earbud", "bluetooth"],
     family: "Fone Bluetooth",
-    note: "Categoria de alto giro, mas com concorrencia forte e sensibilidade a preco.",
+    note: "Categoria de alto giro, mas com concorrência forte e sensibilidade a preço.",
     scenarios: [
       { label: "Fone Bluetooth entrada", price: 39.9, units: 800 },
-      { label: "Fone TWS intermediario", price: 69.9, units: 500 },
+      { label: "Fone TWS intermediário", price: 69.9, units: 500 },
       { label: "Headphone/Fone premium", price: 119.9, units: 180 },
     ],
   },
   {
     match: ["caixa", "som", "speaker"],
     family: "Caixa de som Bluetooth",
-    note: "Produto com apelo visual e bom ticket medio; venda depende muito de prova social e entrega rapida.",
+    note: "Produto com apelo visual e bom ticket médio; venda depende muito de prova social e entrega rápida.",
     scenarios: [
-      { label: "Caixa portatil compacta", price: 89.9, units: 300 },
-      { label: "Caixa media bluetooth", price: 149.9, units: 180 },
+      { label: "Caixa portátil compacta", price: 89.9, units: 300 },
+      { label: "Caixa média Bluetooth", price: 149.9, units: 180 },
       { label: "Caixa potente/premium", price: 249.9, units: 90 },
     ],
   },
   {
     match: ["creatina", "whey", "suplemento"],
     family: "Suplemento fitness",
-    note: "Demanda recorrente e reposicao mensal, mas exige fornecedor confiavel e regularidade fiscal.",
+    note: "Demanda recorrente e reposição mensal, mas exige fornecedor confiável e regularidade fiscal.",
     scenarios: [
       { label: "Produto entrada", price: 59.9, units: 650 },
-      { label: "Produto 1kg/intermediario", price: 89.9, units: 420 },
+      { label: "Produto 1kg/intermediário", price: 89.9, units: 420 },
       { label: "Marca premium", price: 129.9, units: 220 },
     ],
   },
@@ -56,9 +56,9 @@ const PROFILES = [
     family: "Cafeteira",
     note: "Ticket interessante e boa busca em datas sazonais; margem depende de frete e garantia.",
     scenarios: [
-      { label: "Cafeteira eletrica simples", price: 89.9, units: 180 },
-      { label: "Cafeteira programavel", price: 159.9, units: 95 },
-      { label: "Cafeteira espresso/capsula", price: 319.9, units: 45 },
+      { label: "Cafeteira elétrica simples", price: 89.9, units: 180 },
+      { label: "Cafeteira programável", price: 159.9, units: 95 },
+      { label: "Cafeteira espresso/cápsula", price: 319.9, units: 45 },
     ],
   },
 ];
@@ -70,7 +70,7 @@ export function buildMarketEstimate(query, reason = "") {
     return {
       id: `estimate-${index + 1}-${slugify(query)}-${slugify(scenario.label)}`,
       title: `${profile.family} - ${scenario.label}`,
-      subtitle: "Raio-x estrategico Confweb - estimativa sem API",
+      subtitle: "Raio-x estratégico Confweb - estimativa sem API",
       image: PLACEHOLDER_IMAGE,
       price: scenario.price,
       soldQuantity: scenario.units,
@@ -91,8 +91,8 @@ export function buildMarketEstimate(query, reason = "") {
     metricsMode: "market_signal",
     salesAvailable: false,
     message: reason
-      ? `A leitura real demorou ou falhou agora. Entregamos um raio-x estrategico para triagem: ${profile.note}`
-      : `Raio-x estrategico para triagem: ${profile.note}`,
+      ? `A leitura real demorou ou falhou agora. Entregamos um raio-x estratégico para triagem: ${profile.note}`
+      : `Raio-x estratégico para triagem: ${profile.note}`,
     sourceFailureReason: reason,
     items,
     exactMatches: 0,
@@ -108,6 +108,10 @@ export function buildMarketEstimate(query, reason = "") {
 }
 
 export function shouldUseMarketEstimate(result) {
+  if (result?.strictRealOnly) {
+    return false;
+  }
+
   return Boolean(
     !result?.ok ||
     result?.source === "not_configured" ||

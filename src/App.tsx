@@ -2,7 +2,10 @@ import {
   BarChart3,
   BookOpen,
   ChevronRight,
+  CircleCheck,
   CreditCard,
+  Crown,
+  Database,
   Eye,
   EyeOff,
   Headphones,
@@ -15,9 +18,14 @@ import {
   MessageCircle,
   PackageSearch,
   ReceiptText,
+  RefreshCw,
+  Rocket,
   Search,
   Settings,
-  Sparkles,
+  ShieldCheck,
+  Trash2,
+  TrendingUp,
+  UnlockKeyhole,
   UserRound,
   UsersRound,
   WalletCards,
@@ -29,7 +37,11 @@ import confwebLogoUrl from "./assets/confweb-logo.webp";
 
 type Role = "admin" | "user";
 type Plan = "free" | "starter" | "scale";
-type Mode = "search" | "history" | "plans" | "learn" | "commercial" | "support" | "admin";
+type PaidPlan = "starter" | "scale";
+type PlanCycle = "monthly" | "yearly";
+type BillingType = "PIX" | "CREDIT_CARD";
+type ChargeMode = "subscription" | "single";
+type Mode = "search" | "history" | "plans" | "checkout" | "learn" | "commercial" | "support" | "profile" | "admin";
 
 type User = {
   id: number;
@@ -47,6 +59,8 @@ type User = {
 
 type SettingsMap = Record<string, string>;
 
+type MercadoLivreListingType = "classic" | "premium";
+
 type MarketplaceItem = {
   id: string;
   title: string;
@@ -60,6 +74,24 @@ type MarketplaceItem = {
   estimatedRevenue?: number | null;
   revenueMetricLabel?: string;
   permalink: string;
+  categoryId?: string;
+  categoryName?: string;
+  weightKg?: number | null;
+};
+
+type MarginEstimate = {
+  category: string;
+  shippingLabel: string;
+  estimatedWeightKg: number;
+  marketplaceRate: number;
+  commission: number;
+  fixedFee: number;
+  shippingFee: number;
+  totalMarketplaceFees: number;
+  marginBeforeCost: number;
+  marginAfterCost: number;
+  percentBeforeCost: number;
+  percentAfterCost: number;
 };
 
 type SearchResult = {
@@ -120,6 +152,39 @@ type FinanceRecord = {
   paid_at?: string | null;
 };
 
+type CheckoutSelection = {
+  plan: PaidPlan;
+  cycle: PlanCycle;
+};
+
+type CheckoutResult = {
+  ok: boolean;
+  financeId: number;
+  plan: PaidPlan;
+  cycle: PlanCycle;
+  chargeMode: ChargeMode;
+  billingType: BillingType;
+  value: number;
+  status: string;
+  invoiceUrl?: string;
+  pixQrCode?: {
+    encodedImage?: string;
+    payload?: string;
+  } | null;
+  message: string;
+  user?: User;
+};
+
+type CheckoutStatus = {
+  ok: boolean;
+  financeId: number;
+  status: string;
+  paid: boolean;
+  invoiceUrl?: string;
+  message: string;
+  user?: User;
+};
+
 type HistoryRecord = {
   id: number;
   query: string;
@@ -127,6 +192,46 @@ type HistoryRecord = {
   total_demand: number;
   total_revenue: number;
   created_at: string;
+  result?: SearchResult | null;
+};
+
+type AdminSearchCacheRecord = {
+  key: string;
+  query: string;
+  source: string;
+  total_demand: number;
+  total_revenue: number;
+  items_count: number;
+  usage_count: number;
+  users_count: number;
+  provider_credits_used: number;
+  created_at: string;
+  updated_at: string;
+  age_days: number;
+  status: "fresh" | "stale" | "expired";
+  items: MarketplaceItem[];
+};
+
+type AdminSearchCacheData = {
+  summary: {
+    total: number;
+    fresh: number;
+    stale: number;
+    expired: number;
+    itemCache: number;
+    historyUses: number;
+    estimatedCreditsSaved: number;
+  };
+  ttlDays: number;
+  staleDays: number;
+  records: AdminSearchCacheRecord[];
+};
+
+type RestoredSearch = {
+  id: number;
+  query: string;
+  result: SearchResult;
+  nonce: number;
 };
 
 type AdminData = {
@@ -160,7 +265,7 @@ const defaultSettings: SettingsMap = {
   starter_yearly: "179.10",
   scale_monthly: "39.90",
   scale_yearly: "359.10",
-  commercial_cta: "Falar com Comercial Confweb",
+  commercial_cta: "Fale com um Especialista Certificado da Confweb",
 };
 
 const defaultTips: Tip[] = [
@@ -196,6 +301,14 @@ const defaultContacts: Contact[] = [
     is_primary: 1,
     status: "active",
   },
+  {
+    id: 2,
+    name: "Site Confweb",
+    channel: "Site",
+    value: "https://www.confweb.com.br",
+    is_primary: 0,
+    status: "active",
+  },
 ];
 
 const searchSteps = [
@@ -209,45 +322,70 @@ const clientEstimateProfiles = [
   {
     match: ["mochila", "bolsa"],
     family: "Mochila masculina",
-    note: "Boa categoria para entrada: compra recorrente, volta as aulas, rotina corporativa e viagem.",
+    note: "Boa categoria para entrada: compra recorrente, volta às aulas, rotina corporativa e viagem.",
     scenarios: [
       { label: "Mochila escolar/resistente", price: 79.9, units: 260 },
-      { label: "Mochila notebook/impermeavel", price: 119.9, units: 200 },
-      { label: "Mochila premium/couro sintetico", price: 219.9, units: 70 },
+      { label: "Mochila notebook/impermeável", price: 119.9, units: 200 },
+      { label: "Mochila premium/couro sintético", price: 219.9, units: 70 },
     ],
   },
   {
     match: ["fone", "headphone", "earbud", "bluetooth"],
     family: "Fone Bluetooth",
-    note: "Categoria de alto giro, mas com concorrencia forte e sensibilidade a preco.",
+    note: "Categoria de alto giro, mas com concorrência forte e sensibilidade a preço.",
     scenarios: [
       { label: "Fone Bluetooth entrada", price: 39.9, units: 800 },
-      { label: "Fone TWS intermediario", price: 69.9, units: 500 },
+      { label: "Fone TWS intermediário", price: 69.9, units: 500 },
       { label: "Headphone/Fone premium", price: 119.9, units: 180 },
     ],
   },
   {
     match: ["caixa", "som", "speaker"],
     family: "Caixa de som Bluetooth",
-    note: "Produto com bom ticket medio; venda depende de prova social, preco e entrega rapida.",
+    note: "Produto com bom ticket médio; venda depende de prova social, preço e entrega rápida.",
     scenarios: [
-      { label: "Caixa portatil compacta", price: 89.9, units: 300 },
-      { label: "Caixa media bluetooth", price: 149.9, units: 180 },
+      { label: "Caixa portátil compacta", price: 89.9, units: 300 },
+      { label: "Caixa média Bluetooth", price: 149.9, units: 180 },
       { label: "Caixa potente/premium", price: 249.9, units: 90 },
     ],
   },
 ];
 
 async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const response = await fetch(path, {
-    credentials: "include",
-    headers: {
-      "Content-Type": "application/json",
-      ...(options.headers || {}),
-    },
-    ...options,
-  });
-  const data = response.status === 204 ? null : await response.json();
+  let response: Response;
+
+  try {
+    response = await fetch(path, {
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+        ...(options.headers || {}),
+      },
+      ...options,
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new ApiError("O servidor demorou para responder. Tente novamente em instantes.", 408);
+    }
+    throw new ApiError("Não consegui conectar à API do Busca Vendas agora.", 0);
+  }
+
+  const raw = response.status === 204 ? "" : await response.text();
+  let data: any = null;
+
+  if (raw) {
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      const looksLikeHtml = raw.trim().startsWith("<!DOCTYPE") || raw.trim().startsWith("<html");
+      throw new ApiError(
+        looksLikeHtml
+          ? "A API do Busca Vendas não está ativa no servidor. Reinicie o app Node no cPanel."
+          : "A API respondeu em um formato inválido. Tente novamente em instantes.",
+        response.status || 503,
+      );
+    }
+  }
 
   if (!response.ok) {
     throw new ApiError(data?.error || data?.message || "Erro na requisição.", response.status);
@@ -273,7 +411,7 @@ function buildClientMarketEstimate(query: string, reason = ""): SearchResult {
     return {
       id: `client-estimate-${index}-${normalized.replace(/\s+/g, "-") || "produto"}`,
       title: `${profile.family} - ${scenario.label}`,
-      subtitle: "Raio-x estrategico Confweb - estimativa sem API",
+      subtitle: "Raio-x estratégico Confweb - estimativa sem API",
       image,
       price: scenario.price,
       soldQuantity: scenario.units,
@@ -294,8 +432,8 @@ function buildClientMarketEstimate(query: string, reason = ""): SearchResult {
     metricsMode: "market_signal",
     salesAvailable: false,
     message: reason
-      ? `A leitura real nao respondeu agora. Entregamos um raio-x estrategico para triagem: ${profile.note}`
-      : `Raio-x estrategico para triagem: ${profile.note}`,
+      ? `A leitura real não respondeu agora. Entregamos um raio-x estratégico para triagem: ${profile.note}`
+      : `Raio-x estratégico para triagem: ${profile.note}`,
     items,
     exactMatches: 0,
     totalAvailable: items.length,
@@ -307,6 +445,75 @@ function buildClientMarketEstimate(query: string, reason = ""): SearchResult {
       actualDemand: 0,
     },
   };
+}
+
+function sanitizeClientSearchResult(result: SearchResult, query: string, settings: SettingsMap): SearchResult {
+  if (result.source === "market_estimate") {
+    return buildUnavailableSearchResult(
+      query,
+      "Ainda não consegui validar esse produto com dados reais. Ajuste a API no painel admin e tente novamente.",
+    );
+  }
+
+  if (result.salesAvailable === false || result.metricsMode === "market_signal") {
+    return result;
+  }
+
+  if (!result.ok || isClientCompleteChampionResult(result, settings)) {
+    return result;
+  }
+
+  const productLabel = query ? ` para "${query}"` : "";
+  return {
+    ok: false,
+    source: "invalid_champion_result",
+    metricsMode: "sales",
+    salesAvailable: false,
+    message: `Resultado descartado${productLabel}: não encontrei 3 anúncios com vendas públicas reais. Faça uma nova busca para atualizar.`,
+    items: [],
+    exactMatches: 0,
+    totalAvailable: 0,
+    totals: {
+      demand: 0,
+      revenue: 0,
+      averageTicket: 0,
+      actualDemand: 0,
+    },
+  };
+}
+
+function buildUnavailableSearchResult(query: string, message: string): SearchResult {
+  return {
+    ok: false,
+    source: "market_data_pending",
+    metricsMode: "sales",
+    salesAvailable: false,
+    message,
+    items: [],
+    exactMatches: 0,
+    totalAvailable: 0,
+    totals: {
+      demand: 0,
+      revenue: 0,
+      averageTicket: 0,
+      actualDemand: 0,
+    },
+  };
+}
+
+function isClientCompleteChampionResult(result: SearchResult, settings: SettingsMap) {
+  return Boolean(
+    result.ok &&
+    result.salesAvailable === true &&
+    result.items.length >= 3 &&
+    result.items.slice(0, 3).every((item) => (
+      Number(item.soldQuantity) > 0 &&
+      Number(item.price) > 0 &&
+      Number(item.revenue) > 0
+    )) &&
+    Number(result.totals.demand) > 0 &&
+    Number(result.totals.revenue) > 0,
+  );
 }
 
 function normalizeSearchText(text: string) {
@@ -345,10 +552,21 @@ function App() {
   const [checkingSession, setCheckingSession] = useState(true);
 
   useEffect(() => {
-    api<{ user: User | null }>("/api/auth/me")
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 2500);
+
+    api<{ user: User | null }>("/api/auth/me", { signal: controller.signal })
       .then((data) => setUser(data.user))
       .catch(() => setUser(null))
-      .finally(() => setCheckingSession(false));
+      .finally(() => {
+        window.clearTimeout(timer);
+        setCheckingSession(false);
+      });
+
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
   }, []);
 
   if (checkingSession) {
@@ -368,6 +586,9 @@ function ProductApp({ user, onUserChange }: { user: User | null; onUserChange: (
   const [contacts, setContacts] = useState<Contact[]>(defaultContacts);
   const [history, setHistory] = useState<HistoryRecord[]>([]);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [checkoutSelection, setCheckoutSelection] = useState<CheckoutSelection>({ plan: "starter", cycle: "monthly" });
+  const [restoredSearch, setRestoredSearch] = useState<RestoredSearch | null>(null);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem("bv_sidebar_collapsed") !== "false");
 
   const loadPrivateData = async () => {
     if (!user) {
@@ -434,21 +655,57 @@ function ProductApp({ user, onUserChange }: { user: User | null; onUserChange: (
     return false;
   };
 
+  const openCheckout = (selection: CheckoutSelection) => {
+    setCheckoutSelection(selection);
+    setMode("checkout");
+    if (!user) {
+      openAuth("register");
+      return;
+    }
+  };
+
+  const openSavedSearch = async (record: HistoryRecord) => {
+    if (!user) {
+      openAuth("login");
+      return;
+    }
+
+    const savedResult = record.result ?? (await api<{ result: SearchResult }>(`/api/search-history/${record.id}`)).result;
+    setRestoredSearch({
+      id: record.id,
+      query: record.query,
+      result: savedResult,
+      nonce: Date.now(),
+    });
+    setMode("search");
+  };
+
   const logout = async () => {
     await api("/api/auth/logout", { method: "POST" });
     onUserChange(null);
     setMode("search");
   };
 
+  useEffect(() => {
+    localStorage.setItem("bv_sidebar_collapsed", sidebarCollapsed ? "true" : "false");
+  }, [sidebarCollapsed]);
+
+  useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+  }, [mode]);
+
   return (
-    <div className="bv-shell">
+    <div className={sidebarCollapsed ? "bv-shell sidebar-collapsed" : "bv-shell sidebar-expanded"}>
       <Sidebar
         mode={mode}
         user={user}
         settings={settings}
+        collapsed={sidebarCollapsed}
+        onToggleCollapsed={() => setSidebarCollapsed((value) => !value)}
         onMode={setMode}
         onLogin={() => openAuth("login")}
         onRegister={() => openAuth("register")}
+        onProfile={() => setMode("profile")}
         onLogout={logout}
       />
       <main className="bv-main">
@@ -464,14 +721,36 @@ function ProductApp({ user, onUserChange }: { user: User | null; onUserChange: (
             settings={settings}
             tips={tips}
             contacts={contacts}
+            restoredSearch={restoredSearch}
             onLoginRequired={requireLogin}
             onHistoryRefresh={() => setRefreshKey((key) => key + 1)}
+            onPlans={() => setMode("plans")}
+            onCheckout={openCheckout}
           />
         )}
-        {mode === "history" && <HistoryPage user={user} history={history} onLoginRequired={requireLogin} />}
-        {mode === "plans" && <PlansPage settings={settings} onLoginRequired={requireLogin} />}
+        {mode === "history" && <HistoryPage user={user} history={history} onLoginRequired={requireLogin} onViewSearch={openSavedSearch} />}
+        {mode === "plans" && <PlansPage user={user} settings={settings} onSelectPlan={openCheckout} onLoginRequired={requireLogin} />}
+        {mode === "checkout" && (
+          <CheckoutPage
+            user={user}
+            settings={settings}
+            selection={checkoutSelection}
+            onSelection={setCheckoutSelection}
+            onLoginRequired={requireLogin}
+            onUserChange={onUserChange}
+            onDone={() => setRefreshKey((key) => key + 1)}
+          />
+        )}
         {mode === "learn" && <LearnPage tips={tips} />}
         {mode === "commercial" && <CommercialPage contacts={contacts} cta={settings.commercial_cta} />}
+        {mode === "profile" && (
+          <ProfilePage
+            user={user}
+            settings={settings}
+            onLoginRequired={requireLogin}
+            onPlans={() => setMode("plans")}
+          />
+        )}
         {mode === "support" && (
           <SupportPage
             user={user}
@@ -510,11 +789,12 @@ function LoadingScreen() {
 function BrandMark() {
   return (
     <div className="brand-mark">
+      <strong aria-label="Busca Vendas">
+        <span className="brand-busca">Busca</span>
+        <span className="brand-vendas">Vendas</span>
+      </strong>
+      <span className="brand-by">BY</span>
       <img src={confwebLogoUrl} alt="Confweb" />
-      <div>
-        <strong>Busca<br />Vendas</strong>
-        <span>by Confweb</span>
-      </div>
     </div>
   );
 }
@@ -523,25 +803,31 @@ function Sidebar({
   mode,
   user,
   settings,
+  collapsed,
+  onToggleCollapsed,
   onMode,
   onLogin,
   onRegister,
+  onProfile,
   onLogout,
 }: {
   mode: Mode;
   user: User | null;
   settings: SettingsMap;
+  collapsed: boolean;
+  onToggleCollapsed: () => void;
   onMode: (mode: Mode) => void;
   onLogin: () => void;
   onRegister: () => void;
+  onProfile: () => void;
   onLogout: () => void;
 }) {
   const navItems: { mode: Mode; label: string; Icon: LucideIcon }[] = [
     { mode: "search", label: "Nova pesquisa", Icon: Search },
     { mode: "history", label: "Minhas pesquisas", Icon: BarChart3 },
     { mode: "plans", label: "Planos", Icon: CreditCard },
-    { mode: "learn", label: "Aprenda", Icon: BookOpen },
-    { mode: "commercial", label: "Comercial Confweb", Icon: UserRound },
+    { mode: "learn", label: "Dicas", Icon: BookOpen },
+    { mode: "commercial", label: "Especialista", Icon: UserRound },
   ];
 
   if (canUseAdmin(user)) {
@@ -549,17 +835,31 @@ function Sidebar({
   }
 
   return (
-    <aside className="bv-sidebar">
-      <BrandMark />
+    <aside className={collapsed ? "bv-sidebar collapsed" : "bv-sidebar expanded"}>
+      <div className="sidebar-brand-row">
+        <BrandMark />
+        <button
+          className="sidebar-toggle"
+          type="button"
+          onClick={onToggleCollapsed}
+          title={collapsed ? "Expandir menu" : "Recolher menu"}
+          aria-label={collapsed ? "Expandir menu" : "Recolher menu"}
+          aria-expanded={!collapsed}
+        >
+          <ChevronRight size={18} />
+        </button>
+      </div>
       <MobileProfileMenu
         user={user}
         settings={settings}
+        mode={mode}
         onLogin={onLogin}
         onRegister={onRegister}
         onLogout={onLogout}
         onPlans={() => onMode("plans")}
+        onProfile={onProfile}
       />
-      <AccountSummary user={user} onLogout={onLogout} />
+      <AccountSummary user={user} onProfile={onProfile} onLogout={onLogout} />
       <nav className="sidebar-nav" aria-label="Navegação principal">
         {navItems.map(({ mode: itemMode, label, Icon }) => (
           <button
@@ -567,13 +867,16 @@ function Sidebar({
             key={itemMode}
             type="button"
             onClick={() => onMode(itemMode)}
+            title={label}
+            aria-label={label}
+            data-label={label}
           >
             <Icon size={22} />
-            {label}
+            <span>{label}</span>
           </button>
         ))}
       </nav>
-      <PlanStatus user={user} settings={settings} onRegister={onRegister} onPlans={() => onMode("plans")} />
+      <PlanStatus user={user} onRegister={onRegister} onPlans={() => onMode("plans")} />
       <button className="help-card" type="button" onClick={() => onMode("support")}>
         <HelpCircle size={24} />
         <span>
@@ -622,31 +925,94 @@ function userPlanInfo(user: User | null) {
 function MobileProfileMenu({
   user,
   settings,
+  mode,
   onLogin,
   onRegister,
   onLogout,
   onPlans,
+  onProfile,
 }: {
   user: User | null;
   settings: SettingsMap;
+  mode: Mode;
   onLogin: () => void;
   onRegister: () => void;
   onLogout: () => void;
   onPlans: () => void;
+  onProfile: () => void;
 }) {
   const { planLabel, remaining, usage } = userPlanInfo(user);
+  const [open, setOpen] = useState(false);
+  const menuRef = useRef<HTMLDetailsElement>(null);
+
+  useEffect(() => {
+    setOpen(false);
+  }, [mode]);
+
+  useEffect(() => {
+    const closeOnOutsideClick = (event: MouseEvent) => {
+      if (menuRef.current && event.target instanceof Node && !menuRef.current.contains(event.target)) {
+        setOpen(false);
+      }
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setOpen(false);
+      }
+    };
+
+    document.addEventListener("click", closeOnOutsideClick, true);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("click", closeOnOutsideClick, true);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, []);
+
+  const closeAndRun = (action: () => void) => {
+    setOpen(false);
+    action();
+  };
 
   return (
-    <details className="mobile-profile-menu">
-      <summary aria-label={user ? "Abrir perfil" : "Entrar ou criar conta"}>
+    <details
+      ref={menuRef}
+      className="mobile-profile-menu"
+      open={open}
+    >
+      <summary
+        aria-label={user ? "Abrir perfil" : "Entrar ou criar conta"}
+        aria-expanded={open}
+        onClick={(event) => {
+          event.preventDefault();
+          setOpen((current) => !current);
+        }}
+      >
         <span className="account-avatar">{user ? userInitials(user) : <UserRound size={18} />}</span>
       </summary>
+      <button
+        type="button"
+        className="mobile-profile-backdrop"
+        aria-label="Fechar perfil"
+        onClick={() => setOpen(false)}
+      />
       <div className="mobile-profile-panel">
-        <div>
-          <span>{user ? "Perfil" : "Acesso"}</span>
-          <strong>{user?.name || "Criar conta grátis"}</strong>
-          <small>{user?.email || "Cadastre-se para liberar sua primeira busca."}</small>
-          {user?.phone && <small>{user.phone}</small>}
+        <div className="mobile-profile-panel-head">
+          <div>
+            <span>{user ? "Perfil" : "Acesso"}</span>
+            <strong>{user?.name || "Criar conta grátis"}</strong>
+            <small>{user?.email || "Cadastre-se para liberar sua primeira busca."}</small>
+            {user?.phone && <small>{user.phone}</small>}
+          </div>
+          <button
+            className="profile-close-button"
+            type="button"
+            onClick={() => setOpen(false)}
+            aria-label="Fechar perfil"
+            title="Fechar perfil"
+          >
+            <X size={19} />
+          </button>
         </div>
         <div className="mobile-plan-summary">
           <span>Plano atual</span>
@@ -656,15 +1022,21 @@ function MobileProfileMenu({
             <i style={{ width: `${usage}%` }} />
           </div>
         </div>
-        <button type="button" onClick={user ? onPlans : onRegister}>
+        <button type="button" onClick={() => closeAndRun(user ? onPlans : onRegister)}>
           {user ? `Planos desde ${money.format(Number(settings.starter_monthly || 19.9))}` : "Criar conta grátis"}
         </button>
+        {user && (
+          <button className="ghost-action profile-security-action" type="button" onClick={() => closeAndRun(onProfile)}>
+            <Lock size={17} />
+            Trocar senha
+          </button>
+        )}
         {user ? (
-          <button className="ghost-action" type="button" onClick={onLogout}>
+          <button className="ghost-action" type="button" onClick={() => closeAndRun(onLogout)}>
             Sair da conta
           </button>
         ) : (
-          <button className="ghost-action" type="button" onClick={onLogin}>
+          <button className="ghost-action" type="button" onClick={() => closeAndRun(onLogin)}>
             Entrar
           </button>
         )}
@@ -675,9 +1047,11 @@ function MobileProfileMenu({
 
 function AccountSummary({
   user,
+  onProfile,
   onLogout,
 }: {
   user: User | null;
+  onProfile: () => void;
   onLogout: () => void;
 }) {
   if (!user) {
@@ -688,13 +1062,15 @@ function AccountSummary({
   const { planLabel } = userPlanInfo(user);
 
   return (
-    <section className="account-card" aria-label="Perfil do usuario">
-      <div className="account-avatar">{initials}</div>
-      <div>
+    <section className="account-card" aria-label="Perfil do usuário">
+      <button className="account-open" type="button" onClick={onProfile} aria-label="Abrir perfil">
+        <span className="account-avatar">{initials}</span>
+      </button>
+      <button className="account-details" type="button" onClick={onProfile}>
         <span>Perfil</span>
         <strong>{user.name}</strong>
         <small>{`${planLabel} - ${user.email}`}</small>
-      </div>
+      </button>
       <button type="button" onClick={onLogout} aria-label="Sair da conta">
         <LogOut size={18} />
       </button>
@@ -723,19 +1099,21 @@ function TopBar({
             Admin
           </button>
         )}
-        <button type="button" onClick={() => onMode("learn")}>
-          <Sparkles size={19} />
-          Dicas
-        </button>
         <button type="button" onClick={() => onMode("support")}>
           <Headphones size={20} />
           Suporte
         </button>
         {user ? (
-          <button type="button" onClick={onLogout}>
-            <LogOut size={20} />
-            Sair
-          </button>
+          <>
+            <button type="button" onClick={() => onMode("profile")}>
+              <UserRound size={20} />
+              Perfil
+            </button>
+            <button type="button" onClick={onLogout}>
+              <LogOut size={20} />
+              Sair
+            </button>
+          </>
         ) : (
           <button type="button" onClick={onLogin}>
             <LogIn size={20} />
@@ -749,29 +1127,22 @@ function TopBar({
 
 function PlanStatus({
   user,
-  settings,
   onRegister,
   onPlans,
 }: {
   user: User | null;
-  settings: SettingsMap;
   onRegister: () => void;
   onPlans: () => void;
 }) {
   if (!user) {
-    return (
-      <section className="plan-card auth-card">
-        <span>Pesquisa grátis</span>
-        <strong>1 busca</strong>
-        <small>Cadastre-se para liberar sua primeira consulta completa.</small>
-        <button type="button" onClick={onRegister}>
-          Criar conta grátis
-        </button>
-      </section>
-    );
+    return null;
   }
 
   const { planLabel, remaining, usage } = userPlanInfo(user);
+
+  if (user.plan === "free") {
+    return null;
+  }
 
   return (
     <section className="plan-card">
@@ -783,7 +1154,7 @@ function PlanStatus({
         <i style={{ width: `${usage}%` }} />
       </div>
       <button type="button" onClick={onPlans}>
-        {`Planos desde ${money.format(Number(settings.starter_monthly || 19.9))}`}
+        Ver planos
       </button>
     </section>
   );
@@ -793,34 +1164,46 @@ function SearchPage({
   settings,
   tips,
   contacts,
+  restoredSearch,
   onLoginRequired,
   onHistoryRefresh,
+  onPlans,
+  onCheckout,
 }: {
   user: User | null;
   settings: SettingsMap;
   tips: Tip[];
   contacts: Contact[];
+  restoredSearch: RestoredSearch | null;
   onLoginRequired: () => boolean;
   onHistoryRefresh: () => void;
+  onPlans: () => void;
+  onCheckout: (selection: CheckoutSelection) => void;
 }) {
-  const [query, setQuery] = useState("fone bluetooth");
+  const [query, setQuery] = useState("");
   const [result, setResult] = useState<SearchResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [activeQuery, setActiveQuery] = useState(query);
   const [elapsedMs, setElapsedMs] = useState(0);
   const [error, setError] = useState("");
-  const [cost, setCost] = useState(32);
-  const [feeRate, setFeeRate] = useState(16);
-  const [operationalCost, setOperationalCost] = useState(7);
   const resultsRef = useRef<HTMLDivElement>(null);
 
   const canSeeMargin = canUseAdmin(user) || (user?.plan && user.plan !== "free");
-  const averageTicket = result?.totals.averageTicket || 0;
-  const margin = useMemo(() => {
-    const fee = averageTicket * (feeRate / 100);
-    const contribution = averageTicket - cost - fee - operationalCost;
-    return { fee, contribution, percent: averageTicket ? (contribution / averageTicket) * 100 : 0 };
-  }, [averageTicket, cost, feeRate, operationalCost]);
+
+  useEffect(() => {
+    if (!restoredSearch) {
+      return;
+    }
+
+    setQuery(restoredSearch.query);
+    setActiveQuery(restoredSearch.query);
+    setResult(sanitizeClientSearchResult(restoredSearch.result, restoredSearch.query, settings));
+    setError("");
+    setLoading(false);
+    window.setTimeout(() => {
+      resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 80);
+  }, [restoredSearch?.nonce, settings]);
 
   useEffect(() => {
     if (!loading) {
@@ -860,7 +1243,7 @@ function SearchPage({
     try {
       const data = await api<SearchResult>(`/api/search?q=${encodeURIComponent(cleanQuery)}`);
       await minimumFeedback;
-      setResult(data);
+      setResult(sanitizeClientSearchResult(data, cleanQuery, settings));
       onHistoryRefresh();
     } catch (apiError) {
       await minimumFeedback;
@@ -869,7 +1252,7 @@ function SearchPage({
         return;
       }
       const reason = apiError instanceof Error ? apiError.message : "Nao foi possivel buscar agora.";
-      setResult(buildClientMarketEstimate(cleanQuery, reason));
+      setResult(buildUnavailableSearchResult(cleanQuery, `${reason} Não vou exibir estimativas: o Busca Vendas só mostra dados reais dos anúncios.`));
       setError("");
     } finally {
       setLoading(false);
@@ -879,13 +1262,13 @@ function SearchPage({
   return (
     <div className="bv-page">
       <section className="search-heading">
-        <h1>Descubra se vale a pena vender seu produto</h1>
-        <p>Digite o produto e veja se existe demanda antes de comprar estoque.</p>
+        <h1>Descubra o potencial de vendas do seu produto na internet</h1>
+        <p>Veja quanto os anúncios campeões já venderam e encontre sua oportunidade nesse mercado.</p>
       </section>
 
       <form className="hero-search" onSubmit={submitSearch}>
         <Search size={23} />
-        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Digite uma palavra-chave" />
+        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Digite seu produto aqui" />
         <button className={loading ? "loading" : ""} type="submit" disabled={loading}>
           {loading ? <span className="button-spinner" aria-hidden="true" /> : <Search size={20} />}
           {loading ? "Validando mercado" : "Buscar demanda"}
@@ -901,29 +1284,32 @@ function SearchPage({
         ))}
       </div>
 
-      <section className="search-grid">
-        <div className="left-stack" ref={resultsRef}>
-          {error && <p className="inline-error">{error}</p>}
-          <ResultsPanel query={activeQuery} result={result} loading={loading} elapsedMs={elapsedMs} contacts={contacts} />
-          <PlansPreview settings={settings} />
-          <LearnPreview tips={tips} />
-        </div>
-        <aside className="right-stack">
-          <DemandCard result={result} />
-          <MarginCard
-            locked={!canSeeMargin}
-            averageTicket={averageTicket}
-            cost={cost}
-            feeRate={feeRate}
-            operationalCost={operationalCost}
-            margin={margin}
-            onCost={setCost}
-            onFeeRate={setFeeRate}
-            onOperationalCost={setOperationalCost}
-          />
-          <CommercialMini contacts={contacts} />
-        </aside>
-      </section>
+      <div className="results-anchor" ref={resultsRef}>
+        {error && <p className="inline-error">{error}</p>}
+        {Boolean(result?.ok && result.items.length) && (
+          <DemandCard result={result} locked={!canSeeMargin} onPlans={onPlans} />
+        )}
+        <section className="search-grid">
+          <div className="left-stack">
+            <ResultsPanel
+              query={activeQuery}
+              result={result}
+              loading={loading}
+              elapsedMs={elapsedMs}
+              contacts={contacts}
+              canSeeMargin={Boolean(canSeeMargin)}
+              onPlans={onPlans}
+            />
+            {Boolean(result?.ok && result.items.length && !canSeeMargin) && (
+              <PlansPreview settings={settings} onSelectPlan={onCheckout} />
+            )}
+            <LearnPreview tips={tips} />
+          </div>
+          <aside className="right-stack">
+            <CommercialMini contacts={contacts} />
+          </aside>
+        </section>
+      </div>
     </div>
   );
 }
@@ -941,44 +1327,101 @@ function whatsappHref(contacts: Contact[], query: string, salesPotential: number
   return `https://wa.me/${phone}?text=${encodeURIComponent(message)}`;
 }
 
+function contactHref(contact: Contact) {
+  const channel = contact.channel.toLowerCase();
+  const value = contact.value.trim();
+
+  if (/whats|telefone|phone|celular/.test(channel)) {
+    const digits = value.replace(/\D/g, "");
+    const phone = digits.startsWith("55") ? digits : digits ? `55${digits}` : "";
+    return phone ? `https://wa.me/${phone}` : "";
+  }
+
+  if (/e-?mail|email/.test(channel) || value.includes("@")) {
+    return `mailto:${value}`;
+  }
+
+  if (/site|web|url|link/.test(channel) || /^https?:\/\//i.test(value) || /^www\./i.test(value)) {
+    return /^https?:\/\//i.test(value) ? value : `https://${value}`;
+  }
+
+  return "";
+}
+
+function contactDisplayValue(contact: Contact) {
+  return contact.value.replace(/^https?:\/\//i, "");
+}
+
 function ResultsPanel({
   query,
   result,
   loading = false,
   elapsedMs = 0,
   contacts,
+  canSeeMargin,
+  onPlans,
 }: {
   query: string;
   result: SearchResult | null;
   loading?: boolean;
   elapsedMs?: number;
   contacts: Contact[];
+  canSeeMargin: boolean;
+  onPlans: () => void;
 }) {
   const marketUrl = `https://lista.mercadolivre.com.br/${encodeURIComponent(query)}`;
   const items = result?.items ?? [];
   const hasItems = items.length > 0;
   const marketSignalMode = result?.metricsMode === "market_signal" || result?.salesAvailable === false;
-  const publicPageMode = result?.source === "mercado_livre_scraper" || result?.source === "oxylabs_mercado_livre";
+  const officialCatalogModeResult = result?.source === "mercado_livre_catalog_champions";
+  const scrapeDoModeResult = result?.source === "scrapedo_mercado_livre";
+  const zyteModeResult = result?.source === "zyte_mercado_livre";
+  const scrapeDoFailure = Boolean(result?.source?.startsWith("scrapedo_"));
+  const zyteFailure = Boolean(result?.source?.startsWith("zyte_"));
+  const oxylabsModeResult = result?.source === "oxylabs_mercado_livre";
+  const proxyModeResult = result?.source === "mercado_livre_proxy";
+  const scraperModeResult = result?.source === "mercado_livre_scraper";
+  const cacheModeResult = result?.source === "confweb_cache";
   const estimateMode = result?.source === "market_estimate";
   const salesPotential = result?.totals.revenue || 0;
   const commercialHref = whatsappHref(contacts, query, salesPotential);
   const sourceText = estimateMode
-    ? "Fonte: raio-x estrategico Confweb - sem API"
+    ? "Fonte: raio-x estratégico Confweb - sem API"
     : result
     ? result.ok
-      ? publicPageMode
-        ? "Fonte: Mercado Livre - página pública"
+      ? officialCatalogModeResult
+        ? "Fonte: catálogo e ranking oficial do Mercado Livre"
+        : scrapeDoModeResult
+        ? "Fonte: Mercado Livre"
+        : zyteModeResult
+        ? "Fonte: Mercado Livre via Zyte"
+        : oxylabsModeResult
+        ? "Fonte: Mercado Livre via Oxylabs"
+        : cacheModeResult
+        ? "Fonte: Base interna Confweb"
+        : proxyModeResult
+        ? "Fonte: Motor Confweb"
+        : scraperModeResult
+        ? "Fonte: Motor Confweb"
         : marketSignalMode
-        ? "Fonte: Mercado Livre - pagina publica"
+        ? "Fonte: Mercado Livre - página pública"
         : "Fonte: Mercado Livre - atualizado agora"
       : result.source === "meli_forbidden"
         ? "Fonte: Mercado Livre - API aguardando liberação"
+        : scrapeDoFailure
+          ? "Fonte: Mercado Livre"
+        : zyteFailure
+          ? "Fonte: Mercado Livre via Zyte - consulta indisponível"
         : result.source === "market_data_pending"
           ? "Fonte: validação em andamento"
         : "Fonte: Mercado Livre - integração pendente"
     : "Fonte: Mercado Livre - aguardando pesquisa";
   const emptyHelp = result?.source === "meli_forbidden"
     ? "A conexão OAuth está válida. Para vendas reais por anúncio, precisamos da liberação oficial da API de Search ou de um provedor autorizado."
+    : scrapeDoFailure
+      ? "A pesquisa não foi consumida. Tente novamente em instantes."
+    : zyteFailure
+      ? "A pesquisa não foi consumida. Tente novamente mais tarde enquanto a fonte de dados conclui a validação dos anúncios."
     : result?.source === "market_data_pending"
       ? "Assim que a fonte oficial retornar, você verá anúncios, demanda, ticket médio e margem com dados completos."
     : result
@@ -989,7 +1432,7 @@ function ResultsPanel({
     <section className="market-panel">
       <div className="panel-head">
         <div>
-          <h2>{estimateMode ? "Raio-x de oportunidade" : "Top 3 anuncios campeoes"}</h2>
+          <h2>{estimateMode ? "Raio-x de oportunidade" : "Top 3 anúncios campeões"}</h2>
           <p>{sourceText}</p>
         </div>
         <a href={marketUrl} target="_blank" rel="noreferrer">
@@ -1003,8 +1446,12 @@ function ResultsPanel({
       {!loading && !hasItems && (
         <div className={`market-empty ${result && !result.ok ? "warning" : ""}`}>
           <PackageSearch size={34} />
-          <strong>{result ? result.message : "Faça uma pesquisa real no Mercado Livre."}</strong>
-          <p>{emptyHelp}</p>
+          <strong>
+            {result
+              ? "Não foi possível concluir esta análise agora. Sua pesquisa não foi consumida."
+              : "Pesquise seu produto e descubra o tamanho dessa oportunidade."}
+          </strong>
+          <p>{result ? "Tente novamente em instantes. Seus resultados só serão liberados quando os dados estiverem completos." : emptyHelp}</p>
         </div>
       )}
 
@@ -1012,34 +1459,57 @@ function ResultsPanel({
         <div className="result-list">
           {items.map((item, index) => (
             <article className="result-row" key={item.id}>
+              <div className="result-main">
               <span className="rank">{index + 1}</span>
               <img src={item.image} alt="" />
               <div className="product-copy">
                 <h3>{item.title}</h3>
-                <p>{item.subtitle || "Anúncio ativo no Mercado Livre"}</p>
+              <p>{item.subtitle || "Anúncio ativo no Mercado Livre"}</p>
               </div>
               <Metric
                 label={estimateMode ? "Venda estimada" : "Qtd. vendas"}
                 value={formatCountOrLabel(item.soldQuantity, item.salesMetricLabel)}
+                variant="sales"
               />
-              <Metric label="Preço" value={money.format(item.price)} />
-              <Metric label={estimateMode ? "Receita projetada" : "Receita"} value={formatMoneyOrLabel(item.revenue, item.revenueMetricLabel)} />
-              <a className="row-arrow" href={item.permalink} target="_blank" rel="noreferrer" aria-label="Abrir anúncio">
-                <ChevronRight size={24} />
+              <Metric label="Preço" value={money.format(item.price)} variant="price" />
+              <Metric
+                label={estimateMode ? "Receita projetada" : "Receita gerada"}
+                value={canSeeMargin ? formatMoneyOrLabel(item.revenue, item.revenueMetricLabel) : maskCurrency(item.revenue || 0)}
+                variant="revenue"
+                locked={!canSeeMargin}
+                onUnlock={onPlans}
+              />
+              <a className="ad-link" href={item.permalink} target="_blank" rel="noreferrer">
+                Ver anúncio no Mercado Livre
               </a>
+              </div>
+              <ProductMarginCard item={item} locked={!canSeeMargin} onPlans={onPlans} />
             </article>
           ))}
           <div className="market-cta">
             <div>
               <strong>
-                Seu produto tem potencial{estimateMode ? " estimado" : ""}: {money.format(salesPotential)} em vendas.
+                Seu produto tem potencial{estimateMode ? " estimado" : ""}: {canSeeMargin ? money.format(salesPotential) : maskCurrency(salesPotential)} em vendas.
               </strong>
-              <p>{estimateMode ? "Use este raio-x como triagem inicial. Quando a leitura real responder, exibimos os anuncios e vendas publicas." : "Bora pegar uma fatia desse mercado? Venda nos maiores marketplaces do Brasil com a Confweb."}</p>
+              <p>
+                {!canSeeMargin
+                  ? "Você já viu que existem compradores. Libere o faturamento completo e descubra quanto pode ganhar por venda."
+                  : estimateMode
+                    ? "Use este raio-x como triagem inicial. Quando a leitura real responder, exibimos os anúncios e vendas públicas."
+                    : "Bora pegar uma fatia desse mercado? Venda nos maiores marketplaces do Brasil com a Confweb."}
+              </p>
             </div>
-            <a href={commercialHref} target="_blank" rel="noreferrer">
-              Falar com a Confweb
-              <MessageCircle size={18} />
-            </a>
+            {!canSeeMargin ? (
+              <button type="button" onClick={onPlans}>
+                <UnlockKeyhole size={18} />
+                Quero ver o valor completo
+              </button>
+            ) : (
+              <a href={commercialHref} target="_blank" rel="noreferrer">
+                Falar com a Confweb
+                <MessageCircle size={18} />
+              </a>
+            )}
           </div>
         </div>
       )}
@@ -1085,13 +1555,350 @@ function SearchProgress({ query, elapsedMs }: { query: string; elapsedMs: number
   );
 }
 
-function Metric({ label, value }: { label: string; value: string }) {
+function ProductMarginCard({ item, locked, onPlans }: { item: MarketplaceItem; locked: boolean; onPlans: () => void }) {
+  const [expanded, setExpanded] = useState(false);
+  const [costInput, setCostInput] = useState("");
+  const [manualCost, setManualCost] = useState(0);
+  const [calculated, setCalculated] = useState(false);
+  const [listingType, setListingType] = useState<MercadoLivreListingType>("classic");
+  const estimate = useMemo(
+    () => buildProductMarginEstimate(item, manualCost, listingType),
+    [item, listingType, manualCost],
+  );
+
+  const calculate = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setManualCost(parseCurrencyInput(costInput));
+    setCalculated(true);
+  };
+
   return (
-    <div className="metric">
+    <div className={`product-margin-card ${expanded ? "expanded" : ""} ${locked ? "locked" : ""}`}>
+      <button
+        className="product-margin-title"
+        type="button"
+        onClick={() => setExpanded((current) => !current)}
+        aria-expanded={expanded}
+      >
+        <LineChart size={18} />
+        <strong>Quanto ganho neste produto?</strong>
+        {locked && <span>Veja seu ganho</span>}
+        <ChevronRight className="margin-chevron" size={18} />
+      </button>
+
+      {expanded && locked && (
+        <div className="product-margin-locked">
+          <Lock size={22} />
+          <div>
+            <strong>Descubra quanto pode sobrar para você</strong>
+            <span>Veja as taxas do Mercado Livre e simule seu custo para saber quanto pode ganhar em cada venda.</span>
+          </div>
+          <button type="button" onClick={onPlans}>
+            <CreditCard size={17} />
+            Quero ver meu ganho
+          </button>
+        </div>
+      )}
+
+      {expanded && !locked && (
+        <>
+          <div className="listing-type-control">
+            <span>Tipo do anúncio</span>
+            <div role="group" aria-label="Tipo do anúncio no Mercado Livre">
+              <button
+                className={listingType === "classic" ? "active" : ""}
+                type="button"
+                onClick={() => setListingType("classic")}
+              >
+                Clássico
+              </button>
+              <button
+                className={listingType === "premium" ? "active" : ""}
+                type="button"
+                onClick={() => setListingType("premium")}
+              >
+                Premium
+              </button>
+            </div>
+          </div>
+
+          <div className="margin-grid">
+            <SimpleMarginStat
+              label="Comissão Mercado Livre"
+              value={money.format(estimate.commission)}
+              hint={`${estimate.marketplaceRate.toFixed(1).replace(".", ",")}% sobre o preço`}
+            />
+            <SimpleMarginStat
+              label="Tarifa fixa"
+              value={money.format(estimate.fixedFee)}
+              hint={estimate.fixedFee > 0 ? "conforme a faixa de preço" : "não se aplica nesta faixa"}
+            />
+            <SimpleMarginStat
+              label="Frete estimado"
+              value={money.format(estimate.shippingFee)}
+              hint={estimate.shippingLabel}
+            />
+            <SimpleMarginStat label="Total descontado" value={money.format(estimate.totalMarketplaceFees)} />
+            <SimpleMarginStat
+              label="Você recebe sem custo"
+              value={money.format(estimate.marginBeforeCost)}
+              hint={marginHint(estimate.marginBeforeCost, estimate.percentBeforeCost, "antes do custo do produto")}
+              highlight
+            />
+          </div>
+
+          <form className="cost-calculator" onSubmit={calculate}>
+            <label>
+              Preencha seu custo para ver quanto sobra nessa venda
+              <input
+                inputMode="decimal"
+                value={costInput}
+                onChange={(event) => setCostInput(event.target.value)}
+                placeholder="Ex: 32,50"
+              />
+            </label>
+            <button type="submit">Calcular</button>
+          </form>
+
+          <div className="margin-result">
+            <span>{calculated ? "Depois do seu custo" : "Sem custo preenchido"}</span>
+            <strong>{money.format(calculated ? estimate.marginAfterCost : estimate.marginBeforeCost)}</strong>
+            <small>
+              {calculated && estimate.marginAfterCost === 0
+                ? "Sem sobra nesse custo"
+                : estimate.category}
+            </small>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function SimpleMarginStat({
+  label,
+  value,
+  hint,
+  highlight = false,
+}: {
+  label: string;
+  value: string;
+  hint?: string;
+  highlight?: boolean;
+}) {
+  return (
+    <div className={highlight ? "simple-margin-stat highlight" : "simple-margin-stat"}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+      {hint && <small>{hint}</small>}
+    </div>
+  );
+}
+
+function Metric({
+  label,
+  value,
+  variant = "default",
+  locked = false,
+  onUnlock,
+}: {
+  label: string;
+  value: string;
+  variant?: "default" | "sales" | "price" | "revenue";
+  locked?: boolean;
+  onUnlock?: () => void;
+}) {
+  if (locked) {
+    return (
+      <button className={`metric metric-${variant} metric-locked`} type="button" onClick={onUnlock}>
+        <span>{label}</span>
+        <strong>{value}</strong>
+        <small>Ver valor completo</small>
+        <Lock size={14} aria-hidden="true" />
+      </button>
+    );
+  }
+
+  return (
+    <div className={`metric ${variant !== "default" ? `metric-${variant}` : ""}`}>
       <span>{label}</span>
       <strong>{value}</strong>
     </div>
   );
+}
+
+function buildProductMarginEstimate(
+  item: MarketplaceItem,
+  manualCost: number,
+  listingType: MercadoLivreListingType,
+): MarginEstimate {
+  const profile = inferMarketplaceProfile(`${item.categoryName || ""} ${item.title}`);
+  const category = item.categoryName || profile.category;
+  const estimatedWeightKg = resolveProductWeightKg(item.weightKg, profile.weightKg);
+  const marketplaceRate = listingType === "premium" ? profile.premiumRate : profile.classicRate;
+  const commission = item.price * (marketplaceRate / 100);
+  const fixedFee = estimateMercadoLivreFixedFee(item.price);
+  const shippingFee = estimateMercadoLivreShippingFee(item.price, estimatedWeightKg);
+  const totalMarketplaceFees = commission + fixedFee + shippingFee;
+  const rawMarginBeforeCost = item.price - totalMarketplaceFees;
+  const rawMarginAfterCost = rawMarginBeforeCost - manualCost;
+  const marginBeforeCost = Math.max(0, rawMarginBeforeCost);
+  const marginAfterCost = Math.max(0, rawMarginAfterCost);
+
+  return {
+    category,
+    shippingLabel: mercadoLivreShippingLabel(item.price, estimatedWeightKg),
+    estimatedWeightKg,
+    marketplaceRate,
+    commission,
+    fixedFee,
+    shippingFee,
+    totalMarketplaceFees,
+    marginBeforeCost,
+    marginAfterCost,
+    percentBeforeCost: item.price ? (marginBeforeCost / item.price) * 100 : 0,
+    percentAfterCost: item.price ? (marginAfterCost / item.price) * 100 : 0,
+  };
+}
+
+function estimateMercadoLivreFixedFee(price: number) {
+  if (price < 12.5) return price / 2;
+  if (price <= 29) return 6.25;
+  if (price <= 50) return 6.5;
+  if (price < 79) return 6.75;
+  return 0;
+}
+
+function estimateMercadoLivreShippingFee(price: number, weightKg: number) {
+  if (price < 79) {
+    return 0;
+  }
+  const priceColumn = mercadoLivreShippingPriceColumn(price);
+  const row = mercadoLivreShippingTable.find((item) => weightKg <= item.maxKg)
+    || mercadoLivreShippingTable[mercadoLivreShippingTable.length - 1];
+  return row.values[priceColumn];
+}
+
+function mercadoLivreShippingLabel(price: number, weightKg: number) {
+  if (price < 79) {
+    return "sem frete grátis obrigatório";
+  }
+  return `${formatWeight(weightKg)} usado no cálculo`;
+}
+
+function mercadoLivreShippingPriceColumn(price: number) {
+  if (price < 100) return 0;
+  if (price < 120) return 1;
+  if (price < 150) return 2;
+  if (price < 200) return 3;
+  return 4;
+}
+
+function resolveProductWeightKg(weightKg: number | null | undefined, fallbackWeightKg: number) {
+  const parsedWeight = Number(weightKg);
+  if (!Number.isFinite(parsedWeight) || parsedWeight < 0.05) {
+    return fallbackWeightKg;
+  }
+  return Math.min(parsedWeight, 30);
+}
+
+function marginHint(value: number, percent: number, suffix: string) {
+  if (value <= 0) {
+    return "sem sobra nessa venda";
+  }
+  return `${percent.toFixed(1).replace(".", ",")}% ${suffix}`;
+}
+
+function inferMarketplaceProfile(title: string) {
+  const normalized = normalizeSearchText(title);
+  if (hasAny(normalized, ["creatina", "whey", "suplemento", "vitamina", "maca peruana", "capsula", "proteina"])) {
+    return { category: "Suplementos", classicRate: 12, premiumRate: 17, weightKg: 1.1 };
+  }
+  if (hasAny(normalized, ["buque", "bouquet", "rosa", "flor", "arranjo", "decoracao", "artificial"])) {
+    return { category: "Casa e decoração", classicRate: 12, premiumRate: 17, weightKg: 0.3 };
+  }
+  if (hasAny(normalized, ["mochila", "bolsa", "mala"])) {
+    return { category: "Moda", classicRate: 14, premiumRate: 19, weightKg: 0.8 };
+  }
+  if (hasAny(normalized, ["fone", "headphone", "earbud", "bluetooth", "caixa de som", "speaker"])) {
+    return { category: "Tecnologia", classicRate: 11, premiumRate: 16, weightKg: 0.35 };
+  }
+  if (hasAny(normalized, ["cafeteira", "liquidificador", "batedeira", "air fryer", "panela"])) {
+    return { category: "Casa e decoração", classicRate: 12, premiumRate: 17, weightKg: 2 };
+  }
+  if (hasAny(normalized, ["tenis", "camiseta", "calca", "bermuda", "roupa"])) {
+    return { category: "Moda", classicRate: 14, premiumRate: 19, weightKg: 0.5 };
+  }
+  if (hasAny(normalized, ["celular", "smartphone", "iphone", "android"])) {
+    return { category: "Celulares e smartphones", classicRate: 11, premiumRate: 16, weightKg: 0.5 };
+  }
+  if (hasAny(normalized, ["shampoo", "perfume", "cosmetico", "maquiagem", "barbeador"])) {
+    return { category: "Cuidados pessoais", classicRate: 12, premiumRate: 17, weightKg: 0.5 };
+  }
+  if (hasAny(normalized, ["furadeira", "parafusadeira", "serra", "ferramenta"])) {
+    return { category: "Ferramentas", classicRate: 12, premiumRate: 17, weightKg: 2 };
+  }
+  if (hasAny(normalized, ["caderno", "caneta", "lapis", "papel", "papelaria"])) {
+    return { category: "Papelaria", classicRate: 11.5, premiumRate: 16.5, weightKg: 0.5 };
+  }
+  if (hasAny(normalized, ["cachorro", "gato", "pet", "racao"])) {
+    return { category: "Pet", classicRate: 14, premiumRate: 19, weightKg: 1 };
+  }
+  if (hasAny(normalized, ["brinquedo", "boneca", "carrinho", "jogo infantil"])) {
+    return { category: "Brinquedos", classicRate: 11.5, premiumRate: 16.5, weightKg: 0.8 };
+  }
+  if (hasAny(normalized, ["bebe", "fralda", "mamadeira", "chupeta"])) {
+    return { category: "Bebês", classicRate: 11.5, premiumRate: 16.5, weightKg: 0.8 };
+  }
+  if (hasAny(normalized, ["violao", "guitarra", "teclado musical", "instrumento musical"])) {
+    return { category: "Instrumentos musicais", classicRate: 11.5, premiumRate: 16.5, weightKg: 2 };
+  }
+  if (hasAny(normalized, ["bicicleta", "bike", "ciclismo"])) {
+    return { category: "Bicicletas", classicRate: 11.5, premiumRate: 16.5, weightKg: 15 };
+  }
+  if (hasAny(normalized, ["automotivo", "carro", "moto", "pneu", "capacete"])) {
+    return { category: "Automotivo", classicRate: 13, premiumRate: 18, weightKg: 2 };
+  }
+  return { category: "Categoria estimada", classicRate: 14, premiumRate: 19, weightKg: 1 };
+}
+
+const mercadoLivreShippingTable = [
+  { maxKg: 0.3, values: [12.35, 14.35, 16.45, 18.45, 20.95] },
+  { maxKg: 0.5, values: [13.25, 15.45, 17.65, 19.85, 22.55] },
+  { maxKg: 1, values: [13.85, 16.15, 18.45, 20.75, 23.65] },
+  { maxKg: 1.5, values: [14.15, 16.45, 18.85, 21.15, 24.65] },
+  { maxKg: 2, values: [14.45, 16.85, 19.25, 21.65, 24.65] },
+  { maxKg: 3, values: [15.75, 18.35, 21.05, 23.65, 26.25] },
+  { maxKg: 4, values: [17.05, 19.85, 22.65, 25.55, 28.35] },
+  { maxKg: 5, values: [18.45, 21.55, 24.65, 27.75, 30.75] },
+  { maxKg: 6, values: [25.45, 28.55, 32.65, 35.75, 39.75] },
+  { maxKg: 7, values: [27.05, 31.05, 36.05, 40.05, 44.05] },
+  { maxKg: 8, values: [28.85, 33.65, 38.45, 43.25, 48.05] },
+  { maxKg: 9, values: [29.65, 34.55, 39.55, 44.45, 49.35] },
+  { maxKg: 11, values: [41.25, 48.05, 54.95, 61.75, 68.65] },
+  { maxKg: 13, values: [42.15, 49.25, 56.25, 63.25, 70.25] },
+  { maxKg: 15, values: [45.05, 52.45, 59.95, 67.45, 74.95] },
+  { maxKg: 17, values: [48.55, 56.05, 63.55, 70.75, 78.65] },
+  { maxKg: 20, values: [54.75, 63.85, 72.95, 82.05, 91.15] },
+  { maxKg: 25, values: [64.05, 75.05, 84.75, 95.35, 105.95] },
+  { maxKg: Number.POSITIVE_INFINITY, values: [65.95, 75.45, 85.55, 96.25, 106.95] },
+];
+
+function formatWeight(weightKg: number) {
+  if (weightKg < 1) {
+    return `${Math.round(weightKg * 1000)} g`;
+  }
+  return `${weightKg.toFixed(1).replace(".", ",")} kg`;
+}
+
+function hasAny(text: string, terms: string[]) {
+  return terms.some((term) => text.includes(term));
+}
+
+function parseCurrencyInput(value: string) {
+  const normalized = value.replace(/[^\d,.-]/g, "").replace(/\./g, "").replace(",", ".");
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
 }
 
 function formatCountOrLabel(value: number | null | undefined, fallback = "Não divulgado") {
@@ -1108,130 +1915,94 @@ function formatMoneyOrLabel(value: number | null | undefined, fallback = "Aguard
   return fallback;
 }
 
-function DemandCard({ result }: { result: SearchResult | null }) {
-  const championCount = result?.items?.length || 0;
-  const estimateMode = result?.source === "market_estimate";
-
-  return (
-    <section className="demand-card">
-      <div className="section-title">
-        <BarChart3 size={26} />
-        <h2>Demanda estimada</h2>
-      </div>
-      <dl>
-        <div>
-          <dt>{estimateMode ? "Vendas projetadas" : "Vendas totais nos 3"}</dt>
-          <dd className="blue-value">
-            {number.format(result?.totals.demand || 0)}
-          </dd>
-        </div>
-        <div>
-          <dt>{estimateMode ? "Receita projetada" : "Receita total dos 3"}</dt>
-          <dd className="orange-value">{money.format(result?.totals.revenue || 0)}</dd>
-        </div>
-        <div>
-          <dt>Ticket médio</dt>
-          <dd>{money.format(result?.totals.averageTicket || 0)}</dd>
-        </div>
-        <div>
-          <dt>{estimateMode ? "Cenarios analisados" : "Anuncios campeoes"}</dt>
-          <dd>{championCount ? `${number.format(championCount)} selecionados` : "0"}</dd>
-        </div>
-      </dl>
-    </section>
-  );
+function maskCurrency(value: number) {
+  let visibleDigits = 0;
+  return money.format(Number(value) || 0).replace(/\d/g, (digit) => {
+    visibleDigits += 1;
+    return visibleDigits <= 2 ? digit : "•";
+  });
 }
 
-function MarginCard({
+function DemandCard({
+  result,
   locked,
-  averageTicket,
-  cost,
-  feeRate,
-  operationalCost,
-  margin,
-  onCost,
-  onFeeRate,
-  onOperationalCost,
+  onPlans,
 }: {
+  result: SearchResult | null;
   locked: boolean;
-  averageTicket: number;
-  cost: number;
-  feeRate: number;
-  operationalCost: number;
-  margin: { fee: number; contribution: number; percent: number };
-  onCost: (value: number) => void;
-  onFeeRate: (value: number) => void;
-  onOperationalCost: (value: number) => void;
+  onPlans: () => void;
 }) {
+  const championCount = result?.items?.length || 0;
+  const estimateMode = result?.source === "market_estimate";
+  const totalRevenue = result?.totals.revenue || 0;
+
   return (
-    <section className="margin-card">
-      <div className="section-title">
-        <LineChart size={26} />
-        <h2>Margem de contribuição</h2>
-        {locked && <Lock className="lock-mark" size={24} />}
+    <section className={`demand-card opportunity-card ${locked ? "opportunity-locked" : ""}`}>
+      <div className="opportunity-heading">
+        <span className="opportunity-icon"><TrendingUp size={27} /></span>
+        <div>
+          <span className="opportunity-kicker">O mercado já está acontecendo</span>
+          <h2>Olha o tamanho dessa oportunidade</h2>
+          <p>Somando apenas os 3 anúncios campeões encontrados.</p>
+        </div>
       </div>
-      {locked ? (
-        <div className="locked-margin">
-          <Lock size={46} />
-          <strong>Bloqueado no plano grátis</strong>
-          <p>Assine para calcular margem com custo, taxa e operação.</p>
+      <dl className="opportunity-metrics">
+        <div className="opportunity-metric sales">
+          <dt>{estimateMode ? "Vendas projetadas" : "Vendas dos campeões"}</dt>
+          <dd>{number.format(result?.totals.demand || 0)}</dd>
+          <small>pessoas já compraram</small>
         </div>
-      ) : (
-        <div className="margin-form">
-          <label>
-            Custo do produto
-            <input type="number" value={cost} onChange={(event) => onCost(Number(event.target.value))} />
-          </label>
-          <label>
-            Taxa marketplace (%)
-            <input type="number" value={feeRate} onChange={(event) => onFeeRate(Number(event.target.value))} />
-          </label>
-          <label>
-            Custo operacional
-            <input type="number" value={operationalCost} onChange={(event) => onOperationalCost(Number(event.target.value))} />
-          </label>
-          <dl>
-            <div>
-              <dt>Preço médio</dt>
-              <dd>{money.format(averageTicket)}</dd>
-            </div>
-            <div>
-              <dt>Taxa estimada</dt>
-              <dd>{money.format(margin.fee)}</dd>
-            </div>
-            <div>
-              <dt>Margem</dt>
-              <dd>{money.format(margin.contribution)} ({margin.percent.toFixed(1)}%)</dd>
-            </div>
-          </dl>
+        <div className="opportunity-metric revenue">
+          <dt>{estimateMode ? "Receita projetada" : "Dinheiro movimentado"}</dt>
+          <dd>{locked ? maskCurrency(totalRevenue) : money.format(totalRevenue)}</dd>
+          <small>{locked ? "valor completo para assinantes" : "somado nos 3 anúncios"}</small>
         </div>
+        <div className="opportunity-metric ticket">
+          <dt>Preço médio vendido</dt>
+          <dd>{money.format(result?.totals.averageTicket || 0)}</dd>
+          <small>referência para sua oferta</small>
+        </div>
+        <div className="opportunity-metric champions">
+          <dt>{estimateMode ? "Cenários analisados" : "Anúncios campeões"}</dt>
+          <dd>{number.format(championCount)}</dd>
+          <small>com vendas comprovadas</small>
+        </div>
+      </dl>
+      {locked && (
+        <button className="opportunity-unlock" type="button" onClick={onPlans}>
+          <UnlockKeyhole size={18} />
+          Revelar o faturamento e quanto posso ganhar
+          <ChevronRight size={18} />
+        </button>
       )}
     </section>
   );
 }
+function PlansPreview({ settings, onSelectPlan }: { settings: SettingsMap; onSelectPlan: (selection: CheckoutSelection) => void }) {
+  const starterPricing = planPricing(settings, "starter");
+  const scalePricing = planPricing(settings, "scale");
 
-function PlansPreview({ settings }: { settings: SettingsMap }) {
   return (
     <section className="wide-panel plans-preview">
       <div>
-        <h2>Escolha um plano e desbloqueie todo o potencial</h2>
-        <p>Comece com uma pesquisa gratuita e evolua para análises completas quando precisar validar estoque com segurança.</p>
+        <h2>Você já encontrou compradores. Agora descubra quanto pode ganhar.</h2>
+        <p>Revele o faturamento completo, as taxas e quanto sobra por venda para validar outros produtos com segurança.</p>
       </div>
       <div className="mini-plan-grid">
-        <MiniPlan title="10 pesquisas" price={money.format(Number(settings.starter_monthly || 19.9))} note={`${money.format(Number(settings.starter_yearly || 179.1))}/ano`} />
-        <MiniPlan title="Ilimitado" price={money.format(Number(settings.scale_monthly || 39.9))} note={`${money.format(Number(settings.scale_yearly || 359.1))}/ano`} featured />
+        <MiniPlan title="10 pesquisas" price={money.format(starterPricing.monthly)} note={`Anual ${money.format(starterPricing.yearly)} • Pix ou cartão`} onClick={() => onSelectPlan({ plan: "starter", cycle: "monthly" })} />
+        <MiniPlan title="Ilimitado" price={money.format(scalePricing.monthly)} note={`Anual ${money.format(scalePricing.yearly)} • Pix ou cartão`} featured onClick={() => onSelectPlan({ plan: "scale", cycle: "monthly" })} />
       </div>
     </section>
   );
 }
 
-function MiniPlan({ title, price, note, featured = false }: { title: string; price: string; note: string; featured?: boolean }) {
+function MiniPlan({ title, price, note, featured = false, onClick }: { title: string; price: string; note: string; featured?: boolean; onClick: () => void }) {
   return (
-    <article className={featured ? "mini-plan featured" : "mini-plan"}>
+    <button className={featured ? "mini-plan featured" : "mini-plan"} type="button" onClick={onClick}>
       <span>{title}</span>
       <strong>{price}<small>/mês</small></strong>
       <p>{note}</p>
-    </article>
+    </button>
   );
 }
 
@@ -1262,34 +2033,77 @@ function CommercialMini({ contacts }: { contacts: Contact[] }) {
   return (
     <section className="commercial-mini">
       <MessageCircle size={24} />
-      <h2>Comercial Confweb</h2>
-      {contacts.slice(0, 2).map((contact) => (
-        <p key={contact.id}>
-          <strong>{contact.name}</strong>
-          {contact.channel}: {contact.value}
-        </p>
-      ))}
+      <h2>Fale com um Especialista Certificado da Confweb</h2>
+      {contacts.slice(0, 2).map((contact) => {
+        const href = contactHref(contact);
+
+        return (
+          <p key={contact.id}>
+            <strong>{contact.name}</strong>
+            {href ? (
+              <a className="contact-link" href={href} target="_blank" rel="noreferrer">
+                {contact.channel}: {contactDisplayValue(contact)}
+              </a>
+            ) : (
+              <span>{contact.channel}: {contact.value}</span>
+            )}
+          </p>
+        );
+      })}
     </section>
   );
 }
 
-function HistoryPage({ user, history, onLoginRequired }: { user: User | null; history: HistoryRecord[]; onLoginRequired: () => boolean }) {
+function HistoryPage({
+  user,
+  history,
+  onLoginRequired,
+  onViewSearch,
+}: {
+  user: User | null;
+  history: HistoryRecord[];
+  onLoginRequired: () => boolean;
+  onViewSearch: (record: HistoryRecord) => Promise<void>;
+}) {
+  const [busyId, setBusyId] = useState<number | null>(null);
+  const [error, setError] = useState("");
+  const canSeeRevenue = Boolean(user && (canUseAdmin(user) || user.plan !== "free"));
   if (!user) {
     return <AccessPrompt title="Entre para ver suas pesquisas" onLoginRequired={onLoginRequired} />;
   }
 
+  const viewSearch = async (record: HistoryRecord) => {
+    setBusyId(record.id);
+    setError("");
+    try {
+      await onViewSearch(record);
+    } catch (apiError) {
+      setError(apiError instanceof Error ? apiError.message : "Não foi possível abrir essa pesquisa.");
+    } finally {
+      setBusyId(null);
+    }
+  };
+
   return (
     <section className="bv-page simple-page">
       <h1>Minhas pesquisas</h1>
-      <p>Histórico real salvo por usuário.</p>
+      <p>Histórico real salvo na sua conta.</p>
+      {error && <p className="inline-error">{error}</p>}
       <div className="table-list">
         {history.length ? history.map((record) => (
           <article className="history-row" key={record.id}>
-            <strong>{record.query}</strong>
-            <span>{record.source}</span>
+            <div>
+              <strong>{record.query}</strong>
+              <span>{historySourceLabel(record.source)}</span>
+            </div>
             <b>{number.format(record.total_demand)} vendas</b>
-            <b>{money.format(record.total_revenue)}</b>
+            <b className={!canSeeRevenue ? "history-revenue-locked" : ""}>
+              {canSeeRevenue ? money.format(record.total_revenue) : maskCurrency(record.total_revenue)}
+            </b>
             <small>{new Date(record.created_at).toLocaleString("pt-BR")}</small>
+            <button type="button" onClick={() => viewSearch(record)} disabled={busyId === record.id}>
+              {busyId === record.id ? "Abrindo..." : "Ver pesquisa"}
+            </button>
           </article>
         )) : <p className="muted-box">Você ainda não fez pesquisas.</p>}
       </div>
@@ -1297,29 +2111,593 @@ function HistoryPage({ user, history, onLoginRequired }: { user: User | null; hi
   );
 }
 
-function PlansPage({ settings, onLoginRequired }: { settings: SettingsMap; onLoginRequired: () => boolean }) {
+function historySourceLabel(source: string) {
+  if (source === "confweb_cache" || source?.includes("cache")) {
+    return "Base interna Confweb";
+  }
+  if (
+    source?.startsWith("mercado_livre")
+    || source?.includes("scrapedo")
+    || source?.includes("zyte")
+    || source?.includes("oxylabs")
+  ) {
+    return "Mercado Livre";
+  }
+  return "Resultado salvo";
+}
+
+function PlansPage({
+  user,
+  settings,
+  onSelectPlan,
+  onLoginRequired,
+}: {
+  user: User | null;
+  settings: SettingsMap;
+  onSelectPlan: (selection: CheckoutSelection) => void;
+  onLoginRequired: () => boolean;
+}) {
+  const starterPricing = planPricing(settings, "starter");
+  const scalePricing = planPricing(settings, "scale");
+  const currentPlan = user?.plan || null;
+  const currentDetails = user ? userPlanInfo(user) : null;
+
   return (
-    <section className="bv-page simple-page">
-      <h1>Planos</h1>
-      <p>Modelo comercial do Busca Vendas - Confweb.</p>
+    <section className="bv-page simple-page plans-page">
+      <header className="plans-page-header">
+        <span className="plans-kicker"><Rocket size={16} /> Escolha como você quer crescer</span>
+        <h1>Planos para encontrar produtos com potencial</h1>
+        <p>Veja o que já vende, quanto esse mercado movimenta e quanto pode sobrar em cada venda.</p>
+      </header>
+
+      {user && currentDetails && (
+        <section className="current-plan-banner">
+          <span className="current-plan-icon"><ShieldCheck size={24} /></span>
+          <div>
+            <span>Seu plano atual</span>
+            <strong>{currentDetails.planLabel}</strong>
+            <p>Pesquisas disponíveis: {currentDetails.remaining}</p>
+          </div>
+          <span className="current-plan-status">Ativo</span>
+        </section>
+      )}
+
       <div className="plans-grid">
-        <PlanBox title="Grátis" price="R$ 0,00" items={["1 pesquisa", "Margem bloqueada", "Entrada para validar a ferramenta"]} onAction={onLoginRequired} />
-        <PlanBox title="10 pesquisas" price={`${money.format(Number(settings.starter_monthly || 19.9))}/mês`} items={[`${money.format(Number(settings.starter_yearly || 179.1))}/ano`, "25% de desconto no anual", "Margem completa"]} onAction={onLoginRequired} />
-        <PlanBox title="Ilimitado" price={`${money.format(Number(settings.scale_monthly || 39.9))}/mês`} items={[`${money.format(Number(settings.scale_yearly || 359.1))}/ano`, "Pesquisas completas ilimitadas", "Margem completa"]} onAction={onLoginRequired} featured />
+        <PlanBox
+          icon={Search}
+          eyebrow="Comece agora"
+          title="Grátis"
+          description="Descubra a demanda de um produto antes de investir em estoque."
+          price="R$ 0,00"
+          priceSuffix="para começar"
+          items={[
+            "1 pesquisa completa",
+            "Top 3 anúncios campeões",
+            "Quantidade de vendas e preço médio",
+            "Prévia do dinheiro movimentado",
+          ]}
+          current={currentPlan === "free"}
+          actionLabel={currentPlan === "free" ? "Seu plano atual" : user ? "Incluído no seu plano" : "Criar conta grátis"}
+          actionDisabled={Boolean(user)}
+          onAction={() => { onLoginRequired(); }}
+        />
+        <PlanBox
+          icon={BarChart3}
+          eyebrow="Para começar a vender"
+          title="10 pesquisas"
+          description="Analise seus primeiros produtos e escolha onde existe a melhor oportunidade."
+          price={money.format(starterPricing.monthly)}
+          priceSuffix="/mês"
+          annualPrice={starterPricing.yearly}
+          annualEquivalent={starterPricing.monthlyEquivalent}
+          annualDiscount={starterPricing.discount}
+          items={[
+            "10 análises completas por mês",
+            "Faturamento completo dos campeões",
+            "Quanto ganho neste produto, com taxas",
+            "Cálculo com seu preço de custo",
+            "Histórico das pesquisas na sua conta",
+          ]}
+          current={currentPlan === "starter"}
+          actionLabel={currentPlan === "starter" ? "Seu plano atual" : currentPlan === "scale" ? "Incluído no Ilimitado" : "Escolher 10 pesquisas"}
+          actionDisabled={currentPlan === "starter" || currentPlan === "scale"}
+          onAction={() => onSelectPlan({ plan: "starter", cycle: "monthly" })}
+        />
+        <PlanBox
+          icon={Crown}
+          eyebrow="Mais liberdade para pesquisar"
+          title="Ilimitado"
+          description="Para validar vários produtos, portfólios e novas oportunidades sem contar pesquisas."
+          price={money.format(scalePricing.monthly)}
+          priceSuffix="/mês"
+          annualPrice={scalePricing.yearly}
+          annualEquivalent={scalePricing.monthlyEquivalent}
+          annualDiscount={scalePricing.discount}
+          items={[
+            "Pesquisas completas ilimitadas",
+            "Faturamento completo dos campeões",
+            "Quanto ganho neste produto, com taxas",
+            "Cálculo com seu preço de custo",
+            "Histórico e reabertura das análises",
+          ]}
+          current={currentPlan === "scale"}
+          actionLabel={currentPlan === "scale" ? "Seu plano atual" : currentPlan === "starter" ? "Fazer upgrade para Ilimitado" : "Escolher Ilimitado"}
+          actionDisabled={currentPlan === "scale"}
+          onAction={() => onSelectPlan({ plan: "scale", cycle: "monthly" })}
+          featured
+        />
+      </div>
+
+      <div className="plans-payment-info">
+        <div>
+          <RefreshCw size={20} />
+          <span><strong>Plano mensal</strong>Cobrança automática no cartão, mês a mês.</span>
+        </div>
+        <div>
+          <CreditCard size={20} />
+          <span><strong>Plano anual</strong>Pix ou cartão.</span>
+        </div>
       </div>
     </section>
   );
 }
 
-function PlanBox({ title, price, items, featured = false, onAction }: { title: string; price: string; items: string[]; featured?: boolean; onAction: () => boolean }) {
+function PlanBox({
+  icon: Icon,
+  eyebrow,
+  title,
+  description,
+  price,
+  priceSuffix,
+  annualPrice,
+  annualEquivalent,
+  annualDiscount,
+  items,
+  featured = false,
+  current = false,
+  actionLabel,
+  actionDisabled = false,
+  onAction,
+}: {
+  icon: LucideIcon;
+  eyebrow: string;
+  title: string;
+  description: string;
+  price: string;
+  priceSuffix: string;
+  annualPrice?: number;
+  annualEquivalent?: number;
+  annualDiscount?: number;
+  items: string[];
+  featured?: boolean;
+  current?: boolean;
+  actionLabel: string;
+  actionDisabled?: boolean;
+  onAction: () => void;
+}) {
   return (
-    <article className={featured ? "plan-box featured" : "plan-box"}>
-      <span>{title}</span>
-      <strong>{price}</strong>
-      {items.map((item) => <p key={item}>{item}</p>)}
-      <button type="button" onClick={onAction}>Selecionar plano</button>
+    <article className={`plan-box${featured ? " featured" : ""}${current ? " current" : ""}`}>
+      {featured && <span className="plan-recommended">Mais escolhido</span>}
+      <div className="plan-box-head">
+        <span className="plan-icon"><Icon size={22} /></span>
+        <div>
+          <span className="plan-eyebrow">{eyebrow}</span>
+          <h2>{title}</h2>
+        </div>
+      </div>
+      <p className="plan-description">{description}</p>
+      <div className="plan-price">
+        <strong>{price}</strong>
+        <small>{priceSuffix}</small>
+      </div>
+      {annualPrice !== undefined && annualEquivalent !== undefined && annualDiscount !== undefined && (
+        <div className="plan-annual">
+          <p>
+            <strong>Anual: {money.format(annualPrice)}</strong>
+            <span>Economize {money.format(annualDiscount)}</span>
+          </p>
+          <b>{money.format(annualEquivalent)}/mês no plano anual</b>
+          <small>Pix ou cartão</small>
+        </div>
+      )}
+      <ul className="plan-benefits">
+        {items.map((item) => (
+          <li key={item}><CircleCheck size={17} /> <span>{item}</span></li>
+        ))}
+      </ul>
+      <button className={current ? "plan-current-button" : ""} type="button" onClick={onAction} disabled={actionDisabled}>
+        {current && <CircleCheck size={18} />}
+        {actionLabel}
+        {!current && !actionDisabled && <ChevronRight size={18} />}
+      </button>
     </article>
   );
+}
+
+function CheckoutPage({
+  user,
+  settings,
+  selection,
+  onSelection,
+  onLoginRequired,
+  onUserChange,
+  onDone,
+}: {
+  user: User | null;
+  settings: SettingsMap;
+  selection: CheckoutSelection;
+  onSelection: (selection: CheckoutSelection) => void;
+  onLoginRequired: () => boolean;
+  onUserChange: (user: User) => void;
+  onDone: () => void;
+}) {
+  const [submitting, setSubmitting] = useState(false);
+  const [checkingPayment, setCheckingPayment] = useState(false);
+  const [error, setError] = useState("");
+  const [result, setResult] = useState<CheckoutResult | null>(null);
+  const [annualBillingType, setAnnualBillingType] = useState<BillingType>("PIX");
+  const offer = checkoutOffer(settings, selection);
+  const pricing = planPricing(settings, selection.plan);
+  const billingType: BillingType = selection.cycle === "yearly" ? annualBillingType : "CREDIT_CARD";
+  const chargeMode: ChargeMode = selection.cycle === "yearly" ? "single" : "subscription";
+  const paymentLabel = selection.cycle === "monthly"
+    ? "Cartão mensal"
+    : billingType === "PIX"
+      ? "Pix anual com desconto"
+      : "Cartão anual em até 12x sem juros";
+  const paymentHint = selection.cycle === "monthly"
+    ? "Cobrança automática no cartão, mês a mês."
+    : billingType === "PIX"
+      ? `Pagamento único de ${money.format(offer.value)} no Pix.`
+      : `Parcelado em até 12 vezes sem juros, total de ${money.format(offer.value)}.`;
+
+  useEffect(() => {
+    if (!result?.financeId || isPaidCheckoutStatus(result.status)) {
+      return;
+    }
+
+    let cancelled = false;
+    let attempts = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const checkStatus = async () => {
+      attempts += 1;
+      setCheckingPayment(true);
+      try {
+        const status = await api<CheckoutStatus>(`/api/checkout/status?id=${result.financeId}`);
+        if (cancelled) {
+          return;
+        }
+        setResult((current) => current ? {
+          ...current,
+          status: status.paid ? "paid" : status.status,
+          message: status.message,
+          invoiceUrl: status.invoiceUrl || current.invoiceUrl,
+        } : current);
+        if (status.user) {
+          onUserChange(status.user);
+        }
+        if (status.paid) {
+          onDone();
+          return;
+        }
+      } catch {
+        // O webhook continua sendo a fonte principal; a consulta é uma redundância.
+      } finally {
+        if (!cancelled) {
+          setCheckingPayment(false);
+        }
+      }
+
+      if (!cancelled && attempts < 45) {
+        timer = setTimeout(checkStatus, 4_000);
+      }
+    };
+
+    timer = setTimeout(checkStatus, 3_000);
+    return () => {
+      cancelled = true;
+      if (timer) {
+        clearTimeout(timer);
+      }
+    };
+  }, [result?.financeId, result?.status]);
+
+  const selectCycle = (cycle: PlanCycle) => {
+    onSelection({ ...selection, cycle });
+    setResult(null);
+    setError("");
+  };
+
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!onLoginRequired()) {
+      return;
+    }
+    setSubmitting(true);
+    setCheckingPayment(false);
+    setError("");
+    setResult(null);
+    try {
+      const form = event.currentTarget;
+      const data = formJson(form);
+      const payload = {
+        plan: selection.plan,
+        cycle: selection.cycle,
+        billingType,
+        chargeMode,
+        name: data.name,
+        email: data.email,
+        phone: data.phone,
+        cpfCnpj: data.cpfCnpj,
+        creditCard: billingType === "CREDIT_CARD" ? {
+          holderName: data.card_holder,
+          number: data.card_number,
+          expiryMonth: data.card_month,
+          expiryYear: data.card_year,
+          ccv: data.card_ccv,
+        } : undefined,
+        creditCardHolderInfo: billingType === "CREDIT_CARD" ? {
+          name: data.card_holder,
+          email: data.email,
+          cpfCnpj: data.cpfCnpj,
+          postalCode: data.postal_code,
+          addressNumber: data.address_number,
+          phone: data.phone,
+        } : undefined,
+      };
+      const checkout = await api<CheckoutResult>("/api/checkout/start", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+      setResult(checkout);
+      if (checkout.user) {
+        onUserChange(checkout.user);
+      }
+      onDone();
+    } catch (apiError) {
+      setError(apiError instanceof Error ? apiError.message : "Nao foi possivel criar o pagamento.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  if (!user) {
+    return <AccessPrompt title="Crie sua conta para assinar" onLoginRequired={onLoginRequired} />;
+  }
+
+  return (
+    <section className="bv-page simple-page checkout-page">
+      <div className="checkout-header">
+        <div>
+          <span>Checkout seguro</span>
+          <h1>Assinar {offer.title}</h1>
+          <p>Escolha mensal no cartão ou anual no Pix ou cartão em até 12x sem juros. Pagamento processado pela Asaas.</p>
+        </div>
+        <strong>
+          {offer.displayPrice}
+          <small>{selection.cycle === "yearly" ? "/mês no plano anual" : "/mês"}</small>
+          {selection.cycle === "yearly" && billingType === "PIX" && <em>{`Cobrado no Pix anual: ${money.format(offer.value)}`}</em>}
+          {selection.cycle === "yearly" && billingType === "CREDIT_CARD" && <em>{`Até 12x sem juros, total de ${money.format(offer.value)}`}</em>}
+          {selection.cycle === "monthly" && <em>{`${money.format(offer.yearlyBase)} se mantiver por 12 meses`}</em>}
+        </strong>
+      </div>
+
+      <div className="checkout-layout">
+        <form className="checkout-form" onSubmit={submit}>
+          <div className="checkout-options">
+            <label>
+              Plano
+              <select value={selection.plan} onChange={(event) => onSelection({ ...selection, plan: event.target.value as PaidPlan })}>
+                <option value="starter">10 pesquisas</option>
+                <option value="scale">Ilimitado</option>
+              </select>
+            </label>
+            <fieldset className="period-options">
+              <legend>Período</legend>
+              <label className={selection.cycle === "monthly" ? "active" : ""}>
+                <input type="radio" name="cycle" checked={selection.cycle === "monthly"} onChange={() => selectCycle("monthly")} />
+                <span>Mensal</span>
+                <small>{money.format(offer.monthlyValue)}/mês no cartão</small>
+              </label>
+              <label className={selection.cycle === "yearly" ? "active" : ""}>
+                <input type="radio" name="cycle" checked={selection.cycle === "yearly"} onChange={() => selectCycle("yearly")} />
+                <span>{`Anual - economize ${money.format(pricing.discount)}`}</span>
+                <small>{`${money.format(pricing.monthlyEquivalent)}/mês, total de ${money.format(pricing.yearly)}`}</small>
+              </label>
+            </fieldset>
+          </div>
+
+          {selection.cycle === "yearly" && (
+            <fieldset className="annual-payment-options">
+              <legend>Como prefere pagar o plano anual?</legend>
+              <button
+                className={billingType === "PIX" ? "active" : ""}
+                type="button"
+                onClick={() => {
+                  setAnnualBillingType("PIX");
+                  setResult(null);
+                  setError("");
+                }}
+              >
+                <ReceiptText size={21} />
+                <span><strong>Pix à vista</strong><small>{money.format(offer.value)} com desconto</small></span>
+                {billingType === "PIX" && <CircleCheck size={18} />}
+              </button>
+              <button
+                className={billingType === "CREDIT_CARD" ? "active" : ""}
+                type="button"
+                onClick={() => {
+                  setAnnualBillingType("CREDIT_CARD");
+                  setResult(null);
+                  setError("");
+                }}
+              >
+                <CreditCard size={21} />
+                <span><strong>Cartão em até 12x</strong><small>{`${money.format(offer.value)} no total, sem juros`}</small></span>
+                {billingType === "CREDIT_CARD" && <CircleCheck size={18} />}
+              </button>
+            </fieldset>
+          )}
+
+          <div className="payment-method-card" aria-label="Forma de pagamento">
+            <span>Forma de pagamento</span>
+            <strong>{paymentLabel}</strong>
+            <p>{paymentHint}</p>
+          </div>
+
+          <div className="checkout-fields">
+            <label>
+              Nome
+              <input name="name" defaultValue={user.name} required />
+            </label>
+            <label>
+              E-mail
+              <input name="email" type="email" defaultValue={user.email} required />
+            </label>
+            <label>
+              Telefone
+              <input name="phone" type="tel" defaultValue={user.phone || ""} required />
+            </label>
+            <label>
+              CPF/CNPJ
+              <input name="cpfCnpj" inputMode="numeric" placeholder="Somente números" required />
+            </label>
+          </div>
+
+          {billingType === "CREDIT_CARD" && (
+            <div className="checkout-fields card-fields">
+              <label className="wide">
+                Nome impresso no cartão
+                <input name="card_holder" placeholder="Como aparece no cartão" required />
+              </label>
+              <label className="wide">
+                Número do cartão
+                <input name="card_number" inputMode="numeric" autoComplete="cc-number" placeholder="0000 0000 0000 0000" required />
+              </label>
+              <label>
+                Mes
+                <input name="card_month" inputMode="numeric" autoComplete="cc-exp-month" placeholder="MM" required />
+              </label>
+              <label>
+                Ano
+                <input name="card_year" inputMode="numeric" autoComplete="cc-exp-year" placeholder="AAAA" required />
+              </label>
+              <label>
+                CVV
+                <input name="card_ccv" inputMode="numeric" autoComplete="cc-csc" placeholder="123" required />
+              </label>
+              <label>
+                CEP
+                <input name="postal_code" inputMode="numeric" autoComplete="postal-code" required />
+              </label>
+              <label>
+                Numero
+                <input name="address_number" inputMode="numeric" required />
+              </label>
+            </div>
+          )}
+
+          {error && <p className="form-error">{error}</p>}
+          <button className="login-submit" type="submit" disabled={submitting}>
+            <CreditCard size={19} />
+            {submitting
+              ? "Gerando pagamento..."
+              : billingType === "PIX"
+                ? "Gerar Pix anual"
+                : selection.cycle === "yearly"
+                  ? "Pagar anual em até 12x"
+                  : "Assinar plano mensal"}
+          </button>
+        </form>
+
+        <aside className="checkout-summary">
+          <span>{selection.cycle === "monthly" ? "Mensal" : billingType === "PIX" ? "Anual no Pix" : "Anual no cartão"}</span>
+          <h2>{offer.title}</h2>
+          <strong>{offer.displayPrice}</strong>
+          {selection.cycle === "yearly" && billingType === "PIX" && <small>{`Cobrado uma vez no Pix: ${money.format(offer.value)}`}</small>}
+          {selection.cycle === "yearly" && billingType === "CREDIT_CARD" && <small>{`Até 12x sem juros, total de ${money.format(offer.value)}`}</small>}
+          {selection.cycle === "monthly" && <small>{`${money.format(offer.yearlyBase)} se mantiver por 12 meses`}</small>}
+          {selection.cycle === "yearly" && <small>{`Economia de ${money.format(offer.discount)} no ano`}</small>}
+          <p>{offer.description}</p>
+          {result && (
+            <div className="checkout-result">
+              <b>{result.message}</b>
+              {!isPaidCheckoutStatus(result.status) && checkingPayment && (
+                <small className="payment-status">
+                  <RefreshCw size={15} />
+                  Conferindo a confirmação no Asaas...
+                </small>
+              )}
+              {isPaidCheckoutStatus(result.status) && (
+                <small className="payment-status payment-status-paid">
+                  <UnlockKeyhole size={15} />
+                  Plano liberado na sua conta
+                </small>
+              )}
+              {result.pixQrCode?.encodedImage && (
+                <img src={`data:image/png;base64,${result.pixQrCode.encodedImage}`} alt="QR Code Pix" />
+              )}
+              {result.pixQrCode?.payload && (
+                <textarea readOnly value={result.pixQrCode.payload} />
+              )}
+              {result.invoiceUrl && (
+                <a href={result.invoiceUrl} target="_blank" rel="noreferrer">
+                  Abrir fatura segura Asaas
+                </a>
+              )}
+            </div>
+          )}
+        </aside>
+      </div>
+    </section>
+  );
+}
+
+function isPaidCheckoutStatus(status = "") {
+  return ["paid", "RECEIVED", "CONFIRMED", "RECEIVED_IN_CASH"].includes(status);
+}
+
+function checkoutOffer(settings: SettingsMap, selection: CheckoutSelection) {
+  const title = selection.plan === "scale" ? "Plano ilimitado" : "Plano 10 pesquisas";
+  const pricing = planPricing(settings, selection.plan);
+  const value = selection.cycle === "yearly" ? pricing.yearly : pricing.monthly;
+  const monthlyEquivalent = selection.cycle === "yearly" ? pricing.monthlyEquivalent : pricing.monthly;
+  return {
+    title,
+    value,
+    monthlyEquivalent,
+    displayPrice: money.format(monthlyEquivalent),
+    yearlyBase: pricing.yearlyBase,
+    monthlyValue: pricing.monthly,
+    discount: pricing.discount,
+    discountPercent: pricing.discountPercent,
+    description: selection.plan === "scale"
+      ? "Pesquisas ilimitadas, faturamento dos campeões e cálculo de ganho por produto."
+      : "10 pesquisas completas, faturamento dos campeões e cálculo de ganho por produto.",
+  };
+}
+
+function planPricing(settings: SettingsMap, plan: PaidPlan) {
+  const monthlyKey = plan === "scale" ? "scale_monthly" : "starter_monthly";
+  const yearlyKey = plan === "scale" ? "scale_yearly" : "starter_yearly";
+  const monthlyFallback = plan === "scale" ? 39.9 : 19.9;
+  const yearlyFallback = plan === "scale" ? 359.1 : 179.1;
+  const monthly = Number(settings[monthlyKey] || monthlyFallback);
+  const yearly = Number(settings[yearlyKey] || yearlyFallback);
+  const yearlyBase = Number((monthly * 12).toFixed(2));
+  const discount = Number(Math.max(0, yearlyBase - yearly).toFixed(2));
+  const discountPercent = yearlyBase > 0 ? Math.round((discount / yearlyBase) * 100) : 0;
+  const monthlyEquivalent = Math.round((yearly / 12 + Number.EPSILON) * 100) / 100;
+
+  return {
+    monthly,
+    yearly,
+    monthlyEquivalent,
+    yearlyBase,
+    discount,
+    discountPercent,
+  };
 }
 
 function LearnPage({ tips }: { tips: Tip[] }) {
@@ -1344,17 +2722,146 @@ function LearnPage({ tips }: { tips: Tip[] }) {
 function CommercialPage({ contacts, cta }: { contacts: Contact[]; cta?: string }) {
   return (
     <section className="bv-page simple-page">
-      <h1>{cta || "Falar com Comercial Confweb"}</h1>
+      <h1>{cta || "Fale com um Especialista Certificado da Confweb"}</h1>
       <p>Contatos gerenciados pelo painel admin.</p>
       <div className="contact-grid">
-        {contacts.map((contact) => (
-          <article className="contact-card" key={contact.id}>
-            <MessageCircle size={25} />
-            <strong>{contact.name}</strong>
-            <span>{contact.channel}</span>
-            <p>{contact.value}</p>
-          </article>
-        ))}
+        {contacts.map((contact) => {
+          const href = contactHref(contact);
+
+          return (
+            <article className="contact-card" key={contact.id}>
+              <MessageCircle size={25} />
+              <strong>{contact.name}</strong>
+              <span>{contact.channel}</span>
+              {href ? (
+                <a className="contact-link" href={href} target="_blank" rel="noreferrer">
+                  {contactDisplayValue(contact)}
+                </a>
+              ) : (
+                <p>{contact.value}</p>
+              )}
+            </article>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function ProfilePage({
+  user,
+  settings,
+  onLoginRequired,
+  onPlans,
+}: {
+  user: User | null;
+  settings: SettingsMap;
+  onLoginRequired: () => boolean;
+  onPlans: () => void;
+}) {
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+
+  if (!user) {
+    return <AccessPrompt title="Entre para acessar seu perfil" onLoginRequired={onLoginRequired} />;
+  }
+
+  const { planLabel, remaining, usage } = userPlanInfo(user);
+
+  const submitPassword = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const values = formJson(form) as Record<string, string>;
+
+    setError("");
+    setMessage("");
+
+    if (values.newPassword !== values.confirmPassword) {
+      setError("A confirmação da nova senha não bate.");
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const response = await api<{ message: string }>("/api/account/password", {
+        method: "POST",
+        body: JSON.stringify({
+          currentPassword: values.currentPassword,
+          newPassword: values.newPassword,
+        }),
+      });
+      form.reset();
+      setMessage(response.message || "Senha atualizada com sucesso.");
+    } catch (apiError) {
+      setError(apiError instanceof Error ? apiError.message : "Não foi possível alterar a senha.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <section className="bv-page simple-page profile-page">
+      <h1>Perfil</h1>
+      <p>Gerencie seus dados de acesso e acompanhe seu plano atual.</p>
+      <div className="profile-grid">
+        <article className="profile-card profile-account-card">
+          <span className="account-avatar">{userInitials(user)}</span>
+          <div className="profile-account-copy">
+            <span>Conta</span>
+            <strong>{user.name}</strong>
+            <p>{user.email}</p>
+            {user.phone && <p>{user.phone}</p>}
+          </div>
+          <div className="profile-metrics">
+            <span>Plano atual</span>
+            <strong>{planLabel}</strong>
+            <small>Pesquisas restantes: {remaining}</small>
+            <div className="usage-track">
+              <i style={{ width: `${usage}%` }} />
+            </div>
+          </div>
+          <button type="button" onClick={onPlans}>
+            Ver planos desde {money.format(Number(settings.starter_monthly || 19.9))}
+          </button>
+        </article>
+
+        <form className="profile-card profile-password-form" onSubmit={submitPassword}>
+          <Lock size={24} />
+          <div className="profile-security-copy">
+            <span>Segurança</span>
+            <strong>Alterar senha</strong>
+            <p>Use uma senha forte e guarde em local seguro.</p>
+          </div>
+          <label>
+            Senha atual
+            <div className="password-field">
+              <input name="currentPassword" type={showPassword ? "text" : "password"} autoComplete="current-password" required />
+              <button
+                type="button"
+                onClick={() => setShowPassword((visible) => !visible)}
+                aria-label={showPassword ? "Ocultar senhas" : "Mostrar senhas"}
+                title={showPassword ? "Ocultar senhas" : "Mostrar senhas"}
+              >
+                {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+              </button>
+            </div>
+          </label>
+          <label>
+            Nova senha
+            <input name="newPassword" type={showPassword ? "text" : "password"} minLength={6} autoComplete="new-password" required />
+          </label>
+          <label>
+            Confirmar nova senha
+            <input name="confirmPassword" type={showPassword ? "text" : "password"} minLength={6} autoComplete="new-password" required />
+          </label>
+          {message && <p className="success-text">{message}</p>}
+          {error && <p className="form-error">{error}</p>}
+          <button type="submit" disabled={submitting}>
+            {submitting ? "Salvando..." : "Salvar nova senha"}
+          </button>
+        </form>
       </div>
     </section>
   );
@@ -1449,15 +2956,33 @@ function LoginModal({
     event.preventDefault();
     setSubmitting(true);
     setError("");
+    const controller = new AbortController();
+    let finished = false;
+    let timedOut = false;
+    const timer = window.setTimeout(() => {
+      if (finished) {
+        return;
+      }
+      timedOut = true;
+      controller.abort();
+      setError("O servidor demorou para responder. Reinicie o app Node no cPanel e tente novamente.");
+      setSubmitting(false);
+    }, 7000);
     try {
       const data = await api<{ user: User }>(authMode === "login" ? "/api/auth/login" : "/api/auth/register", {
         method: "POST",
+        signal: controller.signal,
         body: JSON.stringify(formJson(event.currentTarget)),
       });
+      finished = true;
       onLogin(data.user);
     } catch (apiError) {
-      setError(apiError instanceof Error ? apiError.message : "Não foi possível entrar.");
+      if (!finished && !timedOut) {
+        setError(apiError instanceof Error ? apiError.message : "Não foi possível entrar.");
+      }
     } finally {
+      finished = true;
+      window.clearTimeout(timer);
       setSubmitting(false);
     }
   };
@@ -1526,7 +3051,7 @@ function LoginModal({
 }
 
 function AdminPanel({ user, onSettingsChange }: { user: User; onSettingsChange: () => void }) {
-  const [tab, setTab] = useState<"overview" | "users" | "finance" | "contacts" | "tips" | "support" | "settings">("overview");
+  const [tab, setTab] = useState<"overview" | "searches" | "users" | "finance" | "contacts" | "tips" | "support" | "settings">("overview");
   const [data, setData] = useState<AdminData | null>(null);
   const [message, setMessage] = useState("");
 
@@ -1583,6 +3108,7 @@ function AdminPanel({ user, onSettingsChange }: { user: User; onSettingsChange: 
 
   const tabs: { id: typeof tab; label: string; Icon: LucideIcon }[] = [
     { id: "overview", label: "Visão geral", Icon: LayoutDashboard },
+    { id: "searches", label: "Base de pesquisas", Icon: Database },
     { id: "users", label: "Usuários", Icon: UsersRound },
     { id: "finance", label: "Financeiro", Icon: CreditCard },
     { id: "contacts", label: "Comercial", Icon: MessageCircle },
@@ -1596,7 +3122,7 @@ function AdminPanel({ user, onSettingsChange }: { user: User; onSettingsChange: 
       <div className="admin-header">
         <div>
           <h1>Painel admin</h1>
-          <p>Controle operacao, financeiro, usuarios, suporte, dicas e integracao Oxylabs.</p>
+          <p>Controle operação, financeiro, usuários, suporte, dicas e integrações de dados e pagamentos.</p>
         </div>
         {message && <span>{message}</span>}
       </div>
@@ -1609,6 +3135,7 @@ function AdminPanel({ user, onSettingsChange }: { user: User; onSettingsChange: 
         ))}
       </div>
       {tab === "overview" && <AdminOverview data={data} />}
+      {tab === "searches" && <AdminSearchCache />}
       {tab === "users" && <AdminUsers currentUser={user} users={data.users} afterSave={afterSave} />}
       {tab === "finance" && <AdminFinance finance={data.finance} users={data.users} afterSave={afterSave} />}
       {tab === "contacts" && <AdminContacts contacts={data.contacts} afterSave={afterSave} />}
@@ -1617,6 +3144,165 @@ function AdminPanel({ user, onSettingsChange }: { user: User; onSettingsChange: 
       {tab === "settings" && <AdminSettings settings={data.settings} afterSave={afterSave} />}
     </section>
   );
+}
+
+function AdminSearchCache() {
+  const [data, setData] = useState<AdminSearchCacheData | null>(null);
+  const [filter, setFilter] = useState("");
+  const [busyKey, setBusyKey] = useState("");
+  const [message, setMessage] = useState("");
+
+  const load = async (query = filter) => {
+    const params = new URLSearchParams();
+    if (query.trim()) {
+      params.set("q", query.trim());
+    }
+    const suffix = params.toString();
+    const response = await api<AdminSearchCacheData>(`/api/admin/search-cache${suffix ? `?${suffix}` : ""}`);
+    setData(response);
+  };
+
+  useEffect(() => {
+    load("");
+  }, []);
+
+  const submitFilter = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setMessage("");
+    await load(filter);
+  };
+
+  const refresh = async (record: AdminSearchCacheRecord) => {
+    setBusyKey(record.key);
+    setMessage("");
+    try {
+      const response = await api<{ message?: string }>("/api/admin/search-cache/refresh", {
+        method: "POST",
+        body: JSON.stringify({ key: record.key }),
+      });
+      setMessage(response.message || `Pesquisa "${record.query}" atualizada.`);
+      await load();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Não foi possível atualizar a pesquisa.");
+    } finally {
+      setBusyKey("");
+    }
+  };
+
+  const remove = async (record: AdminSearchCacheRecord) => {
+    if (!window.confirm(`Excluir "${record.query}" da base compartilhada e dos históricos associados?`)) {
+      return;
+    }
+    setBusyKey(record.key);
+    setMessage("");
+    try {
+      await api("/api/admin/search-cache", {
+        method: "DELETE",
+        body: JSON.stringify({ key: record.key }),
+      });
+      setMessage(`Pesquisa "${record.query}" excluída da base interna.`);
+      await load();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Não foi possível excluir a pesquisa.");
+    } finally {
+      setBusyKey("");
+    }
+  };
+
+  if (!data) {
+    return <LoadingScreen />;
+  }
+
+  return (
+    <div className="admin-section search-cache-admin">
+      <div className="cache-admin-intro">
+        <div>
+          <span>Banco compartilhado Confweb</span>
+          <h2>Pesquisas reaproveitadas antes de consultar a API</h2>
+          <p>
+            Quando outro usuário procura o mesmo produto dentro de {data.ttlDays} dias, o Busca Vendas entrega esta base e economiza créditos.
+          </p>
+        </div>
+        <form className="cache-filter" onSubmit={submitFilter}>
+          <Search size={18} />
+          <input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="Buscar produto na base" />
+          <button type="submit">Buscar</button>
+        </form>
+      </div>
+
+      <div className="cache-summary">
+        <Stat title="Pesquisas salvas" value={number.format(data.summary.total)} icon={<Database />} />
+        <Stat title="Bases atualizadas" value={number.format(data.summary.fresh)} icon={<RefreshCw />} />
+        <Stat title="Reaproveitamentos" value={number.format(data.summary.historyUses)} icon={<UsersRound />} />
+        <Stat title="Créditos poupados" value={number.format(data.summary.estimatedCreditsSaved)} icon={<WalletCards />} />
+      </div>
+
+      <div className="cache-legend">
+        <span><i className="fresh" /> Atual: até {data.ttlDays} dias</span>
+        <span><i className="stale" /> Atualização pendente: até {data.staleDays} dias</span>
+        <span><i className="expired" /> Vencida: nova consulta necessária</span>
+        <span>{number.format(data.summary.itemCache)} anúncios individuais reaproveitáveis</span>
+      </div>
+
+      {message && <p className="cache-admin-message">{message}</p>}
+
+      <div className="cache-record-list">
+        {data.records.length ? data.records.map((record) => (
+          <article className="cache-record" key={record.key}>
+            <div className="cache-record-main">
+              <div className="cache-record-title">
+                <span className={`cache-status ${record.status}`}>
+                  {record.status === "fresh" ? "Atual" : record.status === "stale" ? "Atualizar em breve" : "Vencida"}
+                </span>
+                <div>
+                  <h3>{record.query}</h3>
+                  <small>Fonte: {historySourceLabel(record.source)} · Atualizada em {formatCacheDate(record.updated_at)}</small>
+                </div>
+              </div>
+              <div className="cache-record-metrics">
+                <span><small>Top anúncios</small><strong>{record.items_count}</strong></span>
+                <span><small>Vendas</small><strong>{number.format(record.total_demand)}</strong></span>
+                <span><small>Receita</small><strong>{money.format(record.total_revenue)}</strong></span>
+                <span><small>Usada por</small><strong>{number.format(record.users_count)} usuário(s)</strong></span>
+                <span><small>Acessos</small><strong>{number.format(record.usage_count)}</strong></span>
+              </div>
+            </div>
+
+            <details className="cache-record-details">
+              <summary>Ver anúncios salvos</summary>
+              <div>
+                {record.items.slice(0, 3).map((item, index) => (
+                  <a href={item.permalink} target="_blank" rel="noreferrer" key={`${record.key}-${item.id || index}`}>
+                    <b>{index + 1}. {item.title}</b>
+                    <span>{number.format(Number(item.soldQuantity || 0))} vendas · {money.format(Number(item.price || 0))}</span>
+                  </a>
+                ))}
+              </div>
+            </details>
+
+            <div className="cache-record-actions">
+              <button type="button" onClick={() => refresh(record)} disabled={busyKey === record.key}>
+                <RefreshCw size={17} />
+                {busyKey === record.key ? "Atualizando..." : "Atualizar pela API"}
+              </button>
+              <button className="danger" type="button" onClick={() => remove(record)} disabled={busyKey === record.key}>
+                <Trash2 size={17} />
+                Excluir
+              </button>
+            </div>
+          </article>
+        )) : (
+          <p className="muted-box">Nenhuma pesquisa encontrada nesta base.</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function formatCacheDate(value: string) {
+  const normalized = value.includes("T") ? value : `${value.replace(" ", "T")}Z`;
+  const date = new Date(normalized);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString("pt-BR");
 }
 
 function AdminOverview({ data }: { data: AdminData }) {
@@ -1640,8 +3326,18 @@ function Stat({ title, value, icon }: { title: string; value: string; icon: Reac
   );
 }
 
-function AdminUsers({ currentUser, users, afterSave }: { currentUser: User; users: User[]; afterSave: () => void }) {
+function AdminUsers({
+  currentUser,
+  users,
+  afterSave,
+}: {
+  currentUser: User;
+  users: User[];
+  afterSave: (message?: string) => void | Promise<void>;
+}) {
   const creator = isCreator(currentUser);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [deleteError, setDeleteError] = useState("");
 
   const create = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -1656,6 +3352,23 @@ function AdminUsers({ currentUser, users, afterSave }: { currentUser: User; user
     const form = event.currentTarget;
     await api(`/api/admin/users/${userId}`, { method: "PATCH", body: JSON.stringify(formJson(form)) });
     afterSave();
+  };
+
+  const remove = async (item: User) => {
+    if (!window.confirm(`Excluir o usuário "${item.name}" (${item.email})? O acesso e o histórico de pesquisas dessa conta serão removidos.`)) {
+      return;
+    }
+
+    setDeleteError("");
+    setDeletingId(item.id);
+    try {
+      await api(`/api/admin/users/${item.id}`, { method: "DELETE" });
+      await afterSave("Usuário excluído.");
+    } catch (error) {
+      setDeleteError(error instanceof Error ? error.message : "Não foi possível excluir o usuário.");
+    } finally {
+      setDeletingId(null);
+    }
   };
 
   return (
@@ -1679,9 +3392,11 @@ function AdminUsers({ currentUser, users, afterSave }: { currentUser: User; user
         <input name="search_limit" type="number" placeholder="Limite" />
         <button type="submit">Criar usuário</button>
       </form>
+      {deleteError && <p className="form-error">{deleteError}</p>}
       <div className="table-list">
         {users.map((item) => {
           const itemIsCreator = creator && item.email.toLowerCase() === currentUser.email.toLowerCase();
+          const canDelete = item.id !== currentUser.id && (creator || item.role !== "admin");
 
           return (
             <form className="table-row" key={item.id} onSubmit={(event) => update(event, item.id)}>
@@ -1710,7 +3425,21 @@ function AdminUsers({ currentUser, users, afterSave }: { currentUser: User; user
               )}
               <input name="search_limit" type="number" defaultValue={item.search_limit ?? ""} placeholder="Ilimitado" />
               <span>{itemIsCreator ? "Criador" : `${item.searches_used} usadas`}</span>
-              <button type="submit">Salvar</button>
+              <div className="user-row-actions">
+                <button type="submit">Salvar</button>
+                {canDelete && (
+                  <button
+                    className="danger-button"
+                    type="button"
+                    disabled={deletingId === item.id}
+                    onClick={() => remove(item)}
+                    title="Excluir usuário"
+                  >
+                    <Trash2 size={17} />
+                    {deletingId === item.id ? "Excluindo..." : "Excluir"}
+                  </button>
+                )}
+              </div>
             </form>
           );
         })}
@@ -1773,26 +3502,45 @@ function AdminContacts({ contacts, afterSave }: { contacts: Contact[]; afterSave
     afterSave();
   };
 
+  const update = async (event: FormEvent<HTMLFormElement>, contactId: number) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    await api(`/api/admin/commercial-contacts/${contactId}`, { method: "PATCH", body: JSON.stringify(formJson(form)) });
+    afterSave();
+  };
+
   return (
     <div className="admin-section">
       <form className="admin-form" onSubmit={create}>
         <input name="name" placeholder="Nome" required />
-        <input name="channel" placeholder="Canal: WhatsApp, E-mail..." required />
+        <input name="channel" placeholder="Canal: WhatsApp, E-mail, Site..." required />
         <input name="value" placeholder="Contato" required />
         <select name="is_primary" defaultValue="0">
           <option value="1">Principal</option>
           <option value="0">Secundário</option>
         </select>
+        <select name="status" defaultValue="active">
+          <option value="active">Ativo</option>
+          <option value="inactive">Inativo</option>
+        </select>
         <button type="submit">Adicionar contato</button>
       </form>
-      <div className="contact-grid">
+      <div className="table-list">
         {contacts.map((contact) => (
-          <article className="contact-card" key={contact.id}>
-            <MessageCircle size={22} />
-            <strong>{contact.name}</strong>
-            <span>{contact.channel}</span>
-            <p>{contact.value}</p>
-          </article>
+          <form className="table-row contact-admin-row" key={contact.id} onSubmit={(event) => update(event, contact.id)}>
+            <input name="name" defaultValue={contact.name} required />
+            <input name="channel" defaultValue={contact.channel} required />
+            <input name="value" defaultValue={contact.value} required />
+            <select name="is_primary" defaultValue={String(contact.is_primary ? 1 : 0)}>
+              <option value="1">Principal</option>
+              <option value="0">Secundário</option>
+            </select>
+            <select name="status" defaultValue={contact.status}>
+              <option value="active">Ativo</option>
+              <option value="inactive">Inativo</option>
+            </select>
+            <button type="submit">Salvar</button>
+          </form>
         ))}
       </div>
     </div>
@@ -1808,6 +3556,13 @@ function AdminTips({ tips, afterSave }: { tips: Tip[]; afterSave: () => void }) 
     afterSave();
   };
 
+  const update = async (event: FormEvent<HTMLFormElement>, tipId: number) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    await api(`/api/admin/tips/${tipId}`, { method: "PATCH", body: JSON.stringify(formJson(form)) });
+    afterSave();
+  };
+
   return (
     <div className="admin-section">
       <form className="admin-form long" onSubmit={create}>
@@ -1820,13 +3575,18 @@ function AdminTips({ tips, afterSave }: { tips: Tip[]; afterSave: () => void }) 
         </select>
         <button type="submit">Publicar dica</button>
       </form>
-      <div className="learn-grid full">
+      <div className="table-list">
         {tips.map((tip) => (
-          <article className="learn-card" key={tip.id}>
-            <BookOpen size={22} />
-            <strong>{tip.title}</strong>
-            <span>{tip.status}</span>
-          </article>
+          <form className="tip-admin-row" key={tip.id} onSubmit={(event) => update(event, tip.id)}>
+            <input name="title" defaultValue={tip.title} required />
+            <textarea name="body" defaultValue={tip.body} required />
+            <input name="cta" defaultValue={tip.cta} />
+            <select name="status" defaultValue={tip.status}>
+              <option value="published">Publicado</option>
+              <option value="draft">Rascunho</option>
+            </select>
+            <button type="submit">Salvar dica</button>
+          </form>
         ))}
       </div>
     </div>
@@ -1870,7 +3630,19 @@ function AdminSupport({ tickets, afterSave }: { tickets: Ticket[]; afterSave: ()
 function AdminSettings({ settings, afterSave }: { settings: SettingsMap; afterSave: (text?: string) => void }) {
   const [busy, setBusy] = useState(false);
   const [connectError, setConnectError] = useState("");
+  const [asaasEnvironment, setAsaasEnvironment] = useState(settings.asaas_environment || "sandbox");
   const [oxylabsMode, setOxylabsMode] = useState(settings.oxylabs_mode || "web_unblocker");
+  return <AdminSettingsSimple settings={settings} afterSave={afterSave} />;
+
+  const showMeli = true;
+  const showScrapeDo = true;
+  const showZyte = false;
+  const showOxylabs = settings.oxylabs_enabled === "true";
+  const zyteSearchPages = settings.zyte_search_pages || "4";
+  const zyteDetailLimit = settings.zyte_detail_limit || "60";
+  const zyteIpType = settings.zyte_ip_type || "auto";
+  const cacheTtlDays = settings.market_cache_ttl_days || "7";
+  const minChampionSales = settings.min_champion_sales || "1000";
   const oxylabsEndpoint = oxylabsMode === "web_unblocker"
     ? "https://unblock.oxylabs.io:60000"
     : "https://realtime.oxylabs.io/v1/queries";
@@ -1879,13 +3651,80 @@ function AdminSettings({ settings, afterSave }: { settings: SettingsMap; afterSa
     event.preventDefault();
     const form = event.currentTarget;
     const payload = formJson(form);
-    for (const key of ["oxylabs_password"]) {
+    payload.scrapedo_enabled = "true";
+    payload.scrapedo_endpoint = "https://api.scrape.do/";
+    payload.scrapedo_search_pages = "2";
+    payload.scrapedo_detail_limit = "9";
+    payload.zyte_search_enabled = "false";
+    payload.zyte_mode = "browser_html";
+    payload.zyte_endpoint = "https://api.zyte.com/v1/extract";
+    payload.zyte_search_pages = "4";
+    payload.zyte_detail_limit = "60";
+    payload.meli_scraper_enabled = "false";
+    payload.proxy_enabled = "false";
+    payload.proxy_url = "";
+    payload.min_champion_sales = "1000";
+    payload.market_cache_ttl_days = "7";
+    for (const key of ["asaas_api_key", "asaas_webhook_token", "meli_client_secret", "scrapedo_api_token", "proxy_password", "zyte_api_key", "oxylabs_password"]) {
       if (!payload[key]) {
         delete payload[key];
       }
     }
     await api("/api/admin/settings", { method: "PATCH", body: JSON.stringify(payload) });
-    afterSave("Configuracoes Oxylabs salvas.");
+    afterSave("Configurações de dados salvas.");
+  };
+
+  const testMeliCatalog = async () => {
+    setConnectError("");
+    setBusy(true);
+    try {
+      const data = await api<{ message?: string }>("/api/admin/meli/catalog-test", { method: "POST" });
+      afterSave(data.message || "Catálogo oficial conectado com sucesso.");
+    } catch (error) {
+      setConnectError(error instanceof Error ? error.message : "Falha ao testar o catálogo oficial.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const testAsaas = async () => {
+    setConnectError("");
+    setBusy(true);
+    try {
+      const data = await api<{ message?: string }>("/api/admin/asaas/test", { method: "POST" });
+      afterSave(data.message || "Asaas conectada com sucesso.");
+    } catch (error) {
+      setConnectError(error instanceof Error ? error.message : "Falha ao testar Asaas.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const testZyte = async () => {
+    setConnectError("");
+    setBusy(true);
+    try {
+      const data = await api<{ message?: string }>("/api/admin/zyte/test", { method: "POST" });
+      afterSave(data.message || "Zyte conectada com sucesso.");
+    } catch (error) {
+      setConnectError(error instanceof Error ? error.message : "Falha ao testar Zyte.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const testScrapeDo = async () => {
+    setConnectError("");
+    setBusy(true);
+    try {
+      const data = await api<{ message?: string; remainingCredits?: number }>("/api/admin/scrapedo/test", { method: "POST" });
+      const credits = Number(data.remainingCredits || 0);
+      afterSave(credits > 0 ? `Scrape.do conectada. ${number.format(credits)} créditos disponíveis.` : data.message || "Scrape.do conectada com sucesso.");
+    } catch (error) {
+      setConnectError(error instanceof Error ? error.message : "Falha ao testar Scrape.do.");
+    } finally {
+      setBusy(false);
+    }
   };
 
   const testOxylabs = async () => {
@@ -1903,83 +3742,667 @@ function AdminSettings({ settings, afterSave }: { settings: SettingsMap; afterSa
 
   return (
     <div className="admin-section">
+      {showMeli && (
+        <section className="meli-connect-card">
+          <div>
+            <span>{settings.meli_oauth_connected ? "Fonte oficial conectada" : "Aguardando OAuth"}</span>
+            <h2>Catálogo oficial Mercado Livre</h2>
+            <p>
+              Usa catálogo, anúncio vencedor e ranking de mais vendidos. Esta é a primeira fonte da pesquisa e fica invisível para o cliente.
+            </p>
+            <div className="credential-status">
+              <b>App ID: {settings.meli_client_id ? "configurado" : "pendente"}</b>
+              <b>Secret: {settings.meli_client_secret_configured ? "configurada" : "pendente"}</b>
+              <b>OAuth: {settings.meli_oauth_connected ? "conectado" : "pendente"}</b>
+            </div>
+            <small>Salve App ID e Secret antes de conectar. O teste usa “creatina 1kg” e não consome pesquisa de cliente.</small>
+            {settings.meli_last_error && <strong className="oauth-error">{settings.meli_last_error}</strong>}
+            {connectError && <strong className="oauth-error">{connectError}</strong>}
+          </div>
+          <div className="meli-actions">
+            {settings.meli_oauth_connected ? (
+              <button className="connect-button" type="button" onClick={testMeliCatalog} disabled={busy}>
+                <Search size={18} />
+                {busy ? "Testando..." : "Testar catálogo"}
+              </button>
+            ) : (
+              <button
+                className="connect-button"
+                type="button"
+                onClick={() => window.location.assign("/api/admin/meli/connect")}
+                disabled={busy || !settings.meli_client_id || !settings.meli_client_secret_configured}
+              >
+                <LogIn size={18} />
+                Conectar Mercado Livre
+              </button>
+            )}
+          </div>
+        </section>
+      )}
+
       <section className="meli-connect-card">
         <div>
-          <span>{settings.oxylabs_connected ? "Conectado" : "Aguardando credenciais"}</span>
-          <h2>Oxylabs Web Unblocker</h2>
+          <span>{settings.asaas_connected ? "Pagamentos conectados" : "Aguardando API Key"}</span>
+          <h2>Asaas Pagamentos</h2>
           <p>
-            Configure o usuario e senha do produto Oxylabs que voce criou. Os compradores nao veem nem preenchem esses dados.
+            Configure Pix anual, cartão mensal e webhook. Os compradores pagam pela tela de checkout e o webhook libera o plano automaticamente.
           </p>
           <div className="credential-status">
-            <b>Usuario: {settings.oxylabs_username ? "configurado" : "pendente"}</b>
-            <b>Senha: {settings.oxylabs_password_configured ? "configurada" : "pendente"}</b>
+            <b>API Key: {settings.asaas_api_key_configured ? "configurada" : "pendente"}</b>
+            <b>Ambiente: {asaasEnvironment === "production" ? "produção" : "sandbox"}</b>
+            <b>Webhook: {settings.asaas_webhook_token_configured ? "token configurado" : "token pendente"}</b>
           </div>
-          <small>Para a tela "Integracao com o Desbloqueador Web", use Web Unblocker Proxy.</small>
-          {settings.oxylabs_last_error && <strong className="oauth-error">{settings.oxylabs_last_error}</strong>}
+          <small>Webhook para cadastrar no Asaas: {settings.asaas_webhook_url || "/api/asaas/webhook"}</small>
+          {settings.asaas_last_error && <strong className="oauth-error">{settings.asaas_last_error}</strong>}
           {connectError && <strong className="oauth-error">{connectError}</strong>}
         </div>
         <div className="meli-actions">
-          <button className="connect-button" type="button" onClick={testOxylabs} disabled={busy || !settings.oxylabs_connected}>
+          <button className="connect-button" type="button" onClick={testAsaas} disabled={busy || !settings.asaas_connected}>
             <LogIn size={18} />
-            {busy ? "Testando..." : "Testar Oxylabs"}
+            {busy ? "Testando..." : "Testar Asaas"}
           </button>
         </div>
       </section>
 
-      <form className="settings-grid" onSubmit={submit}>
-        <label>
-          Tipo de integracao
-          <select name="oxylabs_mode" value={oxylabsMode} onChange={(event) => setOxylabsMode(event.target.value)}>
-            <option value="web_unblocker">Web Unblocker Proxy</option>
-            <option value="web_scraper_api">Web Scraper API Realtime</option>
-          </select>
-          <small className="field-hint">Use Web Unblocker Proxy para as credenciais do print da Oxylabs.</small>
-        </label>
-        <label>
-          Oxylabs Username
-          <input name="oxylabs_username" defaultValue={settings.oxylabs_username || ""} placeholder="Usuario da API Oxylabs" />
-          <small className="field-hint">Copie o Nome de usuario exibido na Oxylabs.</small>
-        </label>
-        <label>
-          Oxylabs Password
-          <input name="oxylabs_password" type="password" placeholder={settings.oxylabs_password_configured ? "Senha configurada" : "Senha da API Oxylabs"} />
-          <small className="field-hint">
-            {settings.oxylabs_password_configured ? "Senha ja configurada. Deixe em branco para manter." : "Cole a senha do API User da Oxylabs."}
-          </small>
-        </label>
-        <label>
-          Regiao da consulta
-          <input name="oxylabs_geo_location" defaultValue={settings.oxylabs_geo_location || "Brazil"} />
-          <small className="field-hint">Use Brazil para buscar como usuario brasileiro.</small>
-        </label>
-        <label>
-          Endpoint Oxylabs
-          <input key={oxylabsMode} name="oxylabs_endpoint" defaultValue={oxylabsEndpoint} />
-          <small className="field-hint">
-            {oxylabsMode === "web_unblocker" ? "Padrao do Desbloqueador Web: unblock.oxylabs.io:60000." : "Padrao da API Realtime: realtime.oxylabs.io/v1/queries."}
-          </small>
-        </label>
-        <label>
-          Plano 10 pesquisas mensal
-          <input name="starter_monthly" defaultValue={settings.starter_monthly} />
-        </label>
-        <label>
-          Plano 10 pesquisas anual
-          <input name="starter_yearly" defaultValue={settings.starter_yearly} />
-        </label>
-        <label>
-          Plano ilimitado mensal
-          <input name="scale_monthly" defaultValue={settings.scale_monthly} />
-        </label>
-        <label>
-          Plano ilimitado anual
-          <input name="scale_yearly" defaultValue={settings.scale_yearly} />
-        </label>
-        <label className="wide">
-          CTA comercial
-          <input name="commercial_cta" defaultValue={settings.commercial_cta} />
-        </label>
-        <button type="submit">Salvar configuracoes</button>
+      {showScrapeDo && (
+        <section className="meli-connect-card">
+          <div>
+            <span>{settings.scrapedo_connected ? "Fallback residencial conectado" : "Aguardando token"}</span>
+            <h2>Scrape.do</h2>
+            <p>
+              Completa as categorias em que a fonte oficial não retornar três anúncios. O cliente não vê nem configura esta integração.
+            </p>
+            <div className="credential-status">
+              <b>Token: {settings.scrapedo_api_token_configured ? "configurado" : "pendente"}</b>
+              <b>Rede: residencial brasileira</b>
+              <b>Uso: somente após a fonte oficial</b>
+              <b>Cache: {cacheTtlDays} dias</b>
+            </div>
+            <small>O plano gratuito permite validar a integração antes de contratar.</small>
+            {settings.scrapedo_last_error && <strong className="oauth-error">{settings.scrapedo_last_error}</strong>}
+            {connectError && <strong className="oauth-error">{connectError}</strong>}
+          </div>
+          <div className="meli-actions">
+            <button className="connect-button" type="button" onClick={testScrapeDo} disabled={busy || !settings.scrapedo_connected}>
+              <Search size={18} />
+              {busy ? "Testando..." : "Testar Scrape.do"}
+            </button>
+          </div>
+        </section>
+      )}
+
+      {showZyte && (
+      <section className="meli-connect-card">
+        <div>
+          <span>{settings.zyte_connected ? "Fallback conectado" : "Fallback opcional"}</span>
+          <h2>Zyte API</h2>
+          <p>
+            A Zyte só será consultada quando o catálogo oficial não completar três resultados reais.
+          </p>
+          <div className="credential-status">
+            <b>API Key: {settings.zyte_api_key_configured ? "configurada" : "pendente"}</b>
+            <b>Uso: automático como reserva</b>
+            <b>Leitura: lista estruturada + HTML</b>
+            <b>IP: {zyteIpType === "residential" ? "residencial brasileiro" : "automático"}</b>
+            <b>Cache: {cacheTtlDays} dias</b>
+          </div>
+          <small>Não precisa configurar Mercado Livre, proxy ou navegador local para o cliente usar a ferramenta.</small>
+          {settings.zyte_last_error && (
+            <div className="integration-warning">
+              <strong>Zyte conectada, mas sem Top 3 completo nessa última busca.</strong>
+              <span>{settings.zyte_last_error}</span>
+              <small>Quando a Zyte não entregar 3 anúncios completos, a busca não será consumida do cliente.</small>
+            </div>
+          )}
+          {connectError && <strong className="oauth-error">{connectError}</strong>}
+        </div>
+        <div className="meli-actions">
+          <button className="connect-button" type="button" onClick={testZyte} disabled={busy || !settings.zyte_connected}>
+            <LogIn size={18} />
+            {busy ? "Testando..." : "Testar Zyte"}
+          </button>
+        </div>
+      </section>
+      )}
+
+      {showOxylabs && (
+        <section className="meli-connect-card">
+          <div>
+            <span>{settings.oxylabs_connected ? "Fallback conectado" : "Fallback opcional"}</span>
+            <h2>Oxylabs Web Unblocker</h2>
+            <p>
+              Mantenha a Oxylabs como fallback premium se quiser. Os compradores não veem nem preenchem esses dados.
+            </p>
+            <div className="credential-status">
+              <b>Usuário: {settings.oxylabs_username ? "configurado" : "pendente"}</b>
+              <b>Senha: {settings.oxylabs_password_configured ? "configurada" : "pendente"}</b>
+            </div>
+            <small>Para a tela "Integracao com o Desbloqueador Web", use Web Unblocker Proxy.</small>
+            {settings.oxylabs_last_error && <strong className="oauth-error">{settings.oxylabs_last_error}</strong>}
+            {connectError && <strong className="oauth-error">{connectError}</strong>}
+          </div>
+          <div className="meli-actions">
+            <button className="connect-button" type="button" onClick={testOxylabs} disabled={busy || !settings.oxylabs_connected}>
+              <LogIn size={18} />
+              {busy ? "Testando..." : "Testar Oxylabs"}
+            </button>
+          </div>
+        </section>
+      )}
+
+      <form className="settings-form" onSubmit={submit}>
+        {showMeli && (
+          <section className="settings-card">
+            <div className="settings-card-title">
+              <span>Pesquisa oficial</span>
+              <h3>Mercado Livre</h3>
+              <p>Credenciais usadas somente pelo servidor para consultar catálogo e ranking de mais vendidos.</p>
+            </div>
+            <div className="settings-grid">
+              <label>
+                Mercado Livre App ID
+                <input name="meli_client_id" defaultValue={settings.meli_client_id || ""} inputMode="numeric" />
+                <small className="field-hint">Número da aplicação no DevCenter.</small>
+              </label>
+              <label>
+                Mercado Livre Secret Key
+                <input
+                  name="meli_client_secret"
+                  type="password"
+                  placeholder={settings.meli_client_secret_configured ? "Secret configurada" : "Cole a Secret Key"}
+                />
+                <small className="field-hint">
+                  {settings.meli_client_secret_configured ? "Secret já configurada. Deixe em branco para manter." : "A chave nunca é enviada ao navegador do cliente."}
+                </small>
+              </label>
+              <label className="wide">
+                Redirect URI
+                <input name="meli_redirect_uri" defaultValue={settings.meli_redirect_uri || ""} readOnly />
+                <small className="field-hint">Cadastre exatamente esta URL no aplicativo do Mercado Livre.</small>
+              </label>
+            </div>
+          </section>
+        )}
+
+        <section className="settings-card">
+          <div className="settings-card-title">
+            <span>Pagamentos</span>
+            <h3>Asaas</h3>
+            <p>Chave de cobrança, Pix, cartão e webhook que libera o plano depois do pagamento.</p>
+          </div>
+          <div className="settings-grid">
+            <label>
+              Asaas API Key
+              <input name="asaas_api_key" type="password" placeholder={settings.asaas_api_key_configured ? "API Key configurada" : "Cole a API Key da Asaas"} />
+              <small className="field-hint">
+                {settings.asaas_api_key_configured ? "API Key ja configurada. Deixe em branco para manter." : "Use a chave do ambiente escolhido."}
+              </small>
+            </label>
+            <label>
+              Ambiente Asaas
+              <select name="asaas_environment" value={asaasEnvironment} onChange={(event) => setAsaasEnvironment(event.target.value)}>
+                <option value="sandbox">Sandbox</option>
+                <option value="production">Producao</option>
+              </select>
+              <small className="field-hint">Sandbox para testes; produção para cobrar clientes reais.</small>
+            </label>
+            <label>
+              Endpoint Asaas
+              <input
+                name="asaas_endpoint"
+                defaultValue={settings.asaas_endpoint || (asaasEnvironment === "production" ? "https://api.asaas.com/v3" : "https://api-sandbox.asaas.com/v3")}
+              />
+              <small className="field-hint">Use o endpoint do mesmo ambiente da chave.</small>
+            </label>
+            <label>
+              Token webhook Asaas
+              <input name="asaas_webhook_token" type="password" placeholder={settings.asaas_webhook_token_configured ? "Token configurado" : "Crie um token forte"} />
+              <small className="field-hint">Cadastre o mesmo token no painel Asaas em Webhooks.</small>
+            </label>
+            <label className="wide">
+              URL webhook Asaas
+              <input readOnly value={settings.asaas_webhook_url || "/api/asaas/webhook"} />
+              <small className="field-hint">Copie esta URL para o painel Asaas depois que o domínio estiver no ar.</small>
+            </label>
+          </div>
+        </section>
+
+        {showScrapeDo && (
+          <section className="settings-card">
+            <div className="settings-card-title">
+              <span>Fallback residencial</span>
+              <h3>Scrape.do</h3>
+              <p>Um token no servidor. Rede brasileira, rotação de IP e navegador ficam automáticos.</p>
+            </div>
+            <div className="settings-grid">
+              <label className="wide">
+                Token Scrape.do
+                <input
+                  name="scrapedo_api_token"
+                  type="password"
+                  placeholder={settings.scrapedo_api_token_configured ? "Token configurado" : "Cole o token da Scrape.do"}
+                />
+                <small className="field-hint">
+                  {settings.scrapedo_api_token_configured ? "Token já configurado. Deixe em branco para manter." : "Copie o token exibido no dashboard da Scrape.do."}
+                </small>
+              </label>
+              <div className="settings-summary-grid wide" aria-label="Configuração automática da Scrape.do">
+                <div>
+                  <span>Prioridade</span>
+                  <strong>Depois da API oficial</strong>
+                </div>
+                <div>
+                  <span>Rede</span>
+                  <strong>Residencial Brasil</strong>
+                </div>
+                <div>
+                  <span>Profundidade</span>
+                  <strong>2 páginas / 9 anúncios</strong>
+                </div>
+                <div>
+                  <span>Base interna</span>
+                  <strong>Cache por {cacheTtlDays} dias</strong>
+                </div>
+              </div>
+            </div>
+          </section>
+        )}
+
+        {showZyte && (
+        <section className="settings-card">
+          <div className="settings-card-title">
+            <span>Fallback opcional</span>
+            <h3>Zyte</h3>
+            <p>Use somente como reserva para categorias que não completarem o Top 3 pela fonte oficial.</p>
+          </div>
+          <div className="settings-grid">
+            <label className="wide">
+              Zyte API Key
+              <input name="zyte_api_key" type="password" placeholder={settings.zyte_api_key_configured ? "API Key configurada" : "Cole sua API Key da Zyte"} />
+              <small className="field-hint">
+                {settings.zyte_api_key_configured ? "API Key já configurada. Deixe em branco para manter." : "Copie a API Key em Zyte API Access e clique em Salvar configurações."}
+              </small>
+            </label>
+            <label>
+              Rede usada pela Zyte
+              <select name="zyte_ip_type" defaultValue={zyteIpType}>
+                <option value="auto">Automática</option>
+                <option value="residential">Residencial brasileira</option>
+              </select>
+              <small className="field-hint">
+                O modo residencial exige aprovação KYC da Zyte. Ative somente depois que o acesso for liberado.
+              </small>
+            </label>
+            <label>
+              País da pesquisa
+              <input name="zyte_geolocation" defaultValue={settings.zyte_geolocation || "BR"} readOnly />
+              <small className="field-hint">Brasil, para preços e resultados do Mercado Livre brasileiro.</small>
+            </label>
+            <div className="settings-summary-grid wide" aria-label="Configuração automática da Zyte">
+              <div>
+                <span>Prioridade</span>
+                <strong>Depois da fonte oficial</strong>
+              </div>
+              <div>
+                <span>Modo de leitura</span>
+                <strong>ProductList + HTML</strong>
+              </div>
+              <div>
+                <span>Profundidade</span>
+                <strong>{zyteSearchPages} páginas / {zyteDetailLimit} anúncios</strong>
+              </div>
+              <div>
+                <span>Base interna</span>
+                <strong>Cache por {cacheTtlDays} dias</strong>
+              </div>
+              <div>
+                <span>Top 3 campeão</span>
+                <strong>Mínimo {number.format(Number(minChampionSales) || 1000)} vendas</strong>
+              </div>
+              <div>
+                <span>Motor local e proxy</span>
+                <strong>Desligados</strong>
+              </div>
+            </div>
+          </div>
+        </section>
+        )}
+
+        {showOxylabs && (
+          <section className="settings-card">
+            <div className="settings-card-title">
+              <span>Fallback opcional</span>
+              <h3>Oxylabs</h3>
+              <p>Use apenas se quiser manter uma fonte reserva premium para desbloqueio de páginas.</p>
+            </div>
+            <div className="settings-grid">
+              <label>
+                Tipo de integração
+                <select name="oxylabs_mode" value={oxylabsMode} onChange={(event) => setOxylabsMode(event.target.value)}>
+                  <option value="web_unblocker">Web Unblocker Proxy</option>
+                  <option value="web_scraper_api">Web Scraper API Realtime</option>
+                </select>
+                <small className="field-hint">Use Web Unblocker Proxy para as credenciais do print da Oxylabs.</small>
+              </label>
+              <label>
+                Oxylabs Username
+                <input name="oxylabs_username" defaultValue={settings.oxylabs_username || ""} placeholder="Usuário da API Oxylabs" />
+                <small className="field-hint">Copie o nome de usuário exibido na Oxylabs.</small>
+              </label>
+              <label>
+                Oxylabs Password
+                <input name="oxylabs_password" type="password" placeholder={settings.oxylabs_password_configured ? "Senha configurada" : "Senha da API Oxylabs"} />
+                <small className="field-hint">
+                  {settings.oxylabs_password_configured ? "Senha ja configurada. Deixe em branco para manter." : "Cole a senha do API User da Oxylabs."}
+                </small>
+              </label>
+              <label>
+                Região da consulta
+                <input name="oxylabs_geo_location" defaultValue={settings.oxylabs_geo_location || "Brazil"} />
+                <small className="field-hint">Use Brazil para buscar como usuário brasileiro.</small>
+              </label>
+              <label>
+                Endpoint Oxylabs
+                <input key={oxylabsMode} name="oxylabs_endpoint" defaultValue={oxylabsEndpoint} />
+                <small className="field-hint">
+                  {oxylabsMode === "web_unblocker" ? "Padrão do Desbloqueador Web: unblock.oxylabs.io:60000." : "Padrão da API Realtime: realtime.oxylabs.io/v1/queries."}
+                </small>
+              </label>
+            </div>
+          </section>
+        )}
+
+        <section className="settings-card">
+          <div className="settings-card-title">
+            <span>Comercial</span>
+            <h3>Planos e CTA</h3>
+            <p>Valores exibidos na página de planos e chamada para o comercial da Confweb.</p>
+          </div>
+          <div className="settings-grid">
+            <label>
+              Plano 10 pesquisas mensal
+              <input name="starter_monthly" defaultValue={settings.starter_monthly} />
+            </label>
+            <label>
+              Plano 10 pesquisas anual
+              <input name="starter_yearly" defaultValue={settings.starter_yearly} />
+            </label>
+            <label>
+              Plano ilimitado mensal
+              <input name="scale_monthly" defaultValue={settings.scale_monthly} />
+            </label>
+            <label>
+              Plano ilimitado anual
+              <input name="scale_yearly" defaultValue={settings.scale_yearly} />
+            </label>
+            <label className="wide">
+              CTA comercial
+              <input name="commercial_cta" defaultValue={settings.commercial_cta} />
+            </label>
+          </div>
+        </section>
+
+        <div className="settings-save-bar">
+          <div>
+            <strong>Salvar configurações</strong>
+            <span>Aplica pagamentos, fontes de dados, planos e textos comerciais.</span>
+          </div>
+          <button type="submit">Salvar tudo</button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function AdminSettingsSimple({ settings, afterSave }: { settings: SettingsMap; afterSave: (text?: string) => void }) {
+  const [busy, setBusy] = useState<"asaas-save" | "asaas-test" | "scrapedo-save" | "scrapedo-test" | "">("");
+  const [asaasEnvironment, setAsaasEnvironment] = useState(settings.asaas_environment || "sandbox");
+  const [asaasError, setAsaasError] = useState("");
+  const [scrapeDoError, setScrapeDoError] = useState("");
+
+  useEffect(() => {
+    setAsaasEnvironment(settings.asaas_environment || "sandbox");
+  }, [settings.asaas_environment]);
+
+  const saveAsaas = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const payload = formJson(event.currentTarget);
+    payload.asaas_enabled = "true";
+    payload.asaas_environment = asaasEnvironment;
+    payload.asaas_endpoint = asaasEnvironment === "production"
+      ? "https://api.asaas.com/v3"
+      : "https://api-sandbox.asaas.com/v3";
+    for (const key of ["asaas_api_key"]) {
+      if (!String(payload[key] || "").trim()) {
+        delete payload[key];
+      }
+    }
+
+    setAsaasError("");
+    setBusy("asaas-save");
+    try {
+      await api("/api/admin/settings", { method: "PATCH", body: JSON.stringify(payload) });
+      const setup = await api<{ message?: string }>("/api/admin/asaas/setup", { method: "POST" });
+      afterSave(setup.message || "Asaas salvo, validado e pronto para testar.");
+    } catch (error) {
+      setAsaasError(error instanceof Error ? error.message : "Não foi possível salvar o Asaas.");
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const testAsaas = async () => {
+    setAsaasError("");
+    setBusy("asaas-test");
+    try {
+      const data = await api<{ message?: string }>("/api/admin/asaas/setup", { method: "POST" });
+      afterSave(data.message || "Asaas e webhook validados com sucesso.");
+    } catch (error) {
+      setAsaasError(error instanceof Error ? error.message : "Não foi possível validar o Asaas.");
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const saveAndTestScrapeDo = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const payload = formJson(form);
+    setScrapeDoError("");
+    setBusy("scrapedo-save");
+    try {
+      const data = await api<{
+        ok?: boolean;
+        error?: string;
+        message?: string;
+        remainingCredits?: number;
+      }>("/api/admin/scrapedo/configure", {
+        method: "POST",
+        body: JSON.stringify({
+          token: payload.scrapedo_api_token || "",
+          cacheTtlDays: payload.market_cache_ttl_days || settings.market_cache_ttl_days || "7",
+        }),
+      });
+      form.reset();
+      if (data.ok === false) {
+        setScrapeDoError(data.error || "O token foi salvo, mas a API não respondeu corretamente.");
+        afterSave("Token da Scrape.do salvo. O teste de conexão precisa ser revisado.");
+        return;
+      }
+      const credits = Number(data.remainingCredits || 0);
+      afterSave(
+        credits > 0
+          ? `Scrape.do conectada. ${number.format(credits)} créditos disponíveis.`
+          : data.message || "Token salvo e Scrape.do validada.",
+      );
+    } catch (error) {
+      setScrapeDoError(error instanceof Error ? error.message : "Não foi possível salvar o token da Scrape.do.");
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const testScrapeDo = async () => {
+    setScrapeDoError("");
+    setBusy("scrapedo-test");
+    try {
+      const data = await api<{ message?: string; remainingCredits?: number }>("/api/admin/scrapedo/test", { method: "POST" });
+      const credits = Number(data.remainingCredits || 0);
+      afterSave(
+        credits > 0
+          ? `Scrape.do conectada. ${number.format(credits)} créditos disponíveis.`
+          : data.message || "Scrape.do validada com sucesso.",
+      );
+    } catch (error) {
+      setScrapeDoError(error instanceof Error ? error.message : "Não foi possível validar a Scrape.do.");
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const isBusy = Boolean(busy);
+
+  return (
+    <div className="admin-section settings-simple">
+      <form className="settings-card" onSubmit={saveAndTestScrapeDo}>
+        <div className="settings-card-heading">
+          <div className="settings-card-title">
+            <span>Fonte de dados ativa</span>
+            <h3>Scrape.do</h3>
+            <p>É a API usada pelo Busca Vendas para consultar os anúncios. Basta colar o token; o restante é automático.</p>
+          </div>
+          <div className="credential-status">
+            <b>Token: {settings.scrapedo_api_token_configured ? "salvo" : "pendente"}</b>
+            <b>Conexão: {settings.scrapedo_connected ? "validada" : "não validada"}</b>
+          </div>
+        </div>
+
+        <div className="settings-grid settings-grid-compact">
+          <label className="wide">
+            Token da Scrape.do
+            <input
+              name="scrapedo_api_token"
+              type="password"
+              autoComplete="off"
+              placeholder={settings.scrapedo_api_token_configured ? "Token já salvo; deixe em branco para manter" : "Cole seu token aqui"}
+            />
+            <small className="field-hint">
+              Aceita o token puro, uma URL da Scrape.do ou um valor começando com token=.
+            </small>
+          </label>
+          <label>
+            Atualizar pesquisas salvas
+            <select name="market_cache_ttl_days" defaultValue={settings.market_cache_ttl_days || "7"}>
+              <option value="3">A cada 3 dias</option>
+              <option value="7">A cada 7 dias</option>
+              <option value="14">A cada 14 dias</option>
+            </select>
+            <small className="field-hint">Enquanto atualiza, o último resultado completo continua disponível.</small>
+          </label>
+        </div>
+
+        <div className="settings-summary-grid" aria-label="Resumo da base interna">
+          <div>
+            <span>Pesquisas prontas</span>
+            <strong>{number.format(Number(settings.market_cache_entries || 0))}</strong>
+          </div>
+          <div>
+            <span>Anúncios reaproveitáveis</span>
+            <strong>{number.format(Number(settings.market_item_cache_entries || 0))}</strong>
+          </div>
+          <div>
+            <span>Atualização dos anúncios</span>
+            <strong>A cada {settings.market_item_cache_ttl_days || "3"} dias</strong>
+          </div>
+        </div>
+
+        {(scrapeDoError || settings.scrapedo_last_error) && (
+          <strong className="oauth-error">{scrapeDoError || settings.scrapedo_last_error}</strong>
+        )}
+
+        <div className="settings-card-actions">
+          <button className="primary-action" type="submit" disabled={isBusy}>
+            <Search size={18} />
+            {busy === "scrapedo-save" ? "Salvando e testando..." : "Salvar e testar API"}
+          </button>
+          {settings.scrapedo_api_token_configured && (
+            <button className="secondary-action" type="button" onClick={testScrapeDo} disabled={isBusy}>
+              {busy === "scrapedo-test" ? "Testando..." : "Testar token salvo"}
+            </button>
+          )}
+        </div>
+      </form>
+
+      <form className="settings-card" onSubmit={saveAsaas}>
+        <div className="settings-card-heading">
+          <div className="settings-card-title">
+            <span>Pagamentos</span>
+            <h3>Asaas</h3>
+            <p>Configura Pix anual, cartão mensal e a liberação automática dos planos.</p>
+          </div>
+          <div className="credential-status">
+            <b>API Key: {settings.asaas_api_key_configured ? "salva" : "pendente"}</b>
+            <b>Ambiente: {asaasEnvironment === "production" ? "produção" : "sandbox"}</b>
+            <b>Webhook: {settings.asaas_webhook_ready === "true" ? "pronto" : "será preparado ao salvar"}</b>
+          </div>
+        </div>
+
+        <div className="settings-grid">
+          <label>
+            Asaas API Key
+            <input
+              name="asaas_api_key"
+              type="password"
+              autoComplete="off"
+              placeholder={settings.asaas_api_key_configured ? "API Key já salva; deixe em branco para manter" : "Cole a API Key da Asaas"}
+            />
+          </label>
+          <label>
+            Ambiente
+            <select name="asaas_environment" value={asaasEnvironment} onChange={(event) => setAsaasEnvironment(event.target.value)}>
+              <option value="sandbox">Sandbox para testes</option>
+              <option value="production">Produção</option>
+            </select>
+          </label>
+          <label>
+            URL do webhook
+            <input readOnly value={settings.asaas_webhook_url || "/api/asaas/webhook"} />
+          </label>
+        </div>
+
+        <div className="asaas-test-guide">
+          <div>
+            <span>1</span>
+            <p><b>Cole a API Key do Sandbox.</b> O Busca Vendas valida a conta sem criar cobrança.</p>
+          </div>
+          <div>
+            <span>2</span>
+            <p><b>Salve uma vez.</b> O webhook seguro é criado automaticamente no Asaas.</p>
+          </div>
+          <div>
+            <span>3</span>
+            <p><b>Abra Planos.</b> Teste cartão mensal ou Pix anual sem movimentar dinheiro real.</p>
+          </div>
+          {settings.asaas_last_event && (
+            <small>Último evento recebido: {settings.asaas_last_event}</small>
+          )}
+        </div>
+
+        {(asaasError || settings.asaas_last_error) && (
+          <strong className="oauth-error">{asaasError || settings.asaas_last_error}</strong>
+        )}
+
+        <div className="settings-card-actions">
+          <button className="primary-action" type="submit" disabled={isBusy}>
+            <CreditCard size={18} />
+            {busy === "asaas-save" ? "Preparando Sandbox..." : "Salvar e preparar Sandbox"}
+          </button>
+          {settings.asaas_api_key_configured && (
+            <button className="secondary-action" type="button" onClick={testAsaas} disabled={isBusy}>
+              {busy === "asaas-test" ? "Validando..." : "Validar Sandbox e webhook"}
+            </button>
+          )}
+        </div>
       </form>
     </div>
   );

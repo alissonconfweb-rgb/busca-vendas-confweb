@@ -1,0 +1,19 @@
+{
+	email {$ACME_EMAIL}
+	admin off
+}
+{$APP_DOMAIN} {
+	encode zstd gzip
+
+	reverse_proxy app:3001 {
+		health_uri /api/health
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "SAMEORIGIN"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+}

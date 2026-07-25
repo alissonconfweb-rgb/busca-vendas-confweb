@@ -1,9 +1,12 @@
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { dirname, resolve } from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { fileURLToPath } from "node:url";
+import initSqlJs from "./vendor/sql-wasm.cjs";
 import { hashToken, randomToken } from "./security.mjs";
 
+const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
+const APP_ROOT = resolve(SERVER_DIR, "..");
 const DB_PATH = process.env.DB_PATH
   ? resolve(process.env.DB_PATH)
   : resolve(process.cwd(), "data", "busca-vendas.sqlite");
@@ -11,7 +14,96 @@ const SESSION_TTL_DAYS = Number(process.env.SESSION_TTL_DAYS || 365);
 const SESSION_TTL_MS = Math.max(1, SESSION_TTL_DAYS) * 24 * 60 * 60 * 1000;
 mkdirSync(dirname(DB_PATH), { recursive: true });
 
-export const db = new DatabaseSync(DB_PATH);
+const SQL = await initSqlJs({
+  locateFile: (file) => resolve(SERVER_DIR, "vendor", file),
+});
+
+class SqlJsDatabase {
+  constructor(SQLRuntime, dbPath, initialData) {
+    this.dbPath = dbPath;
+    this.inner = initialData ? new SQLRuntime.Database(new Uint8Array(initialData)) : new SQLRuntime.Database();
+  }
+
+  exec(sql) {
+    const result = this.inner.exec(sql);
+    this.persist();
+    return result;
+  }
+
+  prepare(sql) {
+    return new SqlJsStatement(this, sql);
+  }
+
+  persist() {
+    const temporaryPath = `${this.dbPath}.tmp`;
+    writeFileSync(temporaryPath, Buffer.from(this.inner.export()));
+    renameSync(temporaryPath, this.dbPath);
+  }
+
+  lastInsertRowid() {
+    return Number(this.inner.exec("SELECT last_insert_rowid() AS id")?.[0]?.values?.[0]?.[0] || 0);
+  }
+}
+
+class SqlJsStatement {
+  constructor(database, sql) {
+    this.database = database;
+    this.sql = sql;
+  }
+
+  run(...params) {
+    const statement = this.database.inner.prepare(this.sql);
+    try {
+      statement.run(normalizeParams(params));
+      const result = {
+        changes: this.database.inner.getRowsModified(),
+        lastInsertRowid: this.database.lastInsertRowid(),
+      };
+      result.lastInsertROWID = result.lastInsertRowid;
+      this.database.persist();
+      return result;
+    } finally {
+      statement.free();
+    }
+  }
+
+  get(...params) {
+    const statement = this.database.inner.prepare(this.sql);
+    try {
+      statement.bind(normalizeParams(params));
+      return statement.step() ? statement.getAsObject() : undefined;
+    } finally {
+      statement.free();
+    }
+  }
+
+  all(...params) {
+    const rows = [];
+    const statement = this.database.inner.prepare(this.sql);
+    try {
+      statement.bind(normalizeParams(params));
+      while (statement.step()) {
+        rows.push(statement.getAsObject());
+      }
+      return rows;
+    } finally {
+      statement.free();
+    }
+  }
+}
+
+function normalizeParams(params) {
+  if (params.length === 1 && Array.isArray(params[0])) {
+    return params[0];
+  }
+  return params;
+}
+
+export const db = new SqlJsDatabase(
+  SQL,
+  DB_PATH,
+  existsSync(DB_PATH) ? readFileSync(DB_PATH) : null,
+);
 
 export function initDatabase() {
   db.exec(`
@@ -49,6 +141,26 @@ export function initDatabase() {
       total_revenue REAL NOT NULL DEFAULT 0,
       payload TEXT NOT NULL,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS market_search_cache (
+      key TEXT PRIMARY KEY,
+      query TEXT NOT NULL,
+      source TEXT NOT NULL,
+      total_demand INTEGER NOT NULL DEFAULT 0,
+      total_revenue REAL NOT NULL DEFAULT 0,
+      payload TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS market_item_cache (
+      key TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      permalink TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
     CREATE TABLE IF NOT EXISTS settings (
@@ -104,6 +216,19 @@ export function initDatabase() {
   `);
 
   ensureColumn("users", "phone", "TEXT");
+  ensureColumn("users", "asaas_customer_id", "TEXT");
+  ensureColumn("users", "email_verified_at", "TEXT");
+  ensureColumn("users", "phone_verified_at", "TEXT");
+  ensureColumn("finance_records", "provider", "TEXT");
+  ensureColumn("finance_records", "external_id", "TEXT");
+  ensureColumn("finance_records", "provider_payment_id", "TEXT");
+  ensureColumn("finance_records", "provider_subscription_id", "TEXT");
+  ensureColumn("finance_records", "external_reference", "TEXT");
+  ensureColumn("finance_records", "payment_url", "TEXT");
+  ensureColumn("finance_records", "pix_payload", "TEXT");
+  ensureColumn("finance_records", "plan", "TEXT");
+  ensureColumn("finance_records", "billing_cycle", "TEXT");
+  ensureColumn("finance_records", "billing_type", "TEXT");
   seedDefaults();
 }
 
@@ -122,16 +247,56 @@ function seedDefaults() {
     starter_search_limit: "10",
     scale_monthly: "39.90",
     scale_yearly: "359.10",
-    commercial_cta: "Falar com Comercial Confweb",
+    commercial_cta: "Fale com um Especialista Certificado da Confweb",
+    oxylabs_enabled: "false",
     oxylabs_mode: "web_unblocker",
     oxylabs_endpoint: "https://unblock.oxylabs.io:60000",
     oxylabs_geo_location: "Brazil",
+    zyte_endpoint: "https://api.zyte.com/v1/extract",
+    zyte_mode: "browser_html",
+    zyte_search_enabled: "false",
+    zyte_search_pages: "4",
+    zyte_detail_limit: "60",
+    zyte_ip_type: "auto",
+    zyte_geolocation: "BR",
+    scrapedo_enabled: "true",
+    scrapedo_endpoint: "https://api.scrape.do/",
+    scrapedo_search_pages: "2",
+    scrapedo_detail_limit: "9",
+    scrapedo_timeout_ms: "45000",
+    scrapedo_verified: "false",
+    meli_scraper_enabled: "false",
+    proxy_enabled: "false",
+    proxy_url: "",
+    proxy_username: "",
+    proxy_password: "",
+    proxy_country: "Brazil",
+    proxy_timeout_ms: "30000",
+    min_champion_sales: "1000",
+    market_cache_ttl_days: "7",
+    market_cache_stale_days: "30",
+    market_item_cache_ttl_days: "3",
+    asaas_enabled: "false",
+    asaas_environment: "sandbox",
+    asaas_endpoint: "https://api-sandbox.asaas.com/v3",
+    asaas_webhook_token: "",
+    asaas_checkout_mode: "subscription",
+    verification_required: "false",
+    verification_channel: "email",
     meli_site_id: "MLB",
     meli_redirect_uri: "http://127.0.0.1:3001/api/meli/callback",
   };
 
   for (const [key, value] of Object.entries(defaultSettings)) {
     db.prepare("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)").run(key, value);
+  }
+
+  if (
+    ["Falar com Comercial Confweb", "Fale com um Especialista Certificado"].includes(
+      getSetting("commercial_cta"),
+    )
+  ) {
+    setSetting("commercial_cta", "Fale com um Especialista Certificado da Confweb");
   }
 
   const tipCount = db.prepare("SELECT COUNT(*) AS count FROM tips").get().count;
@@ -159,6 +324,17 @@ function seedDefaults() {
     db.prepare(
       "INSERT INTO commercial_contacts (name, channel, value, is_primary) VALUES (?, ?, ?, ?)",
     ).run("Comercial Confweb", "WhatsApp", "+55 11 99999-9999", 1);
+  }
+
+  const siteContactCount = db.prepare(`
+    SELECT COUNT(*) AS count
+    FROM commercial_contacts
+    WHERE lower(channel) = lower(?) AND value = ?
+  `).get("Site", "https://www.confweb.com.br").count;
+  if (siteContactCount === 0) {
+    db.prepare(
+      "INSERT INTO commercial_contacts (name, channel, value, is_primary, status) VALUES (?, ?, ?, ?, ?)",
+    ).run("Site Confweb", "Site", "https://www.confweb.com.br", 0, "active");
   }
 
   const secret = getSetting("session_secret");

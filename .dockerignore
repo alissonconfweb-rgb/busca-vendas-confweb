@@ -1,0 +1,13 @@
+.git
+.github
+.env
+.env.*
+!.env.example
+node_modules
+dist
+data
+backups
+_deploy
+*.log
+npm-debug.log*
+server-local.*

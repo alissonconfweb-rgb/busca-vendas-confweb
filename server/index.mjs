@@ -3,11 +3,29 @@ import { createServer } from "node:http";
 import { extname, join, resolve } from "node:path";
 import { db, createSession, deleteSession, findUserByEmail, getSetting, initDatabase, publicUser, setSetting, settingsObject, userFromSession } from "./db.mjs";
 import { loadLocalEnv } from "./env.mjs";
-import { buildMeliAuthorizationUrl, createMeliPkcePair, disconnectMeliOAuth, exchangeMeliAuthorizationCode, getMeliRedirectUri, searchMercadoLivre } from "./meli.mjs";
-import { buildMarketEstimate, shouldUseMarketEstimate } from "./market-estimate.mjs";
+import { buildMeliAuthorizationUrl, createMeliPkcePair, disconnectMeliOAuth, exchangeMeliAuthorizationCode, getMeliRedirectUri, searchMercadoLivre, testMercadoLivreCatalog } from "./meli.mjs";
+import { shouldUseMarketEstimate } from "./market-estimate.mjs";
 import { bootstrapAdminFromEnv } from "./bootstrap-admin.mjs";
 import { syncMeliSettingsFromEnv, validateMeliSettingsInput, isValidMeliClientId, resolveMeliRedirectUri } from "./meli-config.mjs";
 import { syncOxylabsSettingsFromEnv, testOxylabsConnection } from "./oxylabs.mjs";
+import { syncProxySettingsFromEnv, testProxyConnection } from "./proxy.mjs";
+import { isZyteConfigured, isZyteSearchEnabled, syncZyteSettingsFromEnv, testZyteConnection } from "./zyte.mjs";
+import {
+  isScrapeDoConfigured,
+  normalizeScrapeDoToken,
+  syncScrapeDoSettingsFromEnv,
+  testScrapeDoConnection,
+} from "./scrapedo.mjs";
+import { buildProductQuerySpec, normalizedProductKey, normalizeProductSearchQuery } from "./product-match.mjs";
+import {
+  asaasWebhookUrl,
+  createAsaasCheckout,
+  handleAsaasWebhook,
+  refreshAsaasCheckoutStatus,
+  setupAsaasIntegration,
+  syncAsaasSettingsFromEnv,
+  testAsaasConnection,
+} from "./asaas.mjs";
 import { hashPassword, hashToken, randomToken, verifyPassword } from "./security.mjs";
 
 loadLocalEnv();
@@ -21,6 +39,7 @@ const CREATOR_EMAIL = (process.env.CREATOR_EMAIL || process.env.ADMIN_EMAIL || "
 const DIST_DIR = resolve(process.cwd(), "dist");
 const MELI_OAUTH_STATE_TTL_MS = 15 * 60 * 1000;
 const SEARCH_RESPONSE_TIMEOUT_MS = Number(process.env.SEARCH_RESPONSE_TIMEOUT_MS || 85_000);
+const marketRefreshFlights = new Map();
 const PUBLIC_SETTING_KEYS = new Set([
   "app_name",
   "starter_monthly",
@@ -34,6 +53,15 @@ const PUBLIC_SETTING_KEYS = new Set([
 bootstrapAdminFromEnv(db);
 syncMeliSettingsFromEnv();
 syncOxylabsSettingsFromEnv();
+syncProxySettingsFromEnv();
+syncZyteSettingsFromEnv();
+syncScrapeDoSettingsFromEnv();
+syncAsaasSettingsFromEnv();
+migrateMarketSearchCacheKeys();
+seedMarketItemCacheFromSearches();
+if (isZyteConfigured() && isZyteSearchEnabled() && process.env.MELI_LOCAL_BROWSER_ENABLED !== "true") {
+  enforceZytePrimarySettings();
+}
 if (CREATOR_EMAIL) {
   db.prepare("UPDATE users SET role = 'admin', status = 'active', updated_at = CURRENT_TIMESTAMP WHERE lower(email) = ?").run(CREATOR_EMAIL);
 }
@@ -50,6 +78,26 @@ const server = createServer(async (req, res) => {
 server.listen(PORT, HOST, () => {
   console.log(`Busca Vendas rodando em http://${HOST}:${PORT}`);
 });
+
+let shuttingDown = false;
+function shutdown(signal) {
+  if (shuttingDown) {
+    return;
+  }
+  shuttingDown = true;
+  console.log(`${signal} recebido. Encerrando o Busca Vendas...`);
+  server.close((error) => {
+    if (error) {
+      console.error("Falha ao encerrar o servidor.", error);
+      process.exitCode = 1;
+    }
+    process.exit();
+  });
+  setTimeout(() => process.exit(1), 10_000).unref();
+}
+
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));
 
 async function route(req, res) {
   const url = new URL(req.url, `http://${req.headers.host}`);
@@ -70,6 +118,11 @@ async function route(req, res) {
   if (url.pathname === "/api/meli/notifications" && ["GET", "POST"].includes(method)) {
     await drainRequest(req);
     return json(res, 200, { ok: true });
+  }
+
+  if (url.pathname === "/api/asaas/webhook" && method === "POST") {
+    const result = await handleAsaasWebhook(req, process.env.PUBLIC_URL || url.origin);
+    return json(res, result.status, result.body);
   }
 
   if (url.pathname === "/api/auth/login" && method === "POST") {
@@ -141,18 +194,89 @@ async function route(req, res) {
     });
   }
 
+  if (url.pathname === "/api/account/password" && method === "POST") {
+    const body = await readJson(req);
+    const currentPassword = String(body.currentPassword || "");
+    const newPassword = String(body.newPassword || "");
+
+    if (!currentPassword || !newPassword) {
+      return json(res, 400, { error: "Informe a senha atual e a nova senha." });
+    }
+
+    if (newPassword.length < 6) {
+      return json(res, 400, { error: "A nova senha precisa ter pelo menos 6 caracteres." });
+    }
+
+    const fullUser = db.prepare("SELECT * FROM users WHERE id = ?").get(user.id);
+    if (!fullUser || !verifyPassword(currentPassword, fullUser.password_hash)) {
+      return json(res, 401, { error: "Senha atual incorreta." });
+    }
+
+    db.prepare("UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(
+      hashPassword(newPassword),
+      user.id,
+    );
+
+    return json(res, 200, { ok: true, message: "Senha atualizada com sucesso." });
+  }
+
   if (url.pathname === "/api/search" && method === "GET") {
-    return handleSearch(req, res, user, url.searchParams.get("q") || "");
+    return handleSearch(req, res, user, url.searchParams.get("q") || "", {
+      fresh: canUseAdmin(user) && ["1", "true", "yes", "sim"].includes(String(url.searchParams.get("fresh") || "").toLowerCase()),
+    });
   }
 
   if (url.pathname === "/api/search-history" && method === "GET") {
-    return json(res, 200, db.prepare(`
-      SELECT id, query, source, total_demand, total_revenue, created_at
+    const rows = db.prepare(`
+      SELECT id, query, source, total_demand, total_revenue, payload, created_at
       FROM search_history
       WHERE user_id = ?
       ORDER BY id DESC
       LIMIT 30
-    `).all(user.id));
+    `).all(user.id);
+    return json(res, 200, rows
+      .map((row) => {
+        const result = parseSearchPayload(row.payload);
+        if (!isCompleteChampionResult(result)) {
+          return null;
+        }
+
+        return {
+          id: row.id,
+          query: row.query,
+          source: row.source,
+          total_demand: result.totals.demand,
+          total_revenue: result.totals.revenue,
+          created_at: row.created_at,
+          result,
+        };
+      })
+      .filter(Boolean));
+  }
+
+  const historyMatch = url.pathname.match(/^\/api\/search-history\/(\d+)$/);
+  if (historyMatch && method === "GET") {
+    const record = db.prepare(`
+      SELECT id, query, source, total_demand, total_revenue, payload, created_at
+      FROM search_history
+      WHERE id = ? AND user_id = ?
+    `).get(Number(historyMatch[1]), user.id);
+
+    if (!record) {
+      return json(res, 404, { error: "Pesquisa não encontrada." });
+    }
+
+    const result = parseSearchPayload(record.payload);
+    if (!isCompleteChampionResult(result)) {
+      return json(res, 410, { error: "Essa pesquisa salva é antiga e não atende mais ao mínimo de vendas do Top 3. Faça uma nova busca para atualizar." });
+    }
+
+    return json(res, 200, {
+      id: record.id,
+      query: record.query,
+      created_at: record.created_at,
+      result,
+    });
   }
 
   if (url.pathname === "/api/support" && method === "GET") {
@@ -172,6 +296,38 @@ async function route(req, res) {
     return json(res, 200, db.prepare("SELECT * FROM tips WHERE status = 'published' ORDER BY id DESC").all());
   }
 
+  if (url.pathname === "/api/checkout/start" && method === "POST") {
+    const body = await readJson(req);
+    try {
+      const result = await createAsaasCheckout({
+        user,
+        body,
+        settings: settingsObject(),
+        remoteIp: clientIp(req),
+      });
+      const refreshedUser = db.prepare("SELECT * FROM users WHERE id = ?").get(user.id);
+      return json(res, 200, { ...result, user: publicUserWithPermissions(refreshedUser) });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Não foi possível criar o checkout.";
+      setSetting("asaas_last_error", message);
+      return json(res, 400, { error: message });
+    }
+  }
+
+  if (url.pathname === "/api/checkout/status" && method === "GET") {
+    try {
+      const result = await refreshAsaasCheckoutStatus({
+        user,
+        financeId: url.searchParams.get("id"),
+      });
+      const refreshedUser = db.prepare("SELECT * FROM users WHERE id = ?").get(user.id);
+      return json(res, 200, { ...result, user: publicUserWithPermissions(refreshedUser) });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Não foi possível consultar a compra.";
+      return json(res, 400, { error: message });
+    }
+  }
+
   if (url.pathname.startsWith("/api/admin/")) {
     if (!canUseAdmin(user)) {
       return json(res, 403, { error: "Acesso restrito ao admin." });
@@ -182,7 +338,7 @@ async function route(req, res) {
   return json(res, 404, { error: "Rota não encontrada." });
 }
 
-async function handleSearch(req, res, user, query) {
+async function handleSearch(req, res, user, query, options = {}) {
   const cleanQuery = query.trim();
   if (!cleanQuery) {
     return json(res, 400, { error: "Informe uma palavra-chave." });
@@ -192,28 +348,372 @@ async function handleSearch(req, res, user, query) {
     return json(res, 402, { error: "Limite de pesquisas atingido. Faça upgrade para continuar." });
   }
 
-  let result = await searchWithResponseGuard(cleanQuery);
+  let result = options.fresh ? null : getFreshCachedSearchResult(cleanQuery);
+  if (!result && !options.fresh) {
+    result = getStaleCachedSearchResult(cleanQuery);
+    if (result) {
+      scheduleMarketSearchRefresh(cleanQuery);
+    }
+  }
+  if (!result) {
+    result = await searchWithResponseGuard(cleanQuery);
+    if (isBillableSearchResult(result)) {
+      saveMarketSearchCache(cleanQuery, result);
+    }
+  }
+  result = enforceChampionThreshold(cleanQuery, result);
   if (shouldUseMarketEstimate(result)) {
-    result = buildMarketEstimate(cleanQuery, result?.message || "Nao foi possivel concluir a leitura real agora.");
+    result = strictRealSearchUnavailable(
+      cleanQuery,
+      result?.message || "A fonte real ainda não retornou 3 anúncios completos com vendas públicas.",
+    );
   }
   const responseResult = canUseAdmin(user) ? result : publicSearchResult(result);
-  db.prepare(`
-    INSERT INTO search_history (user_id, query, source, total_demand, total_revenue, payload)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).run(
-    user.id,
-    cleanQuery,
-    result.source,
-    result.totals.demand,
-    result.totals.revenue,
-    JSON.stringify(result),
-  );
+  if (isCompleteChampionResult(result)) {
+    db.prepare(`
+      INSERT INTO search_history (user_id, query, source, total_demand, total_revenue, payload)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(
+      user.id,
+      cleanQuery,
+      result.source,
+      result.totals.demand,
+      result.totals.revenue,
+      JSON.stringify(result),
+    );
+  }
 
-  if (user.role !== "admin" && result.ok) {
+  if (user.role !== "admin" && isBillableSearchResult(result)) {
     db.prepare("UPDATE users SET searches_used = searches_used + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(user.id);
   }
 
   return json(res, 200, responseResult);
+}
+
+function isBillableSearchResult(result) {
+  return isCompleteChampionResult(result);
+}
+
+function isCompleteChampionResult(result) {
+  const items = result?.items || [];
+  return Boolean(
+    result?.ok &&
+    result?.salesAvailable === true &&
+    items.length >= 3 &&
+    items.slice(0, 3).every((item) => (
+      Number(item?.soldQuantity) > 0 &&
+      Number(item?.price) > 0 &&
+      Number(item?.revenue) > 0
+    )) &&
+    Number(result?.totals?.demand) > 0 &&
+    Number(result?.totals?.revenue) > 0,
+  );
+}
+
+function enforceChampionThreshold(query, result) {
+  if (!result || result.source === "market_estimate" || result.salesAvailable === false || result.metricsMode === "market_signal") {
+    return result;
+  }
+
+  if (!result.ok || isCompleteChampionResult(result)) {
+    return result;
+  }
+
+  return incompleteChampionResult(
+    query,
+    "Resultado descartado: não encontrei 3 anúncios com vendas públicas reais. Vou tentar outra fonte para completar a lista.",
+  );
+}
+
+function incompleteChampionResult(query, message) {
+  return {
+    ok: false,
+    source: "invalid_champion_result",
+    strictRealOnly: true,
+    metricsMode: "sales",
+    salesAvailable: false,
+    message,
+    items: [],
+    exactMatches: 0,
+    totalAvailable: 0,
+    totals: { demand: 0, revenue: 0, averageTicket: 0, actualDemand: 0 },
+    query,
+  };
+}
+
+function getFreshCachedSearchResult(query) {
+  const ttlMs = marketCacheTtlMs();
+  if (ttlMs <= 0) {
+    return null;
+  }
+
+  const row = findMarketSearchCacheRow(query);
+  if (!row) {
+    return getFreshHistoryCachedSearchResult(query, ttlMs);
+  }
+
+  const updatedAt = Date.parse(`${String(row.updated_at).replace(" ", "T")}Z`);
+  if (!Number.isFinite(updatedAt) || Date.now() - updatedAt > ttlMs) {
+    return null;
+  }
+
+  const payload = parseSearchPayload(row.payload);
+  if (!isBillableSearchResult(payload)) {
+    return null;
+  }
+
+  return {
+    ...payload,
+    source: "confweb_cache",
+    message: `Resultado recuperado da base interna Confweb. Atualizado em ${new Date(row.updated_at).toLocaleDateString("pt-BR")}.`,
+    cacheHit: true,
+    cachedAt: row.updated_at,
+    providerCreditsSaved: Number(payload.providerCreditsUsed || 0),
+    providerCreditsUsed: 0,
+  };
+}
+
+function getFreshHistoryCachedSearchResult(query, ttlMs) {
+  const key = marketCacheKey(query);
+  const rows = db.prepare(`
+    SELECT query, payload, created_at
+    FROM search_history
+    ORDER BY id DESC
+    LIMIT 500
+  `).all();
+
+  for (const row of rows) {
+    if (marketCacheKey(row.query) !== key) {
+      continue;
+    }
+
+    const createdAt = Date.parse(`${String(row.created_at).replace(" ", "T")}Z`);
+    if (!Number.isFinite(createdAt) || Date.now() - createdAt > ttlMs) {
+      continue;
+    }
+
+    const payload = parseSearchPayload(row.payload);
+    if (!isBillableSearchResult(payload)) {
+      continue;
+    }
+
+    return {
+      ...payload,
+      source: "confweb_cache",
+      message: `Resultado recuperado da base interna Confweb. Atualizado em ${new Date(row.created_at).toLocaleDateString("pt-BR")}.`,
+      cacheHit: true,
+      cachedAt: row.created_at,
+      providerCreditsSaved: Number(payload.providerCreditsUsed || 0),
+      providerCreditsUsed: 0,
+    };
+  }
+
+  return null;
+}
+
+function getStaleCachedSearchResult(query) {
+  const freshTtlMs = marketCacheTtlMs();
+  const staleTtlMs = marketCacheStaleTtlMs();
+  if (freshTtlMs <= 0 || staleTtlMs <= freshTtlMs) {
+    return null;
+  }
+
+  const direct = findMarketSearchCacheRow(query);
+  if (direct) {
+    const cached = staleSearchResultFromRow(direct, direct.updated_at, freshTtlMs, staleTtlMs);
+    if (cached) {
+      return cached;
+    }
+  }
+
+  const key = marketCacheKey(query);
+  const rows = db.prepare(`
+    SELECT query, payload, created_at
+    FROM search_history
+    ORDER BY id DESC
+    LIMIT 500
+  `).all();
+  for (const row of rows) {
+    if (marketCacheKey(row.query) !== key) {
+      continue;
+    }
+    const cached = staleSearchResultFromRow(row, row.created_at, freshTtlMs, staleTtlMs);
+    if (cached) {
+      return cached;
+    }
+  }
+  return null;
+}
+
+function staleSearchResultFromRow(row, timestamp, freshTtlMs, staleTtlMs) {
+  const updatedAt = Date.parse(`${String(timestamp).replace(" ", "T")}Z`);
+  const age = Date.now() - updatedAt;
+  if (!Number.isFinite(updatedAt) || age <= freshTtlMs || age > staleTtlMs) {
+    return null;
+  }
+
+  const payload = parseSearchPayload(row.payload);
+  if (!isBillableSearchResult(payload)) {
+    return null;
+  }
+
+  return {
+    ...payload,
+    source: "confweb_cache",
+    message: "Resultado recuperado da base interna Confweb. Atualização automática em andamento.",
+    cacheHit: true,
+    cacheStale: true,
+    cachedAt: timestamp,
+    providerCreditsSaved: Number(payload.providerCreditsUsed || 0),
+    providerCreditsUsed: 0,
+  };
+}
+
+function scheduleMarketSearchRefresh(query) {
+  const key = marketCacheKey(query);
+  if (marketRefreshFlights.has(key)) {
+    return marketRefreshFlights.get(key);
+  }
+
+  const refresh = searchWithResponseGuard(query)
+    .then((result) => {
+      if (isBillableSearchResult(result)) {
+        saveMarketSearchCache(query, result);
+      }
+      return result;
+    })
+    .catch((error) => {
+      console.error(`Falha ao atualizar cache de "${query}":`, error);
+      return null;
+    })
+    .finally(() => marketRefreshFlights.delete(key));
+  marketRefreshFlights.set(key, refresh);
+  return refresh;
+}
+
+function saveMarketSearchCache(query, result) {
+  db.prepare(`
+    INSERT INTO market_search_cache (key, query, source, total_demand, total_revenue, payload, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    ON CONFLICT(key) DO UPDATE SET
+      query = excluded.query,
+      source = excluded.source,
+      total_demand = excluded.total_demand,
+      total_revenue = excluded.total_revenue,
+      payload = excluded.payload,
+      updated_at = CURRENT_TIMESTAMP
+  `).run(
+    marketCacheKey(query),
+    query,
+    result.source || "mercado_livre",
+    Number(result.totals?.demand || 0),
+    Number(result.totals?.revenue || 0),
+    JSON.stringify(result),
+  );
+}
+
+function marketCacheKey(query) {
+  const spec = buildProductQuerySpec(query);
+  const tokens = [...spec.tokens].sort();
+  const measures = spec.measures
+    .map((measure) => `${measure.kind}-${Number(measure.value).toFixed(3)}`)
+    .sort();
+  return normalizedProductKey([...tokens, ...measures].join(" ") || normalizeProductSearchQuery(query));
+}
+
+function legacyMarketCacheKey(query) {
+  return normalizedProductKey(normalizeProductSearchQuery(query));
+}
+
+function findMarketSearchCacheRow(query) {
+  return db.prepare(`
+    SELECT *
+    FROM market_search_cache
+    WHERE key = ? OR key = ?
+    ORDER BY updated_at DESC
+    LIMIT 1
+  `).get(marketCacheKey(query), legacyMarketCacheKey(query));
+}
+
+function migrateMarketSearchCacheKeys() {
+  if (getSetting("market_cache_key_version") === "2") {
+    return;
+  }
+
+  const rows = db.prepare("SELECT * FROM market_search_cache").all();
+  for (const row of rows) {
+    const canonicalKey = marketCacheKey(row.query);
+    if (!canonicalKey || canonicalKey === row.key) {
+      continue;
+    }
+    db.prepare(`
+      INSERT INTO market_search_cache (key, query, source, total_demand, total_revenue, payload, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(key) DO UPDATE SET
+        query = excluded.query,
+        source = excluded.source,
+        total_demand = excluded.total_demand,
+        total_revenue = excluded.total_revenue,
+        payload = excluded.payload,
+        updated_at = excluded.updated_at
+    `).run(
+      canonicalKey,
+      row.query,
+      row.source,
+      row.total_demand,
+      row.total_revenue,
+      row.payload,
+      row.created_at,
+      row.updated_at,
+    );
+    db.prepare("DELETE FROM market_search_cache WHERE key = ?").run(row.key);
+  }
+  setSetting("market_cache_key_version", "2");
+}
+
+function seedMarketItemCacheFromSearches() {
+  if (getSetting("market_item_cache_seed_version") === "1") {
+    return;
+  }
+
+  const rows = db.prepare("SELECT payload FROM market_search_cache").all();
+  for (const row of rows) {
+    const result = parseSearchPayload(row.payload);
+    if (!isBillableSearchResult(result)) {
+      continue;
+    }
+    for (const item of result.items.slice(0, 3)) {
+      const href = item.permalink || item.href || "";
+      const key = String(item.id || href || normalizedProductKey(item.title)).trim();
+      const cachedItem = {
+        ...item,
+        href,
+      };
+      db.prepare(`
+        INSERT OR IGNORE INTO market_item_cache (key, title, permalink, payload)
+        VALUES (?, ?, ?, ?)
+      `).run(key, item.title, href, JSON.stringify(cachedItem));
+    }
+  }
+  setSetting("market_item_cache_seed_version", "1");
+}
+
+function marketCacheTtlMs() {
+  const days = Number(getSetting("market_cache_ttl_days") || process.env.MARKET_CACHE_TTL_DAYS || 7);
+  return Number.isFinite(days) && days > 0 ? days * 24 * 60 * 60 * 1000 : 0;
+}
+
+function marketCacheStaleTtlMs() {
+  const days = Number(getSetting("market_cache_stale_days") || process.env.MARKET_CACHE_STALE_DAYS || 30);
+  return Number.isFinite(days) && days > 0 ? days * 24 * 60 * 60 * 1000 : 0;
+}
+
+function parseSearchPayload(payload) {
+  try {
+    return JSON.parse(payload || "{}");
+  } catch {
+    return null;
+  }
 }
 
 async function searchWithResponseGuard(query) {
@@ -226,16 +726,14 @@ async function searchWithResponseGuard(query) {
     })
     .catch((error) => {
       settled = true;
-      return buildMarketEstimate(
-        query,
-        error instanceof Error ? error.message : "Falha inesperada ao consultar a fonte real.",
-      );
+      const message = sanitizeSearchError(error instanceof Error ? error.message : "Falha inesperada ao consultar a fonte real.");
+      return strictRealSearchUnavailable(query, message);
     });
 
   const timeout = new Promise((resolve) => {
     timeoutId = setTimeout(() => {
       if (!settled) {
-        resolve(buildMarketEstimate(query, "A leitura real ultrapassou o tempo ideal de resposta."));
+        resolve(strictRealSearchUnavailable(query, "A leitura real ultrapassou o tempo ideal de resposta."));
       }
     }, SEARCH_RESPONSE_TIMEOUT_MS);
   });
@@ -245,6 +743,60 @@ async function searchWithResponseGuard(query) {
     clearTimeout(timeoutId);
   }
   return result;
+}
+
+function strictRealSearchUnavailable(query, message) {
+  return {
+    ok: false,
+    source: "market_data_pending",
+    strictRealOnly: true,
+    metricsMode: "sales",
+    salesAvailable: false,
+    message: `${sanitizeSearchError(message)} Não exibimos estimativas quando a fonte real está configurada.`,
+    items: [],
+    exactMatches: 0,
+    totalAvailable: 0,
+    totals: { demand: 0, revenue: 0, averageTicket: 0, actualDemand: 0 },
+    query,
+  };
+}
+
+function sanitizeSearchError(message) {
+  const text = String(message || "").trim();
+  if (!text) {
+    return "Não foi possível concluir a leitura real agora.";
+  }
+  if (/libatk-bridge|shared libraries|browserType\.launch|chrome-headless-shell|playwright|executable/i.test(text)) {
+    return "O navegador local do servidor está indisponível. Use a fonte oficial ou o fallback residencial configurado no painel admin.";
+  }
+  if (/captcha|verificacao|verificação|seguranca|segurança|suspicious|account-verification/i.test(text)) {
+    return "O Mercado Livre pediu verificação de segurança para a leitura automática.";
+  }
+  return text.length > 220 ? `${text.slice(0, 220)}...` : text;
+}
+
+function realOnlySearchEnabled() {
+  const externalProviderEnabled = isScrapeDoConfigured() || (isZyteConfigured() && isZyteSearchEnabled());
+  const scraperFallback = externalProviderEnabled ? "false" : "true";
+  const scraperEnabled = (process.env.MELI_SCRAPER_ENABLED || getSetting("meli_scraper_enabled") || scraperFallback) !== "false";
+  return scraperEnabled
+    || getSetting("proxy_enabled") === "true"
+    || isScrapeDoConfigured()
+    || (isZyteConfigured() && isZyteSearchEnabled());
+}
+
+function enforceZytePrimarySettings() {
+  setSetting("zyte_search_enabled", "true");
+  setSetting("zyte_mode", "browser_html");
+  setSetting("zyte_endpoint", "https://api.zyte.com/v1/extract");
+  setSetting("zyte_search_pages", "4");
+  setSetting("zyte_detail_limit", "60");
+  setSetting("meli_scraper_enabled", "false");
+  setSetting("proxy_enabled", "false");
+  setSetting("proxy_url", "");
+  setSetting("min_champion_sales", "1000");
+  setSetting("market_cache_ttl_days", "7");
+  setSetting("zyte_last_error", "");
 }
 
 async function handleAdmin(req, res, url, currentUser) {
@@ -290,6 +842,29 @@ async function handleAdmin(req, res, url, currentUser) {
     return json(res, 200, safeSettings(currentUser));
   }
 
+  if (path === "meli/catalog-test" && method === "POST") {
+    if (!isCreator(currentUser)) {
+      return json(res, 403, { error: "Somente o criador pode testar o catálogo oficial." });
+    }
+    try {
+      const result = await testMercadoLivreCatalog("creatina 1kg");
+      if (!result.ok) {
+        setSetting("meli_last_error", result.message || "O catálogo oficial não completou o teste.");
+        return json(res, 422, { ok: false, error: result.message, result });
+      }
+      setSetting("meli_last_error", "");
+      return json(res, 200, {
+        ok: true,
+        result,
+        message: `Catálogo oficial conectado: ${result.items.length} campeões reais encontrados.`,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Falha ao testar o catálogo oficial.";
+      setSetting("meli_last_error", message);
+      return json(res, 400, { ok: false, error: message });
+    }
+  }
+
   if (path === "oxylabs/test" && method === "POST") {
     try {
       const result = await testOxylabsConnection();
@@ -302,12 +877,253 @@ async function handleAdmin(req, res, url, currentUser) {
     }
   }
 
+  if (path === "zyte/test" && method === "POST") {
+    try {
+      const result = await testZyteConnection();
+      setSetting("zyte_last_error", "");
+      return json(res, 200, { ...result, message: "Zyte conectada com sucesso." });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Falha ao testar Zyte.";
+      setSetting("zyte_last_error", message);
+      return json(res, 400, { ok: false, error: message });
+    }
+  }
+
+  if (path === "scrapedo/test" && method === "POST") {
+    try {
+      const result = await testScrapeDoConnection();
+      setSetting("scrapedo_last_error", "");
+      setSetting("scrapedo_verified", "true");
+      return json(res, 200, { ...result, message: "Scrape.do conectada com sucesso." });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Falha ao testar Scrape.do.";
+      setSetting("scrapedo_last_error", message);
+      setSetting("scrapedo_verified", "false");
+      return json(res, 400, { ok: false, error: message });
+    }
+  }
+
+  if (path === "scrapedo/configure" && method === "POST") {
+    const body = await readJson(req);
+    const suppliedToken = normalizeScrapeDoToken(body.token);
+    const existingToken = getSetting("scrapedo_api_token") || process.env.SCRAPEDO_API_TOKEN || "";
+    if (!suppliedToken && !existingToken) {
+      return json(res, 400, { error: "Cole o token da Scrape.do antes de salvar." });
+    }
+
+    if (suppliedToken) {
+      setSetting("scrapedo_api_token", suppliedToken);
+      setSetting("scrapedo_verified", "false");
+    }
+    setSetting("scrapedo_enabled", "true");
+    setSetting("scrapedo_endpoint", "https://api.scrape.do/");
+    setSetting("scrapedo_search_pages", "2");
+    setSetting("scrapedo_detail_limit", "9");
+    setSetting("scrapedo_timeout_ms", "45000");
+    const requestedCacheTtl = Number(body.cacheTtlDays || getSetting("market_cache_ttl_days") || 7);
+    const cacheTtlDays = Number.isFinite(requestedCacheTtl)
+      ? Math.min(30, Math.max(1, requestedCacheTtl))
+      : 7;
+    setSetting("market_cache_ttl_days", String(cacheTtlDays));
+    setSetting("market_cache_stale_days", "30");
+    setSetting("market_item_cache_ttl_days", "3");
+    setSetting("zyte_search_enabled", "false");
+    setSetting("meli_scraper_enabled", "false");
+    setSetting("proxy_enabled", "false");
+    setSetting("oxylabs_enabled", "false");
+
+    try {
+      const result = await testScrapeDoConnection();
+      setSetting("scrapedo_last_error", "");
+      setSetting("scrapedo_verified", "true");
+      return json(res, 200, {
+        ...result,
+        saved: true,
+        configured: true,
+        message: "Token salvo e Scrape.do validada com sucesso.",
+      });
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "Falha ao validar Scrape.do.";
+      const message = `Token salvo, mas o teste falhou: ${detail}`;
+      setSetting("scrapedo_last_error", detail);
+      setSetting("scrapedo_verified", "false");
+      return json(res, 200, { ok: false, saved: true, configured: true, error: message });
+    }
+  }
+
+  if (path === "proxy/test" && method === "POST") {
+    try {
+      const result = await testProxyConnection();
+      setSetting("proxy_last_error", "");
+      return json(res, 200, result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Falha ao testar proxy.";
+      setSetting("proxy_last_error", message);
+      return json(res, 400, { ok: false, error: message });
+    }
+  }
+
+  if (path === "asaas/test" && method === "POST") {
+    try {
+      const result = await testAsaasConnection();
+      setSetting("asaas_last_error", "");
+      return json(res, 200, { ...result, message: "Asaas conectada com sucesso." });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Falha ao testar Asaas.";
+      setSetting("asaas_last_error", message);
+      return json(res, 400, { ok: false, error: message });
+    }
+  }
+
+  if (path === "asaas/setup" && method === "POST") {
+    try {
+      const result = await setupAsaasIntegration({
+        email: user.email,
+        publicUrl: process.env.PUBLIC_URL || getSetting("frontend_origin"),
+      });
+      return json(res, 200, {
+        ...result,
+        message: "Sandbox validado e webhook preparado automaticamente.",
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Falha ao preparar a integração Asaas.";
+      setSetting("asaas_webhook_ready", "false");
+      setSetting("asaas_last_error", message);
+      return json(res, 400, { ok: false, error: message });
+    }
+  }
+
   if (path === "summary" && method === "GET") {
     const users = db.prepare("SELECT COUNT(*) AS total FROM users").get().total;
     const searches = db.prepare("SELECT COUNT(*) AS total FROM search_history").get().total;
     const revenue = db.prepare("SELECT COALESCE(SUM(amount), 0) AS total FROM finance_records WHERE status = 'paid'").get().total;
     const tickets = db.prepare("SELECT COUNT(*) AS total FROM support_tickets WHERE status != 'closed'").get().total;
     return json(res, 200, { users, searches, revenue, tickets });
+  }
+
+  if (path === "search-cache" && method === "GET") {
+    const filter = String(url.searchParams.get("q") || "").trim();
+    const where = filter ? "WHERE query LIKE ?" : "";
+    const params = filter ? [`%${filter}%`] : [];
+    const ttlDays = Math.max(1, Number(getSetting("market_cache_ttl_days") || 7));
+    const staleDays = Math.max(ttlDays, Number(getSetting("market_cache_stale_days") || 30));
+    const cacheRows = db.prepare(`
+      SELECT *
+      FROM market_search_cache
+      ${where}
+      ORDER BY updated_at DESC
+    `).all(...params);
+    const historyRows = db.prepare("SELECT user_id, query FROM search_history").all();
+    const usageByKey = new Map();
+
+    for (const history of historyRows) {
+      const key = marketCacheKey(history.query);
+      const current = usageByKey.get(key) || { count: 0, users: new Set() };
+      current.count += 1;
+      current.users.add(Number(history.user_id));
+      usageByKey.set(key, current);
+    }
+
+    let fresh = 0;
+    let stale = 0;
+    let expired = 0;
+    let estimatedCreditsSaved = 0;
+    const records = cacheRows.map((row) => {
+      const result = parseSearchPayload(row.payload) || {};
+      const updatedAt = Date.parse(`${String(row.updated_at).replace(" ", "T")}Z`);
+      const ageDays = Number.isFinite(updatedAt) ? Math.max(0, (Date.now() - updatedAt) / 86_400_000) : staleDays + 1;
+      const status = ageDays <= ttlDays ? "fresh" : ageDays <= staleDays ? "stale" : "expired";
+      if (status === "fresh") {
+        fresh += 1;
+      } else if (status === "stale") {
+        stale += 1;
+      } else {
+        expired += 1;
+      }
+
+      const usage = usageByKey.get(row.key) || { count: 0, users: new Set() };
+      const providerCreditsUsed = Math.max(0, Number(result.providerCreditsUsed || result.creditsUsed || 0));
+      estimatedCreditsSaved += Math.max(0, usage.count - 1) * providerCreditsUsed;
+
+      return {
+        key: row.key,
+        query: row.query,
+        source: row.source,
+        total_demand: Number(row.total_demand || result.totals?.demand || 0),
+        total_revenue: Number(row.total_revenue || result.totals?.revenue || 0),
+        items_count: Array.isArray(result.items) ? result.items.length : 0,
+        usage_count: usage.count,
+        users_count: usage.users.size,
+        provider_credits_used: providerCreditsUsed,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+        age_days: Number(ageDays.toFixed(2)),
+        status,
+        items: Array.isArray(result.items) ? result.items.slice(0, 3) : [],
+      };
+    });
+    const itemCache = db.prepare("SELECT COUNT(*) AS total FROM market_item_cache").get().total || 0;
+    const historyUses = [...usageByKey.values()].reduce((total, usage) => total + Math.max(0, usage.count - 1), 0);
+
+    return json(res, 200, {
+      summary: {
+        total: records.length,
+        fresh,
+        stale,
+        expired,
+        itemCache,
+        historyUses,
+        estimatedCreditsSaved,
+      },
+      ttlDays,
+      staleDays,
+      records,
+    });
+  }
+
+  if (path === "search-cache/refresh" && method === "POST") {
+    const body = await readJson(req);
+    const key = required(body.key);
+    const row = db.prepare("SELECT key, query FROM market_search_cache WHERE key = ?").get(key);
+    if (!row) {
+      return json(res, 404, { error: "Pesquisa não encontrada na base interna." });
+    }
+
+    const refreshed = enforceChampionThreshold(row.query, await searchWithResponseGuard(row.query));
+    if (!isBillableSearchResult(refreshed)) {
+      return json(res, 422, {
+        error: refreshed?.message || "A fonte não retornou três anúncios completos. O resultado anterior foi preservado.",
+      });
+    }
+
+    saveMarketSearchCache(row.query, refreshed);
+    return json(res, 200, {
+      ok: true,
+      message: `Pesquisa "${row.query}" atualizada com dados reais.`,
+    });
+  }
+
+  if (path === "search-cache" && method === "DELETE") {
+    const body = await readJson(req);
+    const key = required(body.key);
+    const row = db.prepare("SELECT key, query FROM market_search_cache WHERE key = ?").get(key);
+    if (!row) {
+      return json(res, 404, { error: "Pesquisa não encontrada na base interna." });
+    }
+
+    const matchingHistoryIds = db.prepare("SELECT id, query FROM search_history").all()
+      .filter((history) => marketCacheKey(history.query) === key)
+      .map((history) => Number(history.id));
+    const removeHistory = db.prepare("DELETE FROM search_history WHERE id = ?");
+    for (const id of matchingHistoryIds) {
+      removeHistory.run(id);
+    }
+    db.prepare("DELETE FROM market_search_cache WHERE key = ?").run(key);
+
+    return json(res, 200, {
+      ok: true,
+      removedHistoryRecords: matchingHistoryIds.length,
+    });
   }
 
   if (path === "users" && method === "GET") {
@@ -356,29 +1172,66 @@ async function handleAdmin(req, res, url, currentUser) {
     return json(res, 200, { ok: true });
   }
 
+  if (userMatch && method === "DELETE") {
+    const targetId = Number(userMatch[1]);
+    const target = db.prepare("SELECT id, email, role FROM users WHERE id = ?").get(targetId);
+    if (!target) {
+      return json(res, 404, { error: "Usuário não encontrado." });
+    }
+    if (target.id === currentUser.id) {
+      return json(res, 403, { error: "Você não pode excluir sua própria conta." });
+    }
+    if (target.email.toLowerCase() === CREATOR_EMAIL) {
+      return json(res, 403, { error: "A conta criadora não pode ser excluída." });
+    }
+    if (target.role === "admin" && !isCreator(currentUser)) {
+      return json(res, 403, { error: "Somente o criador pode excluir outro administrador." });
+    }
+
+    db.prepare("DELETE FROM users WHERE id = ?").run(targetId);
+    return json(res, 200, { ok: true });
+  }
+
   if (path === "settings" && method === "GET") {
     return json(res, 200, safeSettings({ role: "admin" }));
   }
 
   if (path === "settings" && method === "PATCH") {
     const body = await readJson(req);
-    try {
-      validateMeliSettingsInput(body);
-    } catch (error) {
-      return json(res, 400, { error: error instanceof Error ? error.message : "Configuração inválida." });
+    if (Object.keys(body).some((key) => key.startsWith("meli_"))) {
+      try {
+        validateMeliSettingsInput(body);
+      } catch (error) {
+        return json(res, 400, { error: error instanceof Error ? error.message : "Configuração inválida." });
+      }
     }
-    const keepWhenBlank = new Set(["meli_access_token", "meli_refresh_token", "meli_client_secret", "oxylabs_password"]);
+    const keepWhenBlank = new Set(["meli_access_token", "meli_refresh_token", "meli_client_secret", "oxylabs_password", "proxy_password", "zyte_api_key", "scrapedo_api_token", "asaas_api_key", "asaas_webhook_token"]);
     for (const [key, value] of Object.entries(body)) {
       if (keepWhenBlank.has(key) && !String(value || "").trim() && getSetting(key)) {
         continue;
       }
       setSetting(key, normalizeSettingValue(key, value));
     }
+    if (
+      ["true", "1", "yes", "sim"].includes(String(body.zyte_search_enabled || "").trim().toLowerCase())
+      && (String(body.zyte_api_key || "").trim() || getSetting("zyte_api_key") || process.env.ZYTE_API_KEY)
+    ) {
+      enforceZytePrimarySettings();
+    }
     if (Object.keys(body).some((key) => key.startsWith("meli_"))) {
       setSetting("meli_last_error", "");
     }
     if (Object.keys(body).some((key) => key.startsWith("oxylabs_"))) {
       setSetting("oxylabs_last_error", "");
+    }
+    if (Object.keys(body).some((key) => key.startsWith("zyte_"))) {
+      setSetting("zyte_last_error", "");
+    }
+    if (Object.keys(body).some((key) => key.startsWith("proxy_"))) {
+      setSetting("proxy_last_error", "");
+    }
+    if (Object.keys(body).some((key) => key.startsWith("asaas_"))) {
+      setSetting("asaas_last_error", "");
     }
     return json(res, 200, safeSettings({ role: "admin" }));
   }
@@ -468,7 +1321,7 @@ async function handleAdmin(req, res, url, currentUser) {
       required(body.name),
       required(body.channel),
       required(body.value),
-      body.is_primary ? 1 : 0,
+      boolValue(body.is_primary) ? 1 : 0,
       body.status || "active",
     );
     return json(res, 201, db.prepare("SELECT * FROM commercial_contacts WHERE id = ?").get(result.lastInsertRowid));
@@ -481,8 +1334,8 @@ async function handleAdmin(req, res, url, currentUser) {
       body.name,
       body.channel,
       body.value,
-      body.is_primary ? 1 : 0,
-      body.status,
+      boolValue(body.is_primary) ? 1 : 0,
+      body.status || "active",
       Number(contactMatch[1]),
     );
     return json(res, 200, { ok: true });
@@ -500,6 +1353,48 @@ function safeSettings(user) {
     settings.meli_access_token = "";
   }
   if (canUseAdmin(user)) {
+    settings.asaas_enabled = settings.asaas_enabled || process.env.ASAAS_ENABLED || "false";
+    settings.asaas_environment = settings.asaas_environment || process.env.ASAAS_ENVIRONMENT || "sandbox";
+    settings.asaas_endpoint = settings.asaas_endpoint || process.env.ASAAS_ENDPOINT || (settings.asaas_environment === "production" ? "https://api.asaas.com/v3" : "https://api-sandbox.asaas.com/v3");
+    settings.asaas_api_key_configured = settings.asaas_api_key || process.env.ASAAS_API_KEY ? "true" : "";
+    settings.asaas_webhook_token_configured = settings.asaas_webhook_token || process.env.ASAAS_WEBHOOK_TOKEN ? "true" : "";
+    settings.asaas_connected = settings.asaas_api_key_configured ? "true" : "";
+    settings.asaas_webhook_url = asaasWebhookUrl(process.env.PUBLIC_URL || settings.frontend_origin);
+    settings.asaas_api_key = "";
+    settings.asaas_webhook_token = "";
+    settings.zyte_endpoint = settings.zyte_endpoint || process.env.ZYTE_ENDPOINT || "https://api.zyte.com/v1/extract";
+    settings.zyte_mode = settings.zyte_mode || process.env.ZYTE_MODE || "browser_html";
+    settings.zyte_search_enabled = settings.zyte_search_enabled || process.env.ZYTE_SEARCH_ENABLED || "false";
+    settings.zyte_search_pages = settings.zyte_search_pages || process.env.ZYTE_SEARCH_PAGES || "4";
+    settings.zyte_detail_limit = settings.zyte_detail_limit || process.env.ZYTE_DETAIL_LIMIT || "60";
+    settings.zyte_ip_type = settings.zyte_ip_type || process.env.ZYTE_IP_TYPE || "auto";
+    settings.zyte_geolocation = settings.zyte_geolocation || process.env.ZYTE_GEOLOCATION || "BR";
+    settings.zyte_api_key_configured = settings.zyte_api_key || process.env.ZYTE_API_KEY ? "true" : "";
+    settings.zyte_connected = settings.zyte_api_key_configured ? "true" : "";
+    settings.zyte_api_key = "";
+    settings.scrapedo_enabled = settings.scrapedo_enabled || process.env.SCRAPEDO_ENABLED || "true";
+    settings.scrapedo_endpoint = settings.scrapedo_endpoint || process.env.SCRAPEDO_ENDPOINT || "https://api.scrape.do/";
+    settings.scrapedo_search_pages = settings.scrapedo_search_pages || process.env.SCRAPEDO_SEARCH_PAGES || "2";
+    settings.scrapedo_detail_limit = settings.scrapedo_detail_limit || process.env.SCRAPEDO_DETAIL_LIMIT || "9";
+    settings.scrapedo_timeout_ms = settings.scrapedo_timeout_ms || process.env.SCRAPEDO_TIMEOUT_MS || "45000";
+    settings.scrapedo_api_token_configured = settings.scrapedo_api_token || process.env.SCRAPEDO_API_TOKEN ? "true" : "";
+    settings.scrapedo_connected = isScrapeDoConfigured() && settings.scrapedo_verified === "true" ? "true" : "";
+    settings.scrapedo_api_token = "";
+    settings.proxy_enabled = settings.proxy_enabled || process.env.PROXY_ENABLED || "false";
+    settings.proxy_url = settings.proxy_url || process.env.PROXY_URL || "";
+    settings.proxy_username = settings.proxy_username || process.env.PROXY_USERNAME || "";
+    settings.proxy_country = settings.proxy_country || process.env.PROXY_COUNTRY || "Brazil";
+    settings.proxy_timeout_ms = settings.proxy_timeout_ms || process.env.PROXY_TIMEOUT_MS || "30000";
+    settings.min_champion_sales = settings.min_champion_sales || process.env.MIN_CHAMPION_SALES || "1000";
+    settings.market_cache_ttl_days = settings.market_cache_ttl_days || process.env.MARKET_CACHE_TTL_DAYS || "7";
+    settings.market_cache_stale_days = settings.market_cache_stale_days || process.env.MARKET_CACHE_STALE_DAYS || "30";
+    settings.market_item_cache_ttl_days = settings.market_item_cache_ttl_days || process.env.MARKET_ITEM_CACHE_TTL_DAYS || "3";
+    settings.market_cache_entries = String(db.prepare("SELECT COUNT(*) AS total FROM market_search_cache").get().total || 0);
+    settings.market_item_cache_entries = String(db.prepare("SELECT COUNT(*) AS total FROM market_item_cache").get().total || 0);
+    settings.proxy_password_configured = settings.proxy_password || process.env.PROXY_PASSWORD ? "true" : "";
+    settings.proxy_connected = settings.proxy_enabled === "true" && settings.proxy_url ? "true" : "";
+    settings.proxy_password = "";
+    settings.oxylabs_enabled = settings.oxylabs_enabled || process.env.OXYLABS_ENABLED || "false";
     settings.oxylabs_mode = settings.oxylabs_mode || process.env.OXYLABS_MODE || "web_unblocker";
     settings.oxylabs_username = settings.oxylabs_username || process.env.OXYLABS_USERNAME || "";
     settings.oxylabs_endpoint = settings.oxylabs_endpoint || process.env.OXYLABS_ENDPOINT || "https://unblock.oxylabs.io:60000";
@@ -511,12 +1406,13 @@ function safeSettings(user) {
     }
     settings.oxylabs_geo_location = settings.oxylabs_geo_location || process.env.OXYLABS_GEO_LOCATION || "Brazil";
     settings.oxylabs_password_configured = settings.oxylabs_password || process.env.OXYLABS_PASSWORD ? "true" : "";
-    settings.oxylabs_connected = settings.oxylabs_username && settings.oxylabs_password_configured ? "true" : "";
+    settings.oxylabs_connected = settings.oxylabs_enabled === "true" && settings.oxylabs_username && settings.oxylabs_password_configured ? "true" : "";
     settings.oxylabs_password = "";
     settings.meli_access_token_configured = settings.meli_access_token || process.env.MELI_ACCESS_TOKEN ? "true" : settings.meli_access_token_configured || "";
     settings.meli_refresh_token_configured = settings.meli_refresh_token || process.env.MELI_REFRESH_TOKEN ? "true" : "";
     settings.meli_client_secret_configured = settings.meli_client_secret || process.env.MELI_CLIENT_SECRET ? "true" : "";
     settings.meli_oauth_connected = settings.meli_access_token_configured || settings.meli_refresh_token_configured ? "true" : "";
+    settings.meli_scraper_enabled = settings.meli_scraper_enabled || process.env.MELI_SCRAPER_ENABLED || (isZyteConfigured() ? "false" : "true");
     settings.meli_redirect_uri = settings.meli_redirect_uri || resolveMeliRedirectUri();
     settings.meli_access_token = "";
     settings.meli_refresh_token = "";
@@ -561,6 +1457,16 @@ function publicSearchResult(result) {
       };
     }
     return result;
+  }
+
+  if (result.source?.startsWith("zyte_") || result.source?.startsWith("scrapedo_")) {
+    return {
+      ...result,
+      source: "market_data_pending",
+      metricsMode: "sales",
+      salesAvailable: false,
+      message: "Não encontramos 3 anúncios com vendas públicas completas para este produto agora. Tente um termo mais específico ou pesquise novamente em instantes.",
+    };
   }
 
   if (result.source === "meli_forbidden" || result.source?.startsWith("mercado_livre_") || result.source?.startsWith("oxylabs_")) {
@@ -785,11 +1691,20 @@ function nullableNumber(value) {
   return Number(value);
 }
 
+function boolValue(value) {
+  return value === true || value === 1 || value === "1" || value === "true" || value === "on";
+}
+
 function normalizeSettingValue(key, value) {
-  if (key.startsWith("meli_") || key.startsWith("oxylabs_") || key === "frontend_origin") {
+  if (key.startsWith("meli_") || key.startsWith("oxylabs_") || key.startsWith("proxy_") || key.startsWith("zyte_") || key.startsWith("scrapedo_") || key.startsWith("asaas_") || key.startsWith("market_") || key === "min_champion_sales" || key === "frontend_origin") {
     return String(value || "").trim();
   }
   return value;
+}
+
+function clientIp(req) {
+  const forwarded = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
+  return forwarded || req.socket?.remoteAddress || "127.0.0.1";
 }
 
 function serveStatic(req, res, url) {

@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { getSetting } from "./db.mjs";
 import {
   buildProductQuerySpec,
   matchesProductQuery,
@@ -12,9 +13,11 @@ const STALE_CACHE_TTL_MS = Number(process.env.MELI_SCRAPER_STALE_CACHE_MS || 6 *
 const SCRAPER_TIMEOUT_MS = Number(process.env.MELI_SCRAPER_TIMEOUT_MS || 24_000);
 const PRODUCT_PAGE_TIMEOUT_MS = Number(process.env.MELI_PRODUCT_PAGE_TIMEOUT_MS || 18_000);
 const SEARCH_RESULTS_WAIT_MS = Number(process.env.MELI_SEARCH_RESULTS_WAIT_MS || 12_000);
-const SEARCH_CARD_LIMIT = Number(process.env.MELI_SEARCH_CARD_LIMIT || 12);
-const CACHE_VERSION = "sales-real-v8";
+const SEARCH_CARD_LIMIT = Number(process.env.MELI_SEARCH_CARD_LIMIT || 36);
+const SEARCH_DETAIL_LIMIT = Number(process.env.MELI_SEARCH_DETAIL_LIMIT || 24);
+const CACHE_VERSION = "sales-real-v11";
 const CACHE_FILE = resolve(process.cwd(), "data", "meli-scraper-cache.json");
+const numberFormatter = new Intl.NumberFormat("pt-BR");
 const cache = new Map();
 const inFlight = new Map();
 let diskCacheLoaded = false;
@@ -27,7 +30,7 @@ export async function searchMercadoLivreScraper(query, options = {}) {
   if (cached && Date.now() - cached.createdAt < CACHE_TTL_MS) {
     return {
       ...cached.result,
-      message: `${cached.result.message} Resultado reaproveitado do cache temporario.`,
+      message: `${cached.result.message} Resultado reaproveitado do cache temporário.`,
     };
   }
 
@@ -56,22 +59,25 @@ async function runScraper(query, options = {}) {
   try {
     scraped = await scrapeSearchPage(query, options);
   } catch (error) {
+    console.warn("[meli-scraper] public-page read failed", {
+      source: options.proxy ? "proxy" : "direct",
+      message: error instanceof Error ? error.message : String(error),
+    });
+
     const stale = cache.get(cacheKey);
     if (stale && Date.now() - stale.createdAt < STALE_CACHE_TTL_MS) {
       return {
         ...stale.result,
-        message: `${stale.result.message} Mercado Livre pediu verificacao agora; usando cache temporario real.`,
+        message: `${stale.result.message} Mercado Livre pediu verificação agora; usando cache temporário real.`,
       };
     }
 
     return {
       ok: false,
-      source: "mercado_livre_scraper_blocked",
+      source: options.proxy ? "mercado_livre_proxy_blocked" : "mercado_livre_scraper_blocked",
       metricsMode: "market_signal",
       salesAvailable: false,
-      message: error instanceof Error
-        ? `Nao foi possivel ler a listagem publica do Mercado Livre agora: ${error.message}`
-        : "Nao foi possivel ler a listagem publica do Mercado Livre agora.",
+      message: friendlyScraperError(error, options),
       items: [],
       exactMatches: 0,
       totalAvailable: 0,
@@ -80,11 +86,14 @@ async function runScraper(query, options = {}) {
   }
 
   const spec = buildProductQuerySpec(query);
-  const candidates = scraped.items
+  const minChampionSales = minimumChampionSales();
+  const exactCandidates = scraped.items
     .map((item, index) => ({ ...item, position: index + 1, match: matchesProductQuery(item.title, spec) }))
-    .filter((item) => item.match.ok && item.price > 0);
+    .filter((item) => item.match.ok && item.price > 0 && typeof item.soldQuantity === "number" && item.soldQuantity > 0);
+  const candidates = exactCandidates;
   const uniqueItems = dedupeAndRankChampions(candidates).slice(0, 3);
   const mappedItems = uniqueItems.map(mapScrapedItem);
+  const hasBelowMinimum = uniqueItems.some((item) => item.soldQuantity < minChampionSales);
   const demand = mappedItems.reduce((sum, item) => sum + (typeof item.soldQuantity === "number" ? item.soldQuantity : 0), 0);
   const revenue = mappedItems.reduce((sum, item) => sum + (typeof item.revenue === "number" ? item.revenue : 0), 0);
   const actualDemand = mappedItems.reduce((sum, item) => sum + (typeof item.soldQuantity === "number" ? item.soldQuantity : 0), 0);
@@ -96,30 +105,35 @@ async function runScraper(query, options = {}) {
     ? uniqueItems.reduce((sum, item) => sum + item.price, 0) / uniqueItems.length
     : 0;
 
-  if (!uniqueItems.length) {
+  if (uniqueItems.length < 3) {
     return {
       ok: false,
-      source: "mercado_livre_scraper_no_exact_match",
-      metricsMode: "market_signal",
-      salesAvailable: false,
-      message: `Encontrei a pagina do Mercado Livre, mas nenhum card bateu exatamente com "${query}".`,
-      items: [],
-      exactMatches: 0,
+      source: uniqueItems.length
+        ? options.proxy ? "mercado_livre_proxy_partial_sales" : "mercado_livre_scraper_partial_sales"
+        : options.proxy ? "mercado_livre_proxy_no_exact_match" : "mercado_livre_scraper_no_exact_match",
+      metricsMode: "sales",
+      salesAvailable: hasSales,
+      message: incompleteChampionMessage({ query, uniqueItems, exactCandidates, minChampionSales }),
+      items: mappedItems,
+      exactMatches: uniqueItems.length,
       totalAvailable: scraped.totalAvailable,
-      totals: { demand: 0, revenue: 0, averageTicket: 0 },
+      totals: { demand, revenue, averageTicket, isEstimated: false, actualDemand },
     };
   }
 
   return {
     ok: true,
-    source: "mercado_livre_scraper",
+    source: options.proxy ? "mercado_livre_proxy" : "mercado_livre_scraper",
     metricsMode: hasSales ? "sales" : "market_signal",
     salesAvailable: hasSales,
-    message: hasSales
-      ? "Anuncios reais encontrados na pagina publica do Mercado Livre com vendas extraidas de sinais publicos do proprio anuncio."
+    thresholdRelaxed: hasBelowMinimum,
+    message: hasSales && hasBelowMinimum
+      ? `Anúncios reais encontrados pelo motor Confweb. Priorizamos anúncios acima de ${numberFormatter.format(minChampionSales)} vendas; quando não há 3 campeões acima desse volume, completamos com os melhores anúncios reais disponíveis.`
+      : hasSales
+      ? "Anúncios reais encontrados pelo motor Confweb, com vendas extraídas de sinais públicos do próprio anúncio."
       : uniqueItems.length >= 3
-      ? "Anuncios reais encontrados na pagina publica do Mercado Livre com filtro exato. Vendas por anuncio nao apareceram publicamente, entao nao foram simuladas."
-      : `Encontrei ${uniqueItems.length} anuncio(s) com correspondencia exata. Nao completei 3 para evitar entregar produto diferente do pesquisado.`,
+      ? "Anúncios reais encontrados pelo motor Confweb com filtro exato. Vendas por anúncio não apareceram publicamente, então não foram simuladas."
+      : `Encontrei ${uniqueItems.length} anúncio(s) com correspondência exata. Não completei 3 para evitar entregar produto diferente do pesquisado.`,
     items: mappedItems,
     exactMatches: uniqueItems.length,
     totalAvailable: scraped.totalAvailable,
@@ -134,8 +148,37 @@ async function runScraper(query, options = {}) {
 }
 
 function scraperCacheKey(query, options = {}) {
-  const mode = options.accessToken ? "oauth" : "public";
-  return `${CACHE_VERSION}:${mode}:${normalizedProductKey(query)}`;
+  const mode = options.proxy ? "proxy" : options.accessToken ? "oauth" : "public";
+  return `${CACHE_VERSION}:min${minimumChampionSales()}:${mode}:${normalizedProductKey(query)}`;
+}
+
+function minimumChampionSales() {
+  const value = Number(getSetting("min_champion_sales") || process.env.MIN_CHAMPION_SALES || 1000);
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : 1000;
+}
+
+function incompleteChampionMessage({ query, uniqueItems, exactCandidates, minChampionSales }) {
+  const minimum = numberFormatter.format(minChampionSales);
+  if (uniqueItems.length) {
+    return `Encontrei ${uniqueItems.length} anúncio(s) com pelo menos ${minimum} vendas públicas para "${query}", mas não completei o Top 3 campeão. Lista parcial não será exibida.`;
+  }
+  if (exactCandidates.length) {
+    return `Encontrei anúncios compatíveis com "${query}", mas nenhum passou do mínimo de ${minimum} vendas públicas. Para não desanimar com produto fraco, o Top 3 só mostra campeões de venda.`;
+  }
+  return `Encontrei a página do Mercado Livre, mas nenhum card com vendas públicas completas bateu exatamente com "${query}".`;
+}
+
+function friendlyScraperError(error, options = {}) {
+  const text = error instanceof Error ? error.message : String(error || "");
+  if (/libatk-bridge|shared libraries|browserType\.launch|chrome-headless-shell|playwright|executable/i.test(text)) {
+    return "O servidor não conseguiu abrir o navegador automático do Motor Confweb. Ative a Zyte/proxy no painel admin ou peça ao cPanel para instalar as dependências do Chromium.";
+  }
+  if (/captcha|verificacao|verificação|seguranca|segurança|suspicious|account-verification/i.test(text)) {
+    return "O Mercado Livre pediu verificação de segurança para a leitura automática. Vamos tentar outra fonte configurada para completar os anúncios.";
+  }
+  return options.proxy
+    ? "Não foi possível concluir a leitura via proxy agora. Vamos tentar outra fonte configurada."
+    : "Não foi possível concluir a leitura pública do Mercado Livre agora. Vamos tentar outra fonte configurada.";
 }
 
 function ensureDiskCacheLoaded() {
@@ -179,6 +222,7 @@ async function scrapeSearchPage(query, options = {}) {
   const { chromium } = await import("playwright");
   const browser = await chromium.launch({
     headless: true,
+    ...(options.proxy ? { proxy: options.proxy } : {}),
     args: [
       "--no-sandbox",
       "--disable-setuid-sandbox",
@@ -214,7 +258,7 @@ async function scrapeSearchPage(query, options = {}) {
     let bodyText = await safeBodyText(page);
     await assertNotBlocked(page, bodyText);
 
-    for (let index = 0; index < 1; index += 1) {
+    for (let index = 0; index < 3; index += 1) {
       await page.mouse.wheel(0, 900);
       await page.waitForTimeout(500);
     }
@@ -290,7 +334,7 @@ async function scrapeSearchPage(query, options = {}) {
     const exactItems = mappedItems
       .map((item) => ({ ...item, match: matchesProductQuery(item.title, spec) }))
       .filter((item) => item.match.ok && item.price > 0);
-    const enrichedItems = await enrichTopMercadoLivreItems(context, dedupeAndRank(exactItems).slice(0, 3), options);
+    const enrichedItems = await enrichChampionMercadoLivreItems(context, dedupeAndRank(exactItems).slice(0, SEARCH_DETAIL_LIMIT), options);
 
     return {
       totalAvailable: parseTotalAvailable(bodyText) || items.length,
@@ -364,19 +408,26 @@ function mapScrapedItem(item) {
   };
 }
 
-async function enrichTopMercadoLivreItems(context, items, options = {}) {
-  const topItems = items.slice(0, 3);
+async function enrichChampionMercadoLivreItems(context, items, options = {}) {
   const enriched = [];
+  let completeCount = 0;
 
-  for (const item of topItems) {
-    enriched.push(
+  for (const item of items) {
+    const enrichedItem =
       typeof item.soldQuantity === "number" && item.soldQuantity > 0
         ? item
-        : await enrichMercadoLivreItem(context, item, options),
-    );
+        : await enrichMercadoLivreItem(context, item, options);
+
+    enriched.push(enrichedItem);
+    if (typeof enrichedItem.soldQuantity === "number" && enrichedItem.soldQuantity > 0) {
+      completeCount += 1;
+    }
+    if (completeCount >= 3) {
+      break;
+    }
   }
 
-  return [...enriched, ...items.slice(topItems.length)];
+  return enriched;
 }
 
 async function enrichMercadoLivreItem(context, item, options = {}) {

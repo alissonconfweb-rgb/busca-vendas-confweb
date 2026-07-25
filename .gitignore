@@ -3,9 +3,13 @@ dist
 data
 .env
 .env.local
+.env.production
 .render-cli
 .render-cli.zip
 _deploy
+backups
+server-local.*
+*.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
