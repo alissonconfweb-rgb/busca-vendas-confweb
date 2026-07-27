@@ -2400,6 +2400,8 @@ function CheckoutPage({
   const pricing = planPricing(settings, selection.plan);
   const billingType: BillingType = selection.cycle === "yearly" ? annualBillingType : "CREDIT_CARD";
   const chargeMode: ChargeMode = selection.cycle === "yearly" ? "single" : "subscription";
+  const checkoutPaid = isPaidCheckoutStatus(result?.status);
+  const checkoutFailed = isFailedCheckoutStatus(result?.status);
   const paymentLabel = selection.cycle === "monthly"
     ? "Cartão mensal"
     : billingType === "PIX"
@@ -2803,7 +2805,7 @@ function CheckoutPage({
           {result && (
             <div className="checkout-result checkout-result-primary" ref={resultRef} aria-live="polite">
               <b>{result.message}</b>
-              {!isPaidCheckoutStatus(result.status) && !isFailedCheckoutStatus(result.status) && (
+              {!checkoutPaid && !checkoutFailed && (
                 <small className="payment-status">
                   <RefreshCw size={15} />
                   {result.billingType === "PIX" && !result.pixQrCode?.encodedImage
@@ -2813,30 +2815,30 @@ function CheckoutPage({
                       : "Aguardando a confirmação do pagamento..."}
                 </small>
               )}
-              {isPaidCheckoutStatus(result.status) && (
+              {checkoutPaid && (
                 <small className="payment-status payment-status-paid">
                   <UnlockKeyhole size={15} />
                   Pagamento confirmado. Plano liberado na sua conta.
                 </small>
               )}
-              {isFailedCheckoutStatus(result.status) && (
+              {checkoutFailed && (
                 <small className="payment-status payment-status-error">
                   <X size={15} />
                   A cobrança não foi aprovada. Revise os dados e tente novamente.
                 </small>
               )}
-              {result.pixQrCode?.encodedImage && (
+              {!checkoutPaid && !checkoutFailed && result.pixQrCode?.encodedImage && (
                 <div className="pix-qr-code">
                   <img src={`data:image/png;base64,${result.pixQrCode.encodedImage}`} alt="QR Code Pix" />
                   <strong>Escaneie o QR Code ou use o Pix copia e cola</strong>
                 </div>
               )}
-              {result.pixQrCode?.expirationDate && (
+              {!checkoutPaid && !checkoutFailed && result.pixQrCode?.expirationDate && (
                 <small className="pix-expiration">
                   {`Código válido até ${formatAsaasExpiration(result.pixQrCode.expirationDate)}`}
                 </small>
               )}
-              {result.pixQrCode?.payload && (
+              {!checkoutPaid && !checkoutFailed && result.pixQrCode?.payload && (
                 <>
                   <textarea aria-label="Código Pix copia e cola" readOnly value={result.pixQrCode.payload} />
                   <button
@@ -2853,9 +2855,10 @@ function CheckoutPage({
                   </button>
                 </>
               )}
-              {result.invoiceUrl && !isFailedCheckoutStatus(result.status) && (
+              {result.invoiceUrl && !checkoutFailed && (
                 <a href={result.invoiceUrl} target="_blank" rel="noreferrer">
-                  Abrir fatura segura Asaas
+                  <ReceiptText size={18} />
+                  {checkoutPaid ? "Ver comprovante" : "Abrir pagamento"}
                 </a>
               )}
             </div>
