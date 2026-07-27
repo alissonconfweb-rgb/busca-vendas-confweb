@@ -9,6 +9,7 @@
     "api": "node server/index.mjs",
     "admin:create": "node server/create-admin.mjs",
     "stress:zyte": "node scripts/stress-zyte.mjs",
+    "test": "node --test tests/*.test.mjs",
     "build": "tsc && vite build",
     "start": "node server/index.mjs",
     "preview": "vite preview --host 127.0.0.1"

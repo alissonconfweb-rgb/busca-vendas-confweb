@@ -219,6 +219,11 @@ export function initDatabase() {
   ensureColumn("users", "asaas_customer_id", "TEXT");
   ensureColumn("users", "email_verified_at", "TEXT");
   ensureColumn("users", "phone_verified_at", "TEXT");
+  ensureColumn("users", "billing_status", "TEXT NOT NULL DEFAULT 'none'");
+  ensureColumn("users", "billing_cycle", "TEXT");
+  ensureColumn("users", "billing_provider_subscription_id", "TEXT");
+  ensureColumn("users", "billing_payment_url", "TEXT");
+  ensureColumn("users", "billing_access_until", "TEXT");
   ensureColumn("finance_records", "provider", "TEXT");
   ensureColumn("finance_records", "external_id", "TEXT");
   ensureColumn("finance_records", "provider_payment_id", "TEXT");
@@ -229,6 +234,12 @@ export function initDatabase() {
   ensureColumn("finance_records", "plan", "TEXT");
   ensureColumn("finance_records", "billing_cycle", "TEXT");
   ensureColumn("finance_records", "billing_type", "TEXT");
+  db.prepare(`
+    UPDATE users
+    SET billing_status = 'active'
+    WHERE plan IN ('starter', 'scale')
+      AND (billing_status IS NULL OR billing_status = 'none')
+  `).run();
   seedDefaults();
 }
 
@@ -367,7 +378,12 @@ export function publicUser(user) {
     return null;
   }
 
-  const { password_hash, ...safeUser } = user;
+  const {
+    password_hash,
+    asaas_customer_id,
+    billing_provider_subscription_id,
+    ...safeUser
+  } = user;
   return safeUser;
 }
 

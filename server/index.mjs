@@ -19,6 +19,7 @@ import {
 import { buildProductQuerySpec, normalizedProductKey, normalizeProductSearchQuery } from "./product-match.mjs";
 import {
   asaasWebhookUrl,
+  billingBlocksSearch,
   createAsaasCheckout,
   handleAsaasWebhook,
   refreshAsaasCheckoutStatus,
@@ -26,6 +27,7 @@ import {
   syncAsaasSettingsFromEnv,
   testAsaasConnection,
 } from "./asaas.mjs";
+import { lookupBrazilianPostalCode } from "./postal-code.mjs";
 import { hashPassword, hashToken, randomToken, verifyPassword } from "./security.mjs";
 
 loadLocalEnv();
@@ -296,6 +298,16 @@ async function route(req, res) {
     return json(res, 200, db.prepare("SELECT * FROM tips WHERE status = 'published' ORDER BY id DESC").all());
   }
 
+  if (url.pathname === "/api/postal-code" && method === "GET") {
+    try {
+      const address = await lookupBrazilianPostalCode(url.searchParams.get("cep") || "");
+      return json(res, 200, address);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Não foi possível validar o CEP.";
+      return json(res, 400, { error: message });
+    }
+  }
+
   if (url.pathname === "/api/checkout/start" && method === "POST") {
     const body = await readJson(req);
     try {
@@ -342,6 +354,14 @@ async function handleSearch(req, res, user, query, options = {}) {
   const cleanQuery = query.trim();
   if (!cleanQuery) {
     return json(res, 400, { error: "Informe uma palavra-chave." });
+  }
+
+  if (!canUseAdmin(user) && billingBlocksSearch(user)) {
+    return json(res, 402, {
+      error: "Seu pagamento mensal está pendente. Regularize a cobrança para continuar pesquisando.",
+      code: "PAYMENT_REQUIRED",
+      paymentUrl: user.billing_payment_url || "",
+    });
   }
 
   if (user.role !== "admin" && user.search_limit !== null && user.searches_used >= user.search_limit) {
@@ -1127,7 +1147,12 @@ async function handleAdmin(req, res, url, currentUser) {
   }
 
   if (path === "users" && method === "GET") {
-    return json(res, 200, db.prepare("SELECT id, name, email, phone, role, status, plan, search_limit, searches_used, created_at FROM users ORDER BY id DESC").all());
+    return json(res, 200, db.prepare(`
+      SELECT id, name, email, phone, role, status, plan, search_limit, searches_used,
+             billing_status, billing_cycle, billing_payment_url, billing_access_until, created_at
+      FROM users
+      ORDER BY id DESC
+    `).all());
   }
 
   if (path === "users" && method === "POST") {
@@ -1137,9 +1162,10 @@ async function handleAdmin(req, res, url, currentUser) {
     const email = required(body.email);
     const phone = String(body.phone || "").trim();
     const role = isCreator(currentUser) && (body.role === "admin" || email.toLowerCase() === CREATOR_EMAIL) ? "admin" : "user";
+    const billingStatus = ["starter", "scale"].includes(plan) ? "active" : "none";
     const result = db.prepare(`
-      INSERT INTO users (name, email, phone, password_hash, role, status, plan, search_limit)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO users (name, email, phone, password_hash, role, status, plan, search_limit, billing_status)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       required(body.name),
       email,
@@ -1149,8 +1175,14 @@ async function handleAdmin(req, res, url, currentUser) {
       body.status || "active",
       plan,
       searchLimit,
+      billingStatus,
     );
-    return json(res, 201, db.prepare("SELECT id, name, email, phone, role, status, plan, search_limit, searches_used, created_at FROM users WHERE id = ?").get(result.lastInsertRowid));
+    return json(res, 201, db.prepare(`
+      SELECT id, name, email, phone, role, status, plan, search_limit, searches_used,
+             billing_status, billing_cycle, billing_payment_url, billing_access_until, created_at
+      FROM users
+      WHERE id = ?
+    `).get(result.lastInsertRowid));
   }
 
   const userMatch = path.match(/^users\/(\d+)$/);
@@ -1166,9 +1198,33 @@ async function handleAdmin(req, res, url, currentUser) {
         ? body.role
         : target.role;
     db.prepare(`
-      UPDATE users SET name = ?, phone = ?, status = ?, plan = ?, search_limit = ?, role = ?, updated_at = CURRENT_TIMESTAMP
+      UPDATE users
+      SET name = ?,
+          phone = ?,
+          status = ?,
+          plan = ?,
+          search_limit = ?,
+          role = ?,
+          billing_status = CASE WHEN ? IN ('starter', 'scale') THEN 'active' ELSE 'none' END,
+          billing_cycle = CASE WHEN ? IN ('starter', 'scale') THEN COALESCE(billing_cycle, 'monthly') ELSE NULL END,
+          billing_provider_subscription_id = CASE WHEN ? IN ('starter', 'scale') THEN billing_provider_subscription_id ELSE NULL END,
+          billing_payment_url = CASE WHEN ? IN ('starter', 'scale') THEN billing_payment_url ELSE NULL END,
+          billing_access_until = NULL,
+          updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
-    `).run(body.name, String(body.phone || "").trim(), body.status, body.plan, nullableNumber(body.search_limit), role, Number(userMatch[1]));
+    `).run(
+      body.name,
+      String(body.phone || "").trim(),
+      body.status,
+      body.plan,
+      nullableNumber(body.search_limit),
+      role,
+      body.plan,
+      body.plan,
+      body.plan,
+      body.plan,
+      Number(userMatch[1]),
+    );
     return json(res, 200, { ok: true });
   }
 

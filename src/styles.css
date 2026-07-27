@@ -1369,6 +1369,53 @@ textarea:focus {
   font-weight: 800;
 }
 
+.billing-alert {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin-top: 14px;
+  border: 1px solid #f3b37a;
+  border-radius: 14px;
+  background: #fff8f1;
+  padding: 14px 16px;
+}
+
+.billing-alert > div,
+.billing-alert span {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.billing-alert span {
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 2px;
+  color: var(--muted);
+}
+
+.billing-alert svg,
+.billing-alert strong,
+.billing-status-label {
+  color: #b54708;
+}
+
+.billing-alert a,
+.billing-alert button {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  color: #fff;
+  background: var(--orange);
+  padding: 11px 16px;
+  font-weight: 900;
+  text-decoration: none;
+}
+
+.billing-status-label {
+  font-weight: 900;
+}
+
 .demand-card,
 .margin-card,
 .commercial-mini {
@@ -2375,6 +2422,24 @@ button.learn-card span {
 
 .checkout-fields .wide {
   grid-column: 1 / -1;
+}
+
+.postal-code-feedback {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.3;
+}
+
+.postal-code-feedback.success {
+  color: #087a48;
+}
+
+.postal-code-feedback.error {
+  color: var(--danger);
 }
 
 .payment-toggle {
@@ -3844,6 +3909,17 @@ article.table-row {
   .support-admin-row,
   .history-row {
     grid-template-columns: 1fr;
+  }
+
+  .billing-alert {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .billing-alert a,
+  .billing-alert button {
+    width: 100%;
+    text-align: center;
   }
 
   .history-row button {

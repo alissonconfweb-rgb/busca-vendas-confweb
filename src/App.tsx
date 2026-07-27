@@ -53,6 +53,10 @@ type User = {
   plan: Plan;
   search_limit: number | null;
   searches_used: number;
+  billing_status?: "none" | "active" | "past_due" | "canceling" | "canceled" | string;
+  billing_cycle?: PlanCycle | null;
+  billing_payment_url?: string | null;
+  billing_access_until?: string | null;
   can_admin?: boolean;
   is_creator?: boolean;
 };
@@ -189,6 +193,14 @@ type CheckoutStatus = {
   } | null;
   message: string;
   user?: User;
+};
+
+type PostalCodeAddress = {
+  cep: string;
+  street: string;
+  neighborhood: string;
+  city: string;
+  state: string;
 };
 
 type HistoryRecord = {
@@ -969,13 +981,31 @@ function userPlanInfo(user: User | null) {
   const planLabel = user.plan === "scale" ? "Ilimitado" : user.plan === "starter" ? "10 pesquisas" : "Grátis";
   const limit = user.search_limit ?? 1;
   const used = user.searches_used ?? 0;
-  const remaining = user.search_limit === null ? "Sem limite" : `${Math.max(0, limit - used)} de ${limit}`;
+  const remaining = billingNeedsAttention(user)
+    ? "Bloqueadas até regularizar"
+    : user.search_limit === null
+      ? "Sem limite"
+      : `${Math.max(0, limit - used)} de ${limit}`;
   const usage =
     user.search_limit === null
       ? 100
       : Math.max(0, Math.min(100, ((limit - used) / Math.max(1, limit)) * 100));
 
   return { planLabel, remaining, usage };
+}
+
+function billingNeedsAttention(user: User | null) {
+  if (!user || canUseAdmin(user)) {
+    return false;
+  }
+  if (["past_due", "canceled"].includes(user.billing_status || "")) {
+    return true;
+  }
+  if (user.billing_status === "canceling" && user.billing_access_until) {
+    const accessUntil = Date.parse(user.billing_access_until);
+    return Number.isFinite(accessUntil) && accessUntil <= Date.now();
+  }
+  return false;
 }
 
 function MobileProfileMenu({
@@ -1073,6 +1103,7 @@ function MobileProfileMenu({
         <div className="mobile-plan-summary">
           <span>Plano atual</span>
           <strong>{planLabel}</strong>
+          {billingNeedsAttention(user) && <small className="billing-status-label">Pagamento pendente</small>}
           <small>Pesquisas restantes: {remaining}</small>
           <div className="usage-track">
             <i style={{ width: `${usage}%` }} />
@@ -1204,6 +1235,7 @@ function PlanStatus({
     <section className="plan-card">
       <span>Plano atual</span>
       <strong>{planLabel}</strong>
+      {billingNeedsAttention(user) && <small className="billing-status-label">Pagamento pendente</small>}
       <small>Pesquisas completas restantes</small>
       <b>{remaining}</b>
       <div className="usage-track">
@@ -1283,6 +1315,10 @@ function SearchPage({
     if (!onLoginRequired()) {
       return;
     }
+    if (billingNeedsAttention(user)) {
+      setError("Seu pagamento mensal está pendente. Regularize a cobrança para continuar pesquisando.");
+      return;
+    }
 
     const cleanQuery = query.trim();
     if (!cleanQuery) {
@@ -1341,6 +1377,25 @@ function SearchPage({
           </button>
         ))}
       </div>
+
+      {billingNeedsAttention(user) && (
+        <section className="billing-alert" role="alert">
+          <div>
+            <CreditCard size={22} />
+            <span>
+              <strong>Pagamento mensal pendente</strong>
+              Regularize a cobrança para liberar suas pesquisas novamente.
+            </span>
+          </div>
+          {user?.billing_payment_url ? (
+            <a href={user.billing_payment_url} target="_blank" rel="noreferrer">
+              Regularizar pagamento
+            </a>
+          ) : (
+            <button type="button" onClick={onPlans}>Ver planos</button>
+          )}
+        </section>
+      )}
 
       <div className="results-anchor" ref={resultsRef}>
         {error && <p className="inline-error">{error}</p>}
@@ -2395,6 +2450,9 @@ function CheckoutPage({
   const [result, setResult] = useState<CheckoutResult | null>(null);
   const [pixCopied, setPixCopied] = useState(false);
   const [annualBillingType, setAnnualBillingType] = useState<BillingType>("PIX");
+  const [postalAddress, setPostalAddress] = useState<PostalCodeAddress | null>(null);
+  const [postalCodeError, setPostalCodeError] = useState("");
+  const [checkingPostalCode, setCheckingPostalCode] = useState(false);
   const resultRef = useRef<HTMLDivElement>(null);
   const offer = checkoutOffer(settings, selection);
   const pricing = planPricing(settings, selection.plan);
@@ -2487,6 +2545,34 @@ function CheckoutPage({
     setError("");
   };
 
+  const validatePostalCode = async (value: unknown) => {
+    const postalCode = digitsOnly(value);
+    if (postalCode.length !== 8) {
+      const message = "Informe um CEP com 8 números.";
+      setPostalAddress(null);
+      setPostalCodeError(message);
+      throw new Error(message);
+    }
+    if (postalAddress?.cep === postalCode) {
+      return postalAddress;
+    }
+
+    setCheckingPostalCode(true);
+    setPostalCodeError("");
+    try {
+      const address = await api<PostalCodeAddress>(`/api/postal-code?cep=${postalCode}`);
+      setPostalAddress(address);
+      return address;
+    } catch (apiError) {
+      const message = apiError instanceof Error ? apiError.message : "Não foi possível validar o CEP.";
+      setPostalAddress(null);
+      setPostalCodeError(message);
+      throw new Error(message);
+    } finally {
+      setCheckingPostalCode(false);
+    }
+  };
+
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!onLoginRequired()) {
@@ -2533,6 +2619,10 @@ function CheckoutPage({
         if (digitsOnly(data.postal_code).length !== 8) {
           throw new Error("Informe um CEP com 8 números.");
         }
+        if (!digitsOnly(data.address_number)) {
+          throw new Error("Informe o número do endereço do titular do cartão.");
+        }
+        await validatePostalCode(data.postal_code);
       }
       const payload = {
         plan: selection.plan,
@@ -2762,7 +2852,7 @@ function CheckoutPage({
                   required
                 />
               </label>
-              <label>
+              <label className="postal-code-field">
                 CEP
                 <input
                   name="postal_code"
@@ -2772,9 +2862,28 @@ function CheckoutPage({
                   placeholder="00000-000"
                   onInput={(event) => {
                     event.currentTarget.value = formatPostalCode(event.currentTarget.value);
+                    setPostalAddress(null);
+                    setPostalCodeError("");
+                  }}
+                  onBlur={(event) => {
+                    void validatePostalCode(event.currentTarget.value).catch(() => undefined);
                   }}
                   required
                 />
+                {checkingPostalCode && <small className="postal-code-feedback">Localizando CEP...</small>}
+                {!checkingPostalCode && postalCodeError && (
+                  <small className="postal-code-feedback error">{postalCodeError}</small>
+                )}
+                {!checkingPostalCode && postalAddress && (
+                  <small className="postal-code-feedback success">
+                    <CircleCheck size={14} />
+                    {[
+                      postalAddress.street,
+                      postalAddress.neighborhood,
+                      [postalAddress.city, postalAddress.state].filter(Boolean).join("/"),
+                    ].filter(Boolean).join(" - ")}
+                  </small>
+                )}
               </label>
               <label>
                 Número

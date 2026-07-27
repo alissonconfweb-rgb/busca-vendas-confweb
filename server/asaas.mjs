@@ -1,4 +1,5 @@
 import { db, getSetting, setSetting } from "./db.mjs";
+import { lookupBrazilianPostalCode } from "./postal-code.mjs";
 import { randomToken } from "./security.mjs";
 
 const SANDBOX_URL = "https://api-sandbox.asaas.com/v3";
@@ -15,6 +16,19 @@ const FAILED_STATUSES = new Set([
   "AWAITING_CHARGEBACK_REVERSAL",
   "DUNNING_REQUESTED",
   "DUNNING_RECEIVED",
+  "CREDIT_CARD_CAPTURE_REFUSED",
+  "REPROVED_BY_RISK_ANALYSIS",
+]);
+const PAYMENT_FAILURE_EVENTS = new Set([
+  "PAYMENT_CREDIT_CARD_CAPTURE_REFUSED",
+  "PAYMENT_REPROVED_BY_RISK_ANALYSIS",
+  "PAYMENT_OVERDUE",
+  "PAYMENT_DELETED",
+  "PAYMENT_REFUNDED",
+]);
+const SUBSCRIPTION_CANCELED_EVENTS = new Set([
+  "SUBSCRIPTION_INACTIVATED",
+  "SUBSCRIPTION_DELETED",
 ]);
 
 export function isAsaasConfigured() {
@@ -69,6 +83,10 @@ export async function setupAsaasIntegration({ email, publicUrl }) {
       "PAYMENT_DELETED",
       "PAYMENT_REFUNDED",
       "PAYMENT_CREDIT_CARD_CAPTURE_REFUSED",
+      "SUBSCRIPTION_CREATED",
+      "SUBSCRIPTION_UPDATED",
+      "SUBSCRIPTION_INACTIVATED",
+      "SUBSCRIPTION_DELETED",
     ],
   };
 
@@ -114,7 +132,10 @@ export async function createAsaasCheckout({ user, body, settings, remoteIp }) {
 
   const offer = resolvePlanOffer(body, settings);
   const { billingType, chargeMode } = paymentRuleForOffer(offer, body);
-  const customerId = await ensureAsaasCustomer(user, body);
+  const checkoutBody = billingType === "CREDIT_CARD"
+    ? await normalizeCreditCardCheckoutBody(body)
+    : body;
+  const customerId = await ensureAsaasCustomer(user, checkoutBody);
   const externalReference = [
     "bv",
     user.id,
@@ -144,7 +165,7 @@ export async function createAsaasCheckout({ user, body, settings, remoteIp }) {
         ...(billingType === "CREDIT_CARD" && offer.cycle === "yearly"
           ? { installmentCount: 12, totalValue: offer.value }
           : { value: offer.value }),
-        ...(billingType === "CREDIT_CARD" ? creditCardPayload(body, remoteIp) : {}),
+        ...(billingType === "CREDIT_CARD" ? creditCardPayload(checkoutBody, remoteIp) : {}),
       },
     });
     firstPayment = providerResult;
@@ -156,7 +177,7 @@ export async function createAsaasCheckout({ user, body, settings, remoteIp }) {
         value: offer.value,
         cycle: offer.cycle === "yearly" ? "YEARLY" : "MONTHLY",
         nextDueDate: isoDate(),
-        ...(billingType === "CREDIT_CARD" ? creditCardPayload(body, remoteIp) : {}),
+        ...(billingType === "CREDIT_CARD" ? creditCardPayload(checkoutBody, remoteIp) : {}),
       },
     });
     firstPayment = await findFirstSubscriptionPayment(providerResult.id);
@@ -182,7 +203,11 @@ export async function createAsaasCheckout({ user, body, settings, remoteIp }) {
   });
 
   if (PAID_STATUSES.has(status)) {
-    activateUserPlan(user.id, offer);
+    activateUserPlan(user.id, offer, {
+      subscriptionId: chargeMode === "subscription" ? providerResult.id : "",
+      paymentUrl: invoiceUrl,
+      resetUsage: true,
+    });
   }
 
   return {
@@ -245,7 +270,16 @@ export async function refreshAsaasCheckoutStatus({ user, financeId }) {
     );
 
     if (PAID_STATUSES.has(status)) {
-      activateUserPlan(user.id, offerFromFinanceRecord(record));
+      activateUserPlan(user.id, offerFromFinanceRecord(record), {
+        subscriptionId: record.provider_subscription_id || providerPayment.subscription || "",
+        paymentUrl: providerPayment.invoiceUrl || record.payment_url || "",
+        resetUsage: record.status !== "paid",
+      });
+    } else if (FAILED_STATUSES.has(status) && record.provider_subscription_id) {
+      suspendRecurringPlan(user.id, {
+        subscriptionId: record.provider_subscription_id,
+        paymentUrl: providerPayment.invoiceUrl || record.payment_url || "",
+      });
     }
   }
 
@@ -290,51 +324,98 @@ export async function handleAsaasWebhook(req, publicUrl) {
   }
 
   const event = await readJsonFromRequest(req);
-  const payment = event.payment || event.subscription || {};
-  const providerId = payment.id || event.id;
-  const externalReference = payment.externalReference || event.externalReference || "";
-  const status = payment.status || event.status || "";
-  const value = Number(payment.value || event.value || 0);
+  const eventName = String(event.event || "").trim().toUpperCase();
+  const isSubscriptionEvent = Boolean(event.subscription);
+  const resource = event.payment || event.subscription || {};
+  const providerId = resource.id || event.id || "";
+  const subscriptionId = String(
+    event.payment?.subscription
+    || (isSubscriptionEvent ? resource.id : "")
+    || "",
+  );
+  const externalReference = resource.externalReference || event.externalReference || "";
+  const status = effectiveAsaasStatus(eventName, resource.status || event.status || "");
+  const value = Number(resource.value || event.value || 0);
+  const paymentUrl = resource.invoiceUrl || resource.bankSlipUrl || "";
 
-  const row = providerId
-    ? db.prepare("SELECT * FROM finance_records WHERE external_id = ? OR provider_payment_id = ? ORDER BY id DESC LIMIT 1").get(providerId, providerId)
-    : null;
+  let row = findFinanceRecord({
+    providerId,
+    subscriptionId,
+    externalReference,
+  });
+  const isNewPaidCycle = Boolean(
+    !row
+    || row.status !== "paid"
+    || (providerId && row.provider_payment_id && row.provider_payment_id !== providerId),
+  );
   const referenceInfo = parseExternalReference(externalReference || row?.external_reference);
   const userId = row?.user_id || referenceInfo.userId || null;
   const offer = referenceInfo.plan
     ? offerFromReference(referenceInfo)
-    : null;
+    : row?.plan
+      ? offerFromFinanceRecord(row)
+      : null;
 
-  if (row) {
-    db.prepare(`
-      UPDATE finance_records
-      SET status = ?, amount = COALESCE(NULLIF(?, 0), amount), paid_at = ?, updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `).run(financeStatusFromAsaas(status), value, PAID_STATUSES.has(status) ? isoDateTime() : row.paid_at, row.id);
-  } else if (userId) {
-    db.prepare(`
-      INSERT INTO finance_records (user_id, type, description, amount, status, paid_at, provider, external_id, provider_payment_id, external_reference)
-      VALUES (?, ?, ?, ?, ?, ?, 'asaas', ?, ?, ?)
-    `).run(
+  if (!isSubscriptionEvent && userId) {
+    row = saveWebhookPayment({
+      row,
       userId,
-      "asaas_webhook",
-      `Webhook Asaas ${status || event.event || ""}`.trim(),
+      offer,
+      providerId,
+      subscriptionId,
+      externalReference,
+      status,
       value,
-      financeStatusFromAsaas(status),
-      PAID_STATUSES.has(status) ? isoDateTime() : null,
-      providerId || null,
-      providerId || null,
-      externalReference || null,
-    );
+      paymentUrl,
+      resource,
+      eventName,
+    });
   }
 
   if (userId && offer && PAID_STATUSES.has(status)) {
-    activateUserPlan(userId, offer);
+    activateUserPlan(userId, offer, {
+      subscriptionId: subscriptionId || row?.provider_subscription_id || "",
+      paymentUrl: paymentUrl || row?.payment_url || "",
+      resetUsage: isNewPaidCycle,
+    });
+  } else if (
+    userId
+    && (PAYMENT_FAILURE_EVENTS.has(eventName) || FAILED_STATUSES.has(status))
+    && (subscriptionId || referenceInfo.chargeMode === "subscription" || row?.provider_subscription_id)
+  ) {
+    suspendRecurringPlan(userId, {
+      subscriptionId: subscriptionId || row?.provider_subscription_id || "",
+      paymentUrl: paymentUrl || row?.payment_url || "",
+    });
   }
 
-  setSetting("asaas_last_event", `${event.event || "evento"} ${status || ""}`.trim());
+  if (userId && SUBSCRIPTION_CANCELED_EVENTS.has(eventName)) {
+    scheduleSubscriptionCancellation(userId, {
+      subscriptionId: subscriptionId || providerId,
+      nextDueDate: resource.nextDueDate || "",
+    });
+  }
+
+  setSetting("asaas_last_event", `${eventName || "evento"} ${status || ""}`.trim());
   setSetting("asaas_last_webhook_url", asaasWebhookUrl(publicUrl));
   return { ok: true, status: 200, body: { ok: true } };
+}
+
+export function billingBlocksSearch(user) {
+  if (!user) {
+    return false;
+  }
+
+  if (["past_due", "canceled"].includes(user.billing_status)) {
+    return true;
+  }
+
+  if (user.billing_status === "canceling" && user.billing_access_until) {
+    const accessUntil = Date.parse(user.billing_access_until);
+    return Number.isFinite(accessUntil) && accessUntil <= Date.now();
+  }
+
+  return false;
 }
 
 export function syncAsaasSettingsFromEnv() {
@@ -392,6 +473,24 @@ function paymentRuleForOffer(offer, body) {
   return {
     billingType: "CREDIT_CARD",
     chargeMode: "subscription",
+  };
+}
+
+async function normalizeCreditCardCheckoutBody(body) {
+  const holder = body.creditCardHolderInfo || {};
+  const addressNumber = String(holder.addressNumber || "").trim();
+  if (!addressNumber) {
+    throw new Error("Informe o número do endereço do titular do cartão.");
+  }
+
+  const address = await lookupBrazilianPostalCode(holder.postalCode);
+  return {
+    ...body,
+    creditCardHolderInfo: {
+      ...holder,
+      postalCode: address.cep,
+      addressNumber,
+    },
   };
 }
 
@@ -572,12 +671,239 @@ function saveFinanceRecord({ user, offer, billingType, chargeMode, status, provi
   return result.lastInsertRowid;
 }
 
-function activateUserPlan(userId, offer) {
+function findFinanceRecord({ providerId = "", subscriptionId = "", externalReference = "" } = {}) {
+  if (providerId) {
+    const direct = db.prepare(`
+      SELECT *
+      FROM finance_records
+      WHERE provider = 'asaas'
+        AND (external_id = ? OR provider_payment_id = ?)
+      ORDER BY id DESC
+      LIMIT 1
+    `).get(providerId, providerId);
+    if (direct) {
+      return direct;
+    }
+  }
+
+  if (subscriptionId) {
+    const subscription = db.prepare(`
+      SELECT *
+      FROM finance_records
+      WHERE provider = 'asaas' AND provider_subscription_id = ?
+      ORDER BY id DESC
+      LIMIT 1
+    `).get(subscriptionId);
+    if (subscription) {
+      return subscription;
+    }
+  }
+
+  if (externalReference) {
+    return db.prepare(`
+      SELECT *
+      FROM finance_records
+      WHERE provider = 'asaas' AND external_reference = ?
+      ORDER BY id DESC
+      LIMIT 1
+    `).get(externalReference) || null;
+  }
+
+  return null;
+}
+
+function saveWebhookPayment({
+  row,
+  userId,
+  offer,
+  providerId,
+  subscriptionId,
+  externalReference,
+  status,
+  value,
+  paymentUrl,
+  resource,
+  eventName,
+}) {
+  const isRenewal = Boolean(
+    row
+    && providerId
+    && subscriptionId
+    && row.provider_payment_id
+    && row.provider_payment_id !== providerId,
+  );
+  const paidAt = PAID_STATUSES.has(status) ? isoDateTime() : null;
+  const financeStatus = financeStatusFromAsaas(status);
+
+  if (!row || isRenewal) {
+    const result = db.prepare(`
+      INSERT INTO finance_records (
+        user_id, type, description, amount, status, due_date, paid_at,
+        provider, external_id, provider_payment_id, provider_subscription_id,
+        external_reference, payment_url, plan, billing_cycle, billing_type
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'asaas', ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      userId,
+      isRenewal ? "asaas_renewal" : "asaas_webhook",
+      row?.description || offer?.description || `Webhook Asaas ${eventName || status}`.trim(),
+      value || row?.amount || offer?.value || 0,
+      financeStatus,
+      resource.dueDate || row?.due_date || null,
+      paidAt,
+      providerId || null,
+      providerId || null,
+      subscriptionId || row?.provider_subscription_id || null,
+      externalReference || row?.external_reference || null,
+      paymentUrl || row?.payment_url || null,
+      offer?.plan || row?.plan || null,
+      offer?.cycle || row?.billing_cycle || null,
+      resource.billingType || row?.billing_type || null,
+    );
+    return db.prepare("SELECT * FROM finance_records WHERE id = ?").get(result.lastInsertRowid);
+  }
+
+  db.prepare(`
+    UPDATE finance_records
+    SET status = ?,
+        amount = COALESCE(NULLIF(?, 0), amount),
+        due_date = COALESCE(NULLIF(?, ''), due_date),
+        paid_at = CASE WHEN ? IS NOT NULL THEN ? ELSE paid_at END,
+        external_id = COALESCE(NULLIF(?, ''), external_id),
+        provider_payment_id = COALESCE(NULLIF(?, ''), provider_payment_id),
+        provider_subscription_id = COALESCE(NULLIF(?, ''), provider_subscription_id),
+        external_reference = COALESCE(NULLIF(?, ''), external_reference),
+        payment_url = COALESCE(NULLIF(?, ''), payment_url),
+        updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(
+    financeStatus,
+    value,
+    resource.dueDate || "",
+    paidAt,
+    paidAt,
+    providerId || "",
+    providerId || "",
+    subscriptionId || "",
+    externalReference || "",
+    paymentUrl || "",
+    row.id,
+  );
+  return db.prepare("SELECT * FROM finance_records WHERE id = ?").get(row.id);
+}
+
+function activateUserPlan(userId, offer, billing = {}) {
   db.prepare(`
     UPDATE users
-    SET plan = ?, search_limit = ?, updated_at = CURRENT_TIMESTAMP
+    SET plan = ?,
+        search_limit = ?,
+        searches_used = CASE WHEN ? = 1 THEN 0 ELSE searches_used END,
+        billing_status = 'active',
+        billing_cycle = ?,
+        billing_provider_subscription_id = CASE
+          WHEN NULLIF(?, '') IS NOT NULL THEN ?
+          ELSE billing_provider_subscription_id
+        END,
+        billing_payment_url = CASE
+          WHEN NULLIF(?, '') IS NOT NULL THEN ?
+          ELSE billing_payment_url
+        END,
+        billing_access_until = NULL,
+        updated_at = CURRENT_TIMESTAMP
     WHERE id = ?
-  `).run(offer.plan, offer.searchLimit, userId);
+  `).run(
+    offer.plan,
+    offer.searchLimit,
+    billing.resetUsage ? 1 : 0,
+    offer.cycle,
+    billing.subscriptionId || "",
+    billing.subscriptionId || "",
+    billing.paymentUrl || "",
+    billing.paymentUrl || "",
+    userId,
+  );
+}
+
+function suspendRecurringPlan(userId, { subscriptionId = "", paymentUrl = "" } = {}) {
+  const user = db.prepare("SELECT * FROM users WHERE id = ?").get(userId);
+  if (!user || !["starter", "scale"].includes(user.plan)) {
+    return;
+  }
+  if (
+    user.billing_provider_subscription_id
+    && subscriptionId
+    && user.billing_provider_subscription_id !== subscriptionId
+  ) {
+    return;
+  }
+
+  db.prepare(`
+    UPDATE users
+    SET billing_status = 'past_due',
+        billing_provider_subscription_id = CASE
+          WHEN NULLIF(?, '') IS NOT NULL THEN ?
+          ELSE billing_provider_subscription_id
+        END,
+        billing_payment_url = CASE
+          WHEN NULLIF(?, '') IS NOT NULL THEN ?
+          ELSE billing_payment_url
+        END,
+        updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(
+    subscriptionId,
+    subscriptionId,
+    paymentUrl,
+    paymentUrl,
+    userId,
+  );
+}
+
+function scheduleSubscriptionCancellation(userId, { subscriptionId = "", nextDueDate = "" } = {}) {
+  const user = db.prepare("SELECT * FROM users WHERE id = ?").get(userId);
+  if (!user || !["starter", "scale"].includes(user.plan)) {
+    return;
+  }
+  if (
+    user.billing_provider_subscription_id
+    && subscriptionId
+    && user.billing_provider_subscription_id !== subscriptionId
+  ) {
+    return;
+  }
+
+  const accessUntil = subscriptionAccessUntil(userId, user.billing_cycle, nextDueDate);
+  const status = Date.parse(accessUntil) > Date.now() ? "canceling" : "canceled";
+  db.prepare(`
+    UPDATE users
+    SET billing_status = ?,
+        billing_access_until = ?,
+        updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(status, accessUntil, userId);
+}
+
+function subscriptionAccessUntil(userId, cycle, nextDueDate) {
+  const parsedNextDueDate = Date.parse(nextDueDate);
+  if (Number.isFinite(parsedNextDueDate)) {
+    return new Date(parsedNextDueDate).toISOString();
+  }
+
+  const lastPaid = db.prepare(`
+    SELECT paid_at, due_date, billing_cycle
+    FROM finance_records
+    WHERE user_id = ? AND provider = 'asaas' AND status = 'paid'
+    ORDER BY COALESCE(paid_at, created_at) DESC
+    LIMIT 1
+  `).get(userId);
+  const baseDate = new Date(lastPaid?.paid_at || lastPaid?.due_date || Date.now());
+  const billingCycle = lastPaid?.billing_cycle || cycle;
+  if (billingCycle === "yearly") {
+    baseDate.setUTCFullYear(baseDate.getUTCFullYear() + 1);
+  } else {
+    baseDate.setUTCMonth(baseDate.getUTCMonth() + 1);
+  }
+  return baseDate.toISOString();
 }
 
 function offerFromReference(referenceInfo) {
@@ -622,9 +948,22 @@ function checkoutMessage({ billingType, status, invoiceUrl, pixQrCode }) {
   return "Cobrança criada. Aguarde a confirmação do pagamento.";
 }
 
+function effectiveAsaasStatus(eventName, status) {
+  const normalizedStatus = String(status || "").trim().toUpperCase();
+  const eventStatus = String(eventName || "").replace(/^PAYMENT_/, "");
+  if (
+    PAID_STATUSES.has(eventStatus)
+    || FAILED_STATUSES.has(eventStatus)
+    || PAYMENT_FAILURE_EVENTS.has(eventName)
+  ) {
+    return eventStatus;
+  }
+  return normalizedStatus;
+}
+
 function financeStatusFromAsaas(status = "") {
   if (PAID_STATUSES.has(status)) return "paid";
-  if (["DELETED", "REFUNDED", "CANCELED", "OVERDUE"].includes(status)) return "canceled";
+  if (FAILED_STATUSES.has(status)) return "canceled";
   return "pending";
 }
 
