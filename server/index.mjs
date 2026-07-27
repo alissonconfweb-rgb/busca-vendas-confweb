@@ -1357,6 +1357,22 @@ async function handleAdmin(req, res, url, currentUser) {
     return json(res, 201, db.prepare("SELECT * FROM finance_records WHERE id = ?").get(result.lastInsertRowid));
   }
 
+  if (path === "finance" && method === "DELETE") {
+    const body = await readJson(req);
+    const ids = [...new Set(
+      (Array.isArray(body.ids) ? body.ids : [])
+        .map(Number)
+        .filter((id) => Number.isInteger(id) && id > 0),
+    )];
+    if (!ids.length) {
+      return json(res, 400, { error: "Selecione pelo menos um registro financeiro." });
+    }
+
+    const placeholders = ids.map(() => "?").join(", ");
+    const result = db.prepare(`DELETE FROM finance_records WHERE id IN (${placeholders})`).run(...ids);
+    return json(res, 200, { ok: true, deleted: result.changes });
+  }
+
   const financeMatch = path.match(/^finance\/(\d+)$/);
   if (financeMatch && method === "PATCH") {
     const body = await readJson(req);

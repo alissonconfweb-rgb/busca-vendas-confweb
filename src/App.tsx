@@ -3867,7 +3867,15 @@ function AdminUsers({
 
 function AdminFinance({ finance, users, afterSave }: { finance: FinanceRecord[]; users: User[]; afterSave: () => void }) {
   const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [deletingSelected, setDeletingSelected] = useState(false);
   const [deleteError, setDeleteError] = useState("");
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(() => new Set());
+  const allSelected = finance.length > 0 && selectedIds.size === finance.length;
+
+  useEffect(() => {
+    const availableIds = new Set(finance.map((record) => record.id));
+    setSelectedIds((current) => new Set([...current].filter((id) => availableIds.has(id))));
+  }, [finance]);
 
   const create = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -3896,6 +3904,46 @@ function AdminFinance({ finance, users, afterSave }: { finance: FinanceRecord[];
     }
   };
 
+  const toggleSelected = (recordId: number) => {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (next.has(recordId)) {
+        next.delete(recordId);
+      } else {
+        next.add(recordId);
+      }
+      return next;
+    });
+  };
+
+  const toggleAll = () => {
+    setSelectedIds(allSelected ? new Set() : new Set(finance.map((record) => record.id)));
+  };
+
+  const removeSelected = async () => {
+    const ids = [...selectedIds];
+    if (!ids.length || !window.confirm(
+      `Excluir ${ids.length} registro(s) selecionado(s) do financeiro interno?\n\nEssa ação não exclui nem estorna cobranças no Asaas.`,
+    )) {
+      return;
+    }
+
+    setDeleteError("");
+    setDeletingSelected(true);
+    try {
+      await api("/api/admin/finance", {
+        method: "DELETE",
+        body: JSON.stringify({ ids }),
+      });
+      setSelectedIds(new Set());
+      await afterSave();
+    } catch (error) {
+      setDeleteError(error instanceof Error ? error.message : "Não foi possível excluir os registros.");
+    } finally {
+      setDeletingSelected(false);
+    }
+  };
+
   return (
     <div className="admin-section">
       <form className="admin-form" onSubmit={create}>
@@ -3918,9 +3966,39 @@ function AdminFinance({ finance, users, afterSave }: { finance: FinanceRecord[];
         <button type="submit">Registrar</button>
       </form>
       {deleteError && <p className="form-error">{deleteError}</p>}
+      <div className="finance-bulk-toolbar">
+        <label>
+          <input
+            type="checkbox"
+            checked={allSelected}
+            disabled={!finance.length || deletingSelected}
+            onChange={toggleAll}
+          />
+          Selecionar todos
+        </label>
+        <span>{selectedIds.size} selecionado(s)</span>
+        <button
+          className="danger-button"
+          type="button"
+          disabled={!selectedIds.size || deletingSelected}
+          onClick={removeSelected}
+        >
+          <Trash2 size={17} />
+          {deletingSelected ? "Excluindo..." : "Excluir selecionados"}
+        </button>
+      </div>
       <div className="table-list">
         {finance.map((record) => (
           <article className="table-row finance-row" key={record.id}>
+            <label className="finance-row-check" title={`Selecionar ${record.description}`}>
+              <input
+                type="checkbox"
+                aria-label={`Selecionar ${record.description}`}
+                checked={selectedIds.has(record.id)}
+                disabled={deletingSelected}
+                onChange={() => toggleSelected(record.id)}
+              />
+            </label>
             <strong>{record.description}</strong>
             <span>{record.user_email || "Sem usuário"}</span>
             <span>{record.type}</span>
@@ -3929,7 +4007,7 @@ function AdminFinance({ finance, users, afterSave }: { finance: FinanceRecord[];
             <button
               className="danger-button"
               type="button"
-              disabled={deletingId === record.id}
+              disabled={deletingSelected || deletingId === record.id}
               onClick={() => remove(record)}
               title="Excluir registro interno"
             >
