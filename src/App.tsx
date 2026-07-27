@@ -641,6 +641,7 @@ function ProductApp({ user, onUserChange }: { user: User | null; onUserChange: (
   const [refreshKey, setRefreshKey] = useState(0);
   const [checkoutSelection, setCheckoutSelection] = useState<CheckoutSelection>({ plan: "starter", cycle: "monthly" });
   const [restoredSearch, setRestoredSearch] = useState<RestoredSearch | null>(null);
+  const [selectedTip, setSelectedTip] = useState<Tip | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem("bv_sidebar_collapsed") !== "false");
 
   const loadPrivateData = async () => {
@@ -779,6 +780,7 @@ function ProductApp({ user, onUserChange }: { user: User | null; onUserChange: (
             onHistoryRefresh={() => setRefreshKey((key) => key + 1)}
             onPlans={() => setMode("plans")}
             onCheckout={openCheckout}
+            onTip={setSelectedTip}
           />
         )}
         {mode === "history" && <HistoryPage user={user} history={history} onLoginRequired={requireLogin} onViewSearch={openSavedSearch} />}
@@ -794,7 +796,7 @@ function ProductApp({ user, onUserChange }: { user: User | null; onUserChange: (
             onDone={() => setRefreshKey((key) => key + 1)}
           />
         )}
-        {mode === "learn" && <LearnPage tips={tips} />}
+        {mode === "learn" && <LearnPage tips={tips} onTip={setSelectedTip} />}
         {mode === "commercial" && <CommercialPage contacts={contacts} cta={settings.commercial_cta} />}
         {mode === "profile" && (
           <ProfilePage
@@ -826,6 +828,7 @@ function ProductApp({ user, onUserChange }: { user: User | null; onUserChange: (
           }}
         />
       )}
+      {selectedTip && <TipArticleModal tip={selectedTip} onClose={() => setSelectedTip(null)} />}
     </div>
   );
 }
@@ -1222,6 +1225,7 @@ function SearchPage({
   onHistoryRefresh,
   onPlans,
   onCheckout,
+  onTip,
 }: {
   user: User | null;
   settings: SettingsMap;
@@ -1232,6 +1236,7 @@ function SearchPage({
   onHistoryRefresh: () => void;
   onPlans: () => void;
   onCheckout: (selection: CheckoutSelection) => void;
+  onTip: (tip: Tip) => void;
 }) {
   const [query, setQuery] = useState("");
   const [result, setResult] = useState<SearchResult | null>(null);
@@ -1356,7 +1361,7 @@ function SearchPage({
             {Boolean(result?.ok && result.items.length && !canSeeMargin) && (
               <PlansPreview settings={settings} onSelectPlan={onCheckout} />
             )}
-            <LearnPreview tips={tips} />
+            <LearnPreview tips={tips} onTip={onTip} />
           </div>
           <aside className="right-stack">
             <CommercialMini contacts={contacts} />
@@ -2059,7 +2064,7 @@ function MiniPlan({ title, price, note, featured = false, onClick }: { title: st
   );
 }
 
-function LearnPreview({ tips }: { tips: Tip[] }) {
+function LearnPreview({ tips, onTip }: { tips: Tip[]; onTip: (tip: Tip) => void }) {
   return (
     <section className="wide-panel learn-preview">
       <div className="panel-head compact">
@@ -2070,12 +2075,12 @@ function LearnPreview({ tips }: { tips: Tip[] }) {
       </div>
       <div className="learn-grid">
         {tips.slice(0, 3).map((tip) => (
-          <article className="learn-card" key={tip.id}>
+          <button className="learn-card" key={tip.id} type="button" onClick={() => onTip(tip)}>
             <BookOpen size={22} />
             <strong>{tip.title}</strong>
             <p>{tip.body}</p>
-            <span>{tip.cta}</span>
-          </article>
+            <span>{tip.cta || "Ler artigo"} <ChevronRight size={16} /></span>
+          </button>
         ))}
       </div>
     </section>
@@ -2948,22 +2953,74 @@ function planPricing(settings: SettingsMap, plan: PaidPlan) {
   };
 }
 
-function LearnPage({ tips }: { tips: Tip[] }) {
+function LearnPage({ tips, onTip }: { tips: Tip[]; onTip: (tip: Tip) => void }) {
   return (
     <section className="bv-page simple-page">
       <h1>Dicas</h1>
       <p>Conteúdo editável pelo painel admin para educar e nutrir novos vendedores.</p>
       <div className="learn-grid full">
         {tips.map((tip) => (
-          <article className="learn-card" key={tip.id}>
+          <button className="learn-card" key={tip.id} type="button" onClick={() => onTip(tip)}>
             <BookOpen size={24} />
             <strong>{tip.title}</strong>
             <p>{tip.body}</p>
-            <span>{tip.cta}</span>
-          </article>
+            <span>{tip.cta || "Ler artigo"} <ChevronRight size={16} /></span>
+          </button>
         ))}
       </div>
     </section>
+  );
+}
+
+function TipArticleModal({ tip, onClose }: { tip: Tip; onClose: () => void }) {
+  useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        onClose();
+      }
+    };
+
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.body.style.overflow = "";
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [onClose]);
+
+  const paragraphs = tip.body
+    .split(/\n{2,}/)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean);
+
+  return (
+    <div
+      className="modal-backdrop article-backdrop"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) {
+          onClose();
+        }
+      }}
+    >
+      <article className="tip-article-modal" role="dialog" aria-modal="true" aria-labelledby={`tip-title-${tip.id}`}>
+        <button className="modal-close" type="button" onClick={onClose} aria-label="Fechar artigo">
+          <X size={20} />
+        </button>
+        <div className="tip-article-icon" aria-hidden="true">
+          <BookOpen size={26} />
+        </div>
+        <span className="tip-article-label">Dica Confweb</span>
+        <h2 id={`tip-title-${tip.id}`}>{tip.title}</h2>
+        <div className="tip-article-body">
+          {paragraphs.map((paragraph, index) => (
+            <p key={`${tip.id}-${index}`}>{paragraph}</p>
+          ))}
+        </div>
+        <button className="tip-article-close" type="button" onClick={onClose}>
+          Concluir leitura
+        </button>
+      </article>
+    </div>
   );
 }
 
