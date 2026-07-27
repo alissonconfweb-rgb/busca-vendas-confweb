@@ -4,6 +4,18 @@ import { randomToken } from "./security.mjs";
 const SANDBOX_URL = "https://api-sandbox.asaas.com/v3";
 const PRODUCTION_URL = "https://api.asaas.com/v3";
 const PAID_STATUSES = new Set(["RECEIVED", "CONFIRMED", "RECEIVED_IN_CASH"]);
+const FAILED_STATUSES = new Set([
+  "CANCELED",
+  "DELETED",
+  "OVERDUE",
+  "REFUNDED",
+  "REFUND_REQUESTED",
+  "CHARGEBACK_REQUESTED",
+  "CHARGEBACK_DISPUTE",
+  "AWAITING_CHARGEBACK_REVERSAL",
+  "DUNNING_REQUESTED",
+  "DUNNING_RECEIVED",
+]);
 
 export function isAsaasConfigured() {
   return Boolean(asaasApiKey());
@@ -142,7 +154,7 @@ export async function createAsaasCheckout({ user, body, settings, remoteIp }) {
   }
 
   if (billingType === "PIX" && firstPayment?.id) {
-    pixQrCode = await getPaymentPixQrCode(firstPayment.id);
+    pixQrCode = await getPaymentPixQrCode(firstPayment.id, 6);
   }
 
   const status = firstPayment?.status || providerResult.status || "PENDING";
@@ -228,17 +240,36 @@ export async function refreshAsaasCheckoutStatus({ user, financeId }) {
     }
   }
 
+  let pixQrCode = null;
+  if (record.billing_type === "PIX" && paymentId) {
+    pixQrCode = await getPaymentPixQrCode(paymentId, 2);
+    const pixPayload = pixQrCode?.payload || pixQrCode?.encodedImage || "";
+    if (pixPayload) {
+      db.prepare(`
+        UPDATE finance_records
+        SET pix_payload = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).run(pixPayload, record.id);
+    }
+  }
+
   const updated = db.prepare("SELECT * FROM finance_records WHERE id = ?").get(record.id);
   const paid = updated.status === "paid";
+  const providerStatus = providerPayment?.status || updated.status;
   return {
     ok: true,
     financeId: updated.id,
-    status: providerPayment?.status || updated.status,
+    status: providerStatus,
     paid,
     invoiceUrl: providerPayment?.invoiceUrl || updated.payment_url || "",
+    pixQrCode,
     message: paid
       ? "Pagamento aprovado. Seu plano já está liberado."
-      : "Pagamento criado. Aguardando a confirmação no Asaas.",
+      : FAILED_STATUSES.has(providerStatus)
+        ? "Pagamento não aprovado. Confira os dados informados e tente novamente."
+        : pixQrCode
+          ? "Pix gerado. Aguardando a confirmação do pagamento."
+          : "Pagamento criado. Aguardando a confirmação no Asaas.",
   };
 }
 
@@ -436,8 +467,20 @@ async function findFirstSubscriptionPayment(subscriptionId, attempts = 4) {
   return null;
 }
 
-async function getPaymentPixQrCode(paymentId) {
-  return asaasRequest(`/payments/${encodeURIComponent(paymentId)}/pixQrCode`, { method: "GET" }).catch(() => null);
+async function getPaymentPixQrCode(paymentId, attempts = 4) {
+  if (!paymentId) {
+    return null;
+  }
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const qrCode = await asaasRequest(`/payments/${encodeURIComponent(paymentId)}/pixQrCode`, { method: "GET" }).catch(() => null);
+    if (qrCode?.encodedImage || qrCode?.payload) {
+      return qrCode;
+    }
+    if (attempt < attempts - 1) {
+      await wait(500 * (attempt + 1));
+    }
+  }
+  return null;
 }
 
 async function asaasRequest(path, { method = "GET", body } = {}) {
@@ -530,6 +573,9 @@ function parseExternalReference(value = "") {
 function checkoutMessage({ billingType, status, invoiceUrl, pixQrCode }) {
   if (PAID_STATUSES.has(status)) {
     return "Pagamento aprovado. Plano liberado.";
+  }
+  if (FAILED_STATUSES.has(status)) {
+    return "Pagamento não aprovado. Confira os dados informados e tente novamente.";
   }
   if (billingType === "PIX" && pixQrCode) {
     return "Pix anual gerado. A liberação acontece automaticamente após a confirmação do pagamento.";

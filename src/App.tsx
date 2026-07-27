@@ -170,6 +170,7 @@ type CheckoutResult = {
   pixQrCode?: {
     encodedImage?: string;
     payload?: string;
+    expirationDate?: string;
   } | null;
   message: string;
   user?: User;
@@ -181,6 +182,11 @@ type CheckoutStatus = {
   status: string;
   paid: boolean;
   invoiceUrl?: string;
+  pixQrCode?: {
+    encodedImage?: string;
+    payload?: string;
+    expirationDate?: string;
+  } | null;
   message: string;
   user?: User;
 };
@@ -2335,7 +2341,9 @@ function CheckoutPage({
   const [checkingPayment, setCheckingPayment] = useState(false);
   const [error, setError] = useState("");
   const [result, setResult] = useState<CheckoutResult | null>(null);
+  const [pixCopied, setPixCopied] = useState(false);
   const [annualBillingType, setAnnualBillingType] = useState<BillingType>("PIX");
+  const resultRef = useRef<HTMLDivElement>(null);
   const offer = checkoutOffer(settings, selection);
   const pricing = planPricing(settings, selection.plan);
   const billingType: BillingType = selection.cycle === "yearly" ? annualBillingType : "CREDIT_CARD";
@@ -2352,7 +2360,7 @@ function CheckoutPage({
       : `Parcelado em até 12 vezes sem juros, total de ${money.format(offer.value)}.`;
 
   useEffect(() => {
-    if (!result?.financeId || isPaidCheckoutStatus(result.status)) {
+    if (!result?.financeId || isPaidCheckoutStatus(result.status) || isFailedCheckoutStatus(result.status)) {
       return;
     }
 
@@ -2362,6 +2370,7 @@ function CheckoutPage({
 
     const checkStatus = async () => {
       attempts += 1;
+      let terminalStatus = false;
       setCheckingPayment(true);
       try {
         const status = await api<CheckoutStatus>(`/api/checkout/status?id=${result.financeId}`);
@@ -2373,12 +2382,16 @@ function CheckoutPage({
           status: status.paid ? "paid" : status.status,
           message: status.message,
           invoiceUrl: status.invoiceUrl || current.invoiceUrl,
+          pixQrCode: status.pixQrCode || current.pixQrCode,
         } : current);
         if (status.user) {
           onUserChange(status.user);
         }
-        if (status.paid) {
-          onDone();
+        terminalStatus = status.paid || isFailedCheckoutStatus(status.status);
+        if (terminalStatus) {
+          if (status.paid) {
+            onDone();
+          }
           return;
         }
       } catch {
@@ -2389,7 +2402,7 @@ function CheckoutPage({
         }
       }
 
-      if (!cancelled && attempts < 45) {
+      if (!cancelled && !terminalStatus && attempts < 45) {
         timer = setTimeout(checkStatus, 4_000);
       }
     };
@@ -2403,9 +2416,20 @@ function CheckoutPage({
     };
   }, [result?.financeId, result?.status]);
 
+  useEffect(() => {
+    if (!result?.financeId) {
+      return;
+    }
+    const timer = setTimeout(() => {
+      resultRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }, 80);
+    return () => clearTimeout(timer);
+  }, [result?.financeId]);
+
   const selectCycle = (cycle: PlanCycle) => {
     onSelection({ ...selection, cycle });
     setResult(null);
+    setPixCopied(false);
     setError("");
   };
 
@@ -2418,6 +2442,7 @@ function CheckoutPage({
     setCheckingPayment(false);
     setError("");
     setResult(null);
+    setPixCopied(false);
     try {
       const form = event.currentTarget;
       const data = formJson(form);
@@ -2609,6 +2634,66 @@ function CheckoutPage({
                   ? "Pagar anual em até 12x"
                   : "Assinar plano mensal"}
           </button>
+          {result && (
+            <div className="checkout-result checkout-result-primary" ref={resultRef} aria-live="polite">
+              <b>{result.message}</b>
+              {!isPaidCheckoutStatus(result.status) && !isFailedCheckoutStatus(result.status) && (
+                <small className="payment-status">
+                  <RefreshCw size={15} />
+                  {result.billingType === "PIX" && !result.pixQrCode?.encodedImage
+                    ? "Preparando o QR Code Pix..."
+                    : checkingPayment
+                      ? "Conferindo a confirmação no Asaas..."
+                      : "Aguardando a confirmação do pagamento..."}
+                </small>
+              )}
+              {isPaidCheckoutStatus(result.status) && (
+                <small className="payment-status payment-status-paid">
+                  <UnlockKeyhole size={15} />
+                  Pagamento confirmado. Plano liberado na sua conta.
+                </small>
+              )}
+              {isFailedCheckoutStatus(result.status) && (
+                <small className="payment-status payment-status-error">
+                  <X size={15} />
+                  A cobrança não foi aprovada. Revise os dados e tente novamente.
+                </small>
+              )}
+              {result.pixQrCode?.encodedImage && (
+                <div className="pix-qr-code">
+                  <img src={`data:image/png;base64,${result.pixQrCode.encodedImage}`} alt="QR Code Pix" />
+                  <strong>Escaneie o QR Code ou use o Pix copia e cola</strong>
+                </div>
+              )}
+              {result.pixQrCode?.expirationDate && (
+                <small className="pix-expiration">
+                  {`Código válido até ${formatAsaasExpiration(result.pixQrCode.expirationDate)}`}
+                </small>
+              )}
+              {result.pixQrCode?.payload && (
+                <>
+                  <textarea aria-label="Código Pix copia e cola" readOnly value={result.pixQrCode.payload} />
+                  <button
+                    className="secondary-action pix-copy-button"
+                    type="button"
+                    onClick={async () => {
+                      await navigator.clipboard.writeText(result.pixQrCode?.payload || "");
+                      setPixCopied(true);
+                      setTimeout(() => setPixCopied(false), 2500);
+                    }}
+                  >
+                    <ReceiptText size={18} />
+                    {pixCopied ? "Código Pix copiado" : "Copiar código Pix"}
+                  </button>
+                </>
+              )}
+              {result.invoiceUrl && !isFailedCheckoutStatus(result.status) && (
+                <a href={result.invoiceUrl} target="_blank" rel="noreferrer">
+                  Abrir fatura segura Asaas
+                </a>
+              )}
+            </div>
+          )}
         </form>
 
         <aside className="checkout-summary">
@@ -2620,34 +2705,6 @@ function CheckoutPage({
           {selection.cycle === "monthly" && <small>{`${money.format(offer.yearlyBase)} se mantiver por 12 meses`}</small>}
           {selection.cycle === "yearly" && <small>{`Economia de ${money.format(offer.discount)} no ano`}</small>}
           <p>{offer.description}</p>
-          {result && (
-            <div className="checkout-result">
-              <b>{result.message}</b>
-              {!isPaidCheckoutStatus(result.status) && checkingPayment && (
-                <small className="payment-status">
-                  <RefreshCw size={15} />
-                  Conferindo a confirmação no Asaas...
-                </small>
-              )}
-              {isPaidCheckoutStatus(result.status) && (
-                <small className="payment-status payment-status-paid">
-                  <UnlockKeyhole size={15} />
-                  Plano liberado na sua conta
-                </small>
-              )}
-              {result.pixQrCode?.encodedImage && (
-                <img src={`data:image/png;base64,${result.pixQrCode.encodedImage}`} alt="QR Code Pix" />
-              )}
-              {result.pixQrCode?.payload && (
-                <textarea readOnly value={result.pixQrCode.payload} />
-              )}
-              {result.invoiceUrl && (
-                <a href={result.invoiceUrl} target="_blank" rel="noreferrer">
-                  Abrir fatura segura Asaas
-                </a>
-              )}
-            </div>
-          )}
         </aside>
       </div>
     </section>
@@ -2656,6 +2713,36 @@ function CheckoutPage({
 
 function isPaidCheckoutStatus(status = "") {
   return ["paid", "RECEIVED", "CONFIRMED", "RECEIVED_IN_CASH"].includes(status);
+}
+
+function isFailedCheckoutStatus(status = "") {
+  return [
+    "canceled",
+    "CANCELED",
+    "DELETED",
+    "OVERDUE",
+    "REFUNDED",
+    "REFUND_REQUESTED",
+    "CHARGEBACK_REQUESTED",
+    "CHARGEBACK_DISPUTE",
+    "AWAITING_CHARGEBACK_REVERSAL",
+    "DUNNING_REQUESTED",
+    "DUNNING_RECEIVED",
+  ].includes(status);
+}
+
+function formatAsaasExpiration(value: string) {
+  const parsed = new Date(value.replace(" ", "T"));
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+  return parsed.toLocaleString("pt-BR", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 function checkoutOffer(settings: SettingsMap, selection: CheckoutSelection) {

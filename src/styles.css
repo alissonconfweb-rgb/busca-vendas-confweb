@@ -2412,6 +2412,19 @@ button.mini-plan:hover {
   padding-top: 14px;
 }
 
+.checkout-result-primary {
+  margin-top: 4px;
+  border: 1px solid #b9d5ef;
+  border-radius: 12px;
+  background: #f7fbff;
+  padding: 16px;
+}
+
+.checkout-result-primary > b {
+  color: var(--blue-dark);
+  font-size: 17px;
+}
+
 .checkout-result img {
   width: min(220px, 100%);
   border: 1px solid var(--line);
@@ -2437,6 +2450,23 @@ button.mini-plan:hover {
   text-decoration: none;
 }
 
+.pix-qr-code {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  text-align: center;
+}
+
+.pix-expiration {
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.pix-copy-button {
+  width: 100%;
+  justify-content: center;
+}
+
 .payment-status {
   display: inline-flex;
   align-items: center;
@@ -2454,6 +2484,14 @@ button.mini-plan:hover {
 }
 
 .payment-status-paid svg {
+  animation: none;
+}
+
+.payment-status-error {
+  color: #b42318;
+}
+
+.payment-status-error svg {
   animation: none;
 }
 
