@@ -103,6 +103,15 @@ export async function createAsaasCheckout({ user, body, settings, remoteIp }) {
     throw new Error("Configure a API Key da Asaas no painel admin antes de vender planos.");
   }
 
+  const customerDocument = digits(body.cpfCnpj || "");
+  const customerPhone = digits(body.phone || user.phone || "");
+  if (![11, 14].includes(customerDocument.length)) {
+    throw new Error("Informe um CPF com 11 números ou um CNPJ com 14 números.");
+  }
+  if (customerPhone.length < 10 || customerPhone.length > 11) {
+    throw new Error("Informe um telefone válido com DDD.");
+  }
+
   const offer = resolvePlanOffer(body, settings);
   const { billingType, chargeMode } = paymentRuleForOffer(offer, body);
   const customerId = await ensureAsaasCustomer(user, body);
@@ -427,9 +436,9 @@ function creditCardPayload(body, remoteIp) {
     creditCard: stripEmpty({
       holderName: card.holderName,
       number: digits(card.number || ""),
-      expiryMonth: card.expiryMonth,
-      expiryYear: card.expiryYear,
-      ccv: card.ccv,
+      expiryMonth: digits(card.expiryMonth || ""),
+      expiryYear: digits(card.expiryYear || ""),
+      ccv: digits(card.ccv || ""),
     }),
     creditCardHolderInfo: stripEmpty({
       name: holder.name || card.holderName || body.name,
@@ -446,6 +455,33 @@ function creditCardPayload(body, remoteIp) {
   const missingHolder = ["name", "email", "cpfCnpj", "postalCode", "addressNumber", "phone"].filter((field) => !payload.creditCardHolderInfo[field]);
   if (missingCard.length || missingHolder.length) {
     throw new Error("Preencha todos os dados do cartão, titular, CPF/CNPJ, CEP, número e telefone.");
+  }
+  if (payload.creditCard.number.length < 13 || payload.creditCard.number.length > 19) {
+    throw new Error("O número do cartão deve ter entre 13 e 19 números.");
+  }
+  const expiryMonth = Number(payload.creditCard.expiryMonth);
+  const expiryYear = Number(payload.creditCard.expiryYear);
+  const currentDate = new Date();
+  const currentYear = currentDate.getFullYear();
+  const currentMonth = currentDate.getMonth() + 1;
+  if (expiryMonth < 1 || expiryMonth > 12) {
+    throw new Error("Informe um mês de validade entre 01 e 12.");
+  }
+  if (
+    !Number.isInteger(expiryYear)
+    || expiryYear < currentYear
+    || (expiryYear === currentYear && expiryMonth < currentMonth)
+  ) {
+    throw new Error("Informe uma data de validade futura.");
+  }
+  if (![3, 4].includes(String(payload.creditCard.ccv).length)) {
+    throw new Error("O CVV deve ter 3 ou 4 números.");
+  }
+  if (payload.creditCardHolderInfo.cpfCnpj.length !== 11 && payload.creditCardHolderInfo.cpfCnpj.length !== 14) {
+    throw new Error("Informe um CPF ou CNPJ válido.");
+  }
+  if (payload.creditCardHolderInfo.postalCode.length !== 8) {
+    throw new Error("Informe um CEP com 8 números.");
   }
 
   return payload;

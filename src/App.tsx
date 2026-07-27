@@ -545,6 +545,53 @@ function formJson(form: HTMLFormElement) {
   return Object.fromEntries(new FormData(form).entries());
 }
 
+function digitsOnly(value: unknown) {
+  return String(value || "").replace(/\D/g, "");
+}
+
+function formatCardNumber(value: string) {
+  const digits = digitsOnly(value).slice(0, 19);
+  return digits.match(/.{1,4}/g)?.join(" ") || "";
+}
+
+function formatCpfCnpj(value: string) {
+  const digits = digitsOnly(value).slice(0, 14);
+  if (digits.length <= 11) {
+    return digits
+      .replace(/(\d{3})(\d)/, "$1.$2")
+      .replace(/(\d{3})(\d)/, "$1.$2")
+      .replace(/(\d{3})(\d{1,2})$/, "$1-$2");
+  }
+  return digits
+    .replace(/^(\d{2})(\d)/, "$1.$2")
+    .replace(/^(\d{2})\.(\d{3})(\d)/, "$1.$2.$3")
+    .replace(/\.(\d{3})(\d)/, ".$1/$2")
+    .replace(/(\d{4})(\d{1,2})$/, "$1-$2");
+}
+
+function formatPhone(value: string) {
+  const digits = digitsOnly(value).slice(0, 11);
+  if (digits.length <= 2) {
+    return digits ? `(${digits}` : "";
+  }
+  if (digits.length <= 6) {
+    return `(${digits.slice(0, 2)}) ${digits.slice(2)}`;
+  }
+  if (digits.length <= 10) {
+    return `(${digits.slice(0, 2)}) ${digits.slice(2, 6)}-${digits.slice(6)}`;
+  }
+  return `(${digits.slice(0, 2)}) ${digits.slice(2, 7)}-${digits.slice(7)}`;
+}
+
+function formatPostalCode(value: string) {
+  const digits = digitsOnly(value).slice(0, 8);
+  return digits.length > 5 ? `${digits.slice(0, 5)}-${digits.slice(5)}` : digits;
+}
+
+function limitDigits(value: string, limit: number) {
+  return digitsOnly(value).slice(0, limit);
+}
+
 function canUseAdmin(user: User | null) {
   return Boolean(user?.can_admin || user?.role === "admin");
 }
@@ -2446,6 +2493,40 @@ function CheckoutPage({
     try {
       const form = event.currentTarget;
       const data = formJson(form);
+      const documentDigits = digitsOnly(data.cpfCnpj);
+      if (![11, 14].includes(documentDigits.length)) {
+        throw new Error("Informe um CPF com 11 números ou um CNPJ com 14 números.");
+      }
+      if (digitsOnly(data.phone).length < 10) {
+        throw new Error("Informe um telefone com DDD.");
+      }
+      if (billingType === "CREDIT_CARD") {
+        const cardDigits = digitsOnly(data.card_number);
+        const expiryMonth = Number(digitsOnly(data.card_month));
+        const expiryYear = Number(digitsOnly(data.card_year));
+        const currentDate = new Date();
+        const currentYear = currentDate.getFullYear();
+        const currentMonth = currentDate.getMonth() + 1;
+        if (cardDigits.length < 13 || cardDigits.length > 19) {
+          throw new Error("O número do cartão deve ter entre 13 e 19 números.");
+        }
+        if (expiryMonth < 1 || expiryMonth > 12) {
+          throw new Error("Informe um mês de validade entre 01 e 12.");
+        }
+        if (
+          !Number.isInteger(expiryYear)
+          || expiryYear < currentYear
+          || (expiryYear === currentYear && expiryMonth < currentMonth)
+        ) {
+          throw new Error("Informe uma data de validade futura.");
+        }
+        if (![3, 4].includes(digitsOnly(data.card_ccv).length)) {
+          throw new Error("O CVV deve ter 3 ou 4 números.");
+        }
+        if (digitsOnly(data.postal_code).length !== 8) {
+          throw new Error("Informe um CEP com 8 números.");
+        }
+      }
       const payload = {
         plan: selection.plan,
         cycle: selection.cycle,
@@ -2582,11 +2663,33 @@ function CheckoutPage({
             </label>
             <label>
               Telefone
-              <input name="phone" type="tel" defaultValue={user.phone || ""} required />
+              <input
+                name="phone"
+                type="tel"
+                inputMode="numeric"
+                autoComplete="tel"
+                maxLength={15}
+                defaultValue={formatPhone(user.phone || "")}
+                placeholder="(00) 00000-0000"
+                onInput={(event) => {
+                  event.currentTarget.value = formatPhone(event.currentTarget.value);
+                }}
+                required
+              />
             </label>
             <label>
               CPF/CNPJ
-              <input name="cpfCnpj" inputMode="numeric" placeholder="Somente números" required />
+              <input
+                name="cpfCnpj"
+                inputMode="numeric"
+                autoComplete="off"
+                maxLength={18}
+                placeholder="000.000.000-00"
+                onInput={(event) => {
+                  event.currentTarget.value = formatCpfCnpj(event.currentTarget.value);
+                }}
+                required
+              />
             </label>
           </div>
 
@@ -2594,31 +2697,89 @@ function CheckoutPage({
             <div className="checkout-fields card-fields">
               <label className="wide">
                 Nome impresso no cartão
-                <input name="card_holder" placeholder="Como aparece no cartão" required />
+                <input name="card_holder" autoComplete="cc-name" maxLength={80} placeholder="Como aparece no cartão" required />
               </label>
               <label className="wide">
                 Número do cartão
-                <input name="card_number" inputMode="numeric" autoComplete="cc-number" placeholder="0000 0000 0000 0000" required />
+                <input
+                  name="card_number"
+                  inputMode="numeric"
+                  autoComplete="cc-number"
+                  maxLength={23}
+                  placeholder="0000 0000 0000 0000"
+                  onInput={(event) => {
+                    event.currentTarget.value = formatCardNumber(event.currentTarget.value);
+                  }}
+                  required
+                />
               </label>
               <label>
-                Mes
-                <input name="card_month" inputMode="numeric" autoComplete="cc-exp-month" placeholder="MM" required />
+                Mês
+                <input
+                  name="card_month"
+                  inputMode="numeric"
+                  autoComplete="cc-exp-month"
+                  maxLength={2}
+                  placeholder="MM"
+                  onInput={(event) => {
+                    event.currentTarget.value = limitDigits(event.currentTarget.value, 2);
+                  }}
+                  required
+                />
               </label>
               <label>
                 Ano
-                <input name="card_year" inputMode="numeric" autoComplete="cc-exp-year" placeholder="AAAA" required />
+                <input
+                  name="card_year"
+                  inputMode="numeric"
+                  autoComplete="cc-exp-year"
+                  maxLength={4}
+                  placeholder="AAAA"
+                  onInput={(event) => {
+                    event.currentTarget.value = limitDigits(event.currentTarget.value, 4);
+                  }}
+                  required
+                />
               </label>
               <label>
                 CVV
-                <input name="card_ccv" inputMode="numeric" autoComplete="cc-csc" placeholder="123" required />
+                <input
+                  name="card_ccv"
+                  inputMode="numeric"
+                  autoComplete="cc-csc"
+                  maxLength={4}
+                  placeholder="123"
+                  onInput={(event) => {
+                    event.currentTarget.value = limitDigits(event.currentTarget.value, 4);
+                  }}
+                  required
+                />
               </label>
               <label>
                 CEP
-                <input name="postal_code" inputMode="numeric" autoComplete="postal-code" required />
+                <input
+                  name="postal_code"
+                  inputMode="numeric"
+                  autoComplete="postal-code"
+                  maxLength={9}
+                  placeholder="00000-000"
+                  onInput={(event) => {
+                    event.currentTarget.value = formatPostalCode(event.currentTarget.value);
+                  }}
+                  required
+                />
               </label>
               <label>
-                Numero
-                <input name="address_number" inputMode="numeric" required />
+                Número
+                <input
+                  name="address_number"
+                  inputMode="numeric"
+                  maxLength={10}
+                  onInput={(event) => {
+                    event.currentTarget.value = limitDigits(event.currentTarget.value, 10);
+                  }}
+                  required
+                />
               </label>
             </div>
           )}
