@@ -18,6 +18,8 @@ services:
       MELI_LOCAL_BROWSER_ENABLED: "false"
     expose:
       - "3001"
+    ports:
+      - "127.0.0.1:3001:3001"
     volumes:
       - ./data:/data
     read_only: true
