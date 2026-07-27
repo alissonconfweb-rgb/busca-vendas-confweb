@@ -978,7 +978,7 @@ async function handleAdmin(req, res, url, currentUser) {
   if (path === "asaas/setup" && method === "POST") {
     try {
       const result = await setupAsaasIntegration({
-        email: user.email,
+        email: currentUser.email,
         publicUrl: process.env.PUBLIC_URL || getSetting("frontend_origin"),
       });
       return json(res, 200, {
