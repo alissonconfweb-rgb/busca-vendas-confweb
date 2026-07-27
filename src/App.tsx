@@ -1495,6 +1495,7 @@ function ResultsPanel({
   const proxyModeResult = result?.source === "mercado_livre_proxy";
   const scraperModeResult = result?.source === "mercado_livre_scraper";
   const cacheModeResult = result?.source === "confweb_cache";
+  const marketplaceModeResult = result?.source === "mercado_livre";
   const estimateMode = result?.source === "market_estimate";
   const salesPotential = result?.totals.revenue || 0;
   const commercialHref = whatsappHref(contacts, query, salesPotential);
@@ -1511,11 +1512,13 @@ function ResultsPanel({
         : oxylabsModeResult
         ? "Fonte: Mercado Livre via Oxylabs"
         : cacheModeResult
-        ? "Fonte: Base interna Confweb"
+        ? "Fonte: Mercado Livre"
         : proxyModeResult
         ? "Fonte: Motor Confweb"
         : scraperModeResult
         ? "Fonte: Motor Confweb"
+        : marketplaceModeResult
+        ? "Fonte: Mercado Livre"
         : marketSignalMode
         ? "Fonte: Mercado Livre - página pública"
         : "Fonte: Mercado Livre - atualizado agora"
@@ -2226,7 +2229,7 @@ function HistoryPage({
 
 function historySourceLabel(source: string) {
   if (source === "confweb_cache" || source?.includes("cache")) {
-    return "Base interna Confweb";
+    return "Mercado Livre";
   }
   if (
     source?.startsWith("mercado_livre")

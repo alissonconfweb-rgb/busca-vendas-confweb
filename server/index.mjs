@@ -1527,6 +1527,22 @@ function publicSearchResult(result) {
     return result;
   }
 
+  if (result?.source === "confweb_cache") {
+    const {
+      cacheHit,
+      cacheStale,
+      cachedAt,
+      providerCreditsSaved,
+      providerCreditsUsed,
+      ...marketplaceResult
+    } = result;
+    return {
+      ...marketplaceResult,
+      source: "mercado_livre",
+      message: "Dados públicos do Mercado Livre.",
+    };
+  }
+
   if (!result || result.ok) {
     if (result?.metricsMode === "market_signal" || result?.salesAvailable === false) {
       return {
