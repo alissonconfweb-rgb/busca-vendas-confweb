@@ -1367,6 +1367,17 @@ async function handleAdmin(req, res, url, currentUser) {
     return json(res, 200, { ok: true });
   }
 
+  if (financeMatch && method === "DELETE") {
+    const financeId = Number(financeMatch[1]);
+    const record = db.prepare("SELECT id FROM finance_records WHERE id = ?").get(financeId);
+    if (!record) {
+      return json(res, 404, { error: "Registro financeiro não encontrado." });
+    }
+
+    db.prepare("DELETE FROM finance_records WHERE id = ?").run(financeId);
+    return json(res, 200, { ok: true });
+  }
+
   if (path === "commercial-contacts" && method === "GET") {
     return json(res, 200, db.prepare("SELECT * FROM commercial_contacts ORDER BY is_primary DESC, id DESC").all());
   }

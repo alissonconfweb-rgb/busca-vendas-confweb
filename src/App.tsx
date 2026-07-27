@@ -3866,12 +3866,34 @@ function AdminUsers({
 }
 
 function AdminFinance({ finance, users, afterSave }: { finance: FinanceRecord[]; users: User[]; afterSave: () => void }) {
+  const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [deleteError, setDeleteError] = useState("");
+
   const create = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const form = event.currentTarget;
     await api("/api/admin/finance", { method: "POST", body: JSON.stringify(formJson(form)) });
     form.reset();
     afterSave();
+  };
+
+  const remove = async (record: FinanceRecord) => {
+    if (!window.confirm(
+      `Excluir "${record.description}" do financeiro interno?\n\nEssa ação não exclui nem estorna a cobrança no Asaas.`,
+    )) {
+      return;
+    }
+
+    setDeleteError("");
+    setDeletingId(record.id);
+    try {
+      await api(`/api/admin/finance/${record.id}`, { method: "DELETE" });
+      await afterSave();
+    } catch (error) {
+      setDeleteError(error instanceof Error ? error.message : "Não foi possível excluir o registro.");
+    } finally {
+      setDeletingId(null);
+    }
   };
 
   return (
@@ -3895,14 +3917,25 @@ function AdminFinance({ finance, users, afterSave }: { finance: FinanceRecord[];
         </select>
         <button type="submit">Registrar</button>
       </form>
+      {deleteError && <p className="form-error">{deleteError}</p>}
       <div className="table-list">
         {finance.map((record) => (
-          <article className="table-row" key={record.id}>
+          <article className="table-row finance-row" key={record.id}>
             <strong>{record.description}</strong>
             <span>{record.user_email || "Sem usuário"}</span>
             <span>{record.type}</span>
             <span>{record.status}</span>
             <b>{money.format(record.amount)}</b>
+            <button
+              className="danger-button"
+              type="button"
+              disabled={deletingId === record.id}
+              onClick={() => remove(record)}
+              title="Excluir registro interno"
+            >
+              <Trash2 size={17} />
+              {deletingId === record.id ? "Excluindo..." : "Excluir"}
+            </button>
           </article>
         ))}
       </div>
