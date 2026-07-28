@@ -14,6 +14,7 @@ FROM node:22-bookworm-slim AS runtime
 
 WORKDIR /app
 ENV NODE_ENV=production \
+    APP_VERSION=0.1.0 \
     HOST=0.0.0.0 \
     PORT=3001 \
     DB_PATH=/data/busca-vendas.sqlite \

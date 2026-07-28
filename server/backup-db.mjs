@@ -1,4 +1,4 @@
-import { mkdirSync } from "node:fs";
+import { mkdirSync, rmSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import Database from "better-sqlite3";
 import { loadLocalEnv } from "./env.mjs";
@@ -26,6 +26,8 @@ try {
   } finally {
     backup.close();
   }
+  rmSync(`${destination}-wal`, { force: true });
+  rmSync(`${destination}-shm`, { force: true });
   process.stdout.write(`Backup SQLite validado: ${destination}\n`);
 } finally {
   database.close();
