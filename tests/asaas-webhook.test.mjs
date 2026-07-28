@@ -129,6 +129,8 @@ test("uma primeira tentativa recusada mantém o plano grátis disponível", asyn
 });
 
 test.after(() => {
+  db.close();
   rmSync(databasePath, { force: true });
-  rmSync(`${databasePath}.tmp`, { force: true });
+  rmSync(`${databasePath}-wal`, { force: true });
+  rmSync(`${databasePath}-shm`, { force: true });
 });

@@ -1,109 +1,30 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { mkdirSync } from "node:fs";
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHash,
+  randomBytes,
+} from "node:crypto";
 import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
-import initSqlJs from "./vendor/sql-wasm.cjs";
+import Database from "better-sqlite3";
 import { hashToken, randomToken } from "./security.mjs";
+import { loadLocalEnv } from "./env.mjs";
 
-const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
-const APP_ROOT = resolve(SERVER_DIR, "..");
-const DB_PATH = process.env.DB_PATH
+loadLocalEnv();
+
+export const DB_PATH = process.env.DB_PATH
   ? resolve(process.env.DB_PATH)
   : resolve(process.cwd(), "data", "busca-vendas.sqlite");
-const SESSION_TTL_DAYS = Number(process.env.SESSION_TTL_DAYS || 365);
+const SESSION_TTL_DAYS = Math.min(90, Number(process.env.SESSION_TTL_DAYS || 30));
 const SESSION_TTL_MS = Math.max(1, SESSION_TTL_DAYS) * 24 * 60 * 60 * 1000;
 mkdirSync(dirname(DB_PATH), { recursive: true });
 
-const SQL = await initSqlJs({
-  locateFile: (file) => resolve(SERVER_DIR, "vendor", file),
-});
-
-class SqlJsDatabase {
-  constructor(SQLRuntime, dbPath, initialData) {
-    this.dbPath = dbPath;
-    this.inner = initialData ? new SQLRuntime.Database(new Uint8Array(initialData)) : new SQLRuntime.Database();
-  }
-
-  exec(sql) {
-    const result = this.inner.exec(sql);
-    this.persist();
-    return result;
-  }
-
-  prepare(sql) {
-    return new SqlJsStatement(this, sql);
-  }
-
-  persist() {
-    const temporaryPath = `${this.dbPath}.tmp`;
-    writeFileSync(temporaryPath, Buffer.from(this.inner.export()));
-    renameSync(temporaryPath, this.dbPath);
-  }
-
-  lastInsertRowid() {
-    return Number(this.inner.exec("SELECT last_insert_rowid() AS id")?.[0]?.values?.[0]?.[0] || 0);
-  }
-}
-
-class SqlJsStatement {
-  constructor(database, sql) {
-    this.database = database;
-    this.sql = sql;
-  }
-
-  run(...params) {
-    const statement = this.database.inner.prepare(this.sql);
-    try {
-      statement.run(normalizeParams(params));
-      const result = {
-        changes: this.database.inner.getRowsModified(),
-        lastInsertRowid: this.database.lastInsertRowid(),
-      };
-      result.lastInsertROWID = result.lastInsertRowid;
-      this.database.persist();
-      return result;
-    } finally {
-      statement.free();
-    }
-  }
-
-  get(...params) {
-    const statement = this.database.inner.prepare(this.sql);
-    try {
-      statement.bind(normalizeParams(params));
-      return statement.step() ? statement.getAsObject() : undefined;
-    } finally {
-      statement.free();
-    }
-  }
-
-  all(...params) {
-    const rows = [];
-    const statement = this.database.inner.prepare(this.sql);
-    try {
-      statement.bind(normalizeParams(params));
-      while (statement.step()) {
-        rows.push(statement.getAsObject());
-      }
-      return rows;
-    } finally {
-      statement.free();
-    }
-  }
-}
-
-function normalizeParams(params) {
-  if (params.length === 1 && Array.isArray(params[0])) {
-    return params[0];
-  }
-  return params;
-}
-
-export const db = new SqlJsDatabase(
-  SQL,
-  DB_PATH,
-  existsSync(DB_PATH) ? readFileSync(DB_PATH) : null,
-);
+export const db = new Database(DB_PATH);
+db.pragma("journal_mode = WAL");
+db.pragma("synchronous = NORMAL");
+db.pragma("foreign_keys = ON");
+db.pragma("busy_timeout = 5000");
+db.pragma("temp_store = MEMORY");
 
 export function initDatabase() {
   db.exec(`
@@ -131,6 +52,20 @@ export function initDatabase() {
       expires_at TEXT NOT NULL,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
+    CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
+    CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
+
+    CREATE TABLE IF NOT EXISTS account_tokens (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      purpose TEXT NOT NULL,
+      token_hash TEXT NOT NULL UNIQUE,
+      expires_at TEXT NOT NULL,
+      consumed_at TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_account_tokens_user_purpose
+      ON account_tokens(user_id, purpose, expires_at);
 
     CREATE TABLE IF NOT EXISTS search_history (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -162,6 +97,17 @@ export function initDatabase() {
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
+
+    CREATE TABLE IF NOT EXISTS provider_usage (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      provider TEXT NOT NULL,
+      query_key TEXT,
+      credits INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'completed',
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_provider_usage_month
+      ON provider_usage(provider, created_at);
 
     CREATE TABLE IF NOT EXISTS settings (
       key TEXT PRIMARY KEY,
@@ -224,6 +170,9 @@ export function initDatabase() {
   ensureColumn("users", "billing_provider_subscription_id", "TEXT");
   ensureColumn("users", "billing_payment_url", "TEXT");
   ensureColumn("users", "billing_access_until", "TEXT");
+  ensureColumn("users", "terms_accepted_at", "TEXT");
+  ensureColumn("users", "privacy_accepted_at", "TEXT");
+  ensureColumn("users", "password_changed_at", "TEXT");
   ensureColumn("finance_records", "provider", "TEXT");
   ensureColumn("finance_records", "external_id", "TEXT");
   ensureColumn("finance_records", "provider_payment_id", "TEXT");
@@ -241,6 +190,7 @@ export function initDatabase() {
       AND (billing_status IS NULL OR billing_status = 'none')
   `).run();
   seedDefaults();
+  migrateSensitiveSettings();
 }
 
 function ensureColumn(table, column, definition) {
@@ -273,7 +223,7 @@ function seedDefaults() {
     scrapedo_enabled: "true",
     scrapedo_endpoint: "https://api.scrape.do/",
     scrapedo_search_pages: "2",
-    scrapedo_detail_limit: "9",
+    scrapedo_detail_limit: "24",
     scrapedo_timeout_ms: "45000",
     scrapedo_verified: "false",
     meli_scraper_enabled: "false",
@@ -355,18 +305,23 @@ function seedDefaults() {
 }
 
 export function getSetting(key) {
-  return db.prepare("SELECT value FROM settings WHERE key = ?").get(key)?.value ?? null;
+  const value = db.prepare("SELECT value FROM settings WHERE key = ?").get(key)?.value ?? null;
+  return decryptSettingValue(key, value);
 }
 
 export function setSetting(key, value) {
+  const storedValue = encryptSettingValue(key, String(value ?? ""));
   db.prepare(`
     INSERT INTO settings (key, value) VALUES (?, ?)
     ON CONFLICT(key) DO UPDATE SET value = excluded.value
-  `).run(key, String(value ?? ""));
+  `).run(key, storedValue);
 }
 
 export function settingsObject() {
-  return Object.fromEntries(db.prepare("SELECT key, value FROM settings").all().map((row) => [row.key, row.value]));
+  return Object.fromEntries(
+    db.prepare("SELECT key, value FROM settings").all()
+      .map((row) => [row.key, decryptSettingValue(row.key, row.value)]),
+  );
 }
 
 export function findUserByEmail(email) {
@@ -390,21 +345,18 @@ export function publicUser(user) {
 export function createSession(userId) {
   const expiresAt = Date.now() + SESSION_TTL_MS;
   const expires = new Date(expiresAt).toISOString();
-  const token = createSignedSessionToken(userId, expiresAt);
+  const token = randomToken(32);
+  db.prepare("DELETE FROM sessions WHERE expires_at <= CURRENT_TIMESTAMP").run();
+  db.prepare(`
+    INSERT INTO sessions (token_hash, user_id, expires_at)
+    VALUES (?, ?, ?)
+  `).run(hashToken(token), userId, expires);
   return { token, expires };
 }
 
 export function userFromSession(token) {
   if (!token) {
     return null;
-  }
-
-  const signedSession = readSignedSessionToken(token);
-  if (signedSession) {
-    const user = db.prepare("SELECT * FROM users WHERE id = ? AND status = 'active'").get(signedSession.userId);
-    if (user) {
-      return user;
-    }
   }
 
   const row = db.prepare(`
@@ -422,53 +374,96 @@ export function deleteSession(token) {
   }
 }
 
-function createSignedSessionToken(userId, expiresAt) {
-  const payload = Buffer.from(JSON.stringify({
-    userId: Number(userId),
-    expiresAt: Number(expiresAt),
-    nonce: randomToken(12),
-  })).toString("base64url");
-  return `v2.${payload}.${sessionSignature(payload)}`;
+export function deleteSessionsForUser(userId) {
+  db.prepare("DELETE FROM sessions WHERE user_id = ?").run(userId);
 }
 
-function readSignedSessionToken(token) {
-  const parts = String(token || "").split(".");
-  if (parts.length !== 3 || parts[0] !== "v2") {
+export function createAccountToken(userId, purpose, ttlMinutes = 30) {
+  const token = randomToken(32);
+  const expires = new Date(Date.now() + Math.max(5, ttlMinutes) * 60 * 1000).toISOString();
+  db.prepare("DELETE FROM account_tokens WHERE user_id = ? AND purpose = ?").run(userId, purpose);
+  db.prepare(`
+    INSERT INTO account_tokens (user_id, purpose, token_hash, expires_at)
+    VALUES (?, ?, ?, ?)
+  `).run(userId, purpose, hashToken(token), expires);
+  return { token, expires };
+}
+
+export function consumeAccountToken(token, purpose) {
+  const row = db.prepare(`
+    SELECT *
+    FROM account_tokens
+    WHERE token_hash = ?
+      AND purpose = ?
+      AND consumed_at IS NULL
+      AND expires_at > CURRENT_TIMESTAMP
+  `).get(hashToken(token), purpose);
+  if (!row) {
     return null;
   }
+  db.prepare("UPDATE account_tokens SET consumed_at = CURRENT_TIMESTAMP WHERE id = ?").run(row.id);
+  return row;
+}
 
-  const [, payload, signature] = parts;
-  if (!isValidSignature(payload, signature)) {
-    return null;
-  }
-
-  try {
-    const session = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
-    if (!session.userId || !session.expiresAt || Number(session.expiresAt) <= Date.now()) {
-      return null;
+function migrateSensitiveSettings() {
+  const rows = db.prepare("SELECT key, value FROM settings").all();
+  const update = db.prepare("UPDATE settings SET value = ? WHERE key = ?");
+  const migrate = db.transaction(() => {
+    for (const row of rows) {
+      if (isSensitiveSetting(row.key) && row.value && !String(row.value).startsWith("enc:v1:")) {
+        update.run(encryptSettingValue(row.key, row.value), row.key);
+      }
     }
-    return session;
+  });
+  migrate();
+}
+
+function isSensitiveSetting(key) {
+  return /(?:api[_-]?key|api[_-]?token|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|webhook[_-]?token|session[_-]?secret)$/i.test(
+    String(key || ""),
+  );
+}
+
+function encryptSettingValue(key, value) {
+  if (!value || !isSensitiveSetting(key) || value.startsWith("enc:v1:")) {
+    return value;
+  }
+  const secret = settingsEncryptionSecret();
+  if (!secret) {
+    return value;
+  }
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", encryptionKey(secret), iv);
+  const encrypted = Buffer.concat([cipher.update(value, "utf8"), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return `enc:v1:${iv.toString("base64url")}:${tag.toString("base64url")}:${encrypted.toString("base64url")}`;
+}
+
+function decryptSettingValue(key, value) {
+  if (!isSensitiveSetting(key) || !String(value || "").startsWith("enc:v1:")) {
+    return value;
+  }
+  const secret = settingsEncryptionSecret();
+  if (!secret) {
+    return "";
+  }
+  try {
+    const [, , ivValue, tagValue, encryptedValue] = String(value).split(":");
+    const decipher = createDecipheriv("aes-256-gcm", encryptionKey(secret), Buffer.from(ivValue, "base64url"));
+    decipher.setAuthTag(Buffer.from(tagValue, "base64url"));
+    return Buffer.concat([
+      decipher.update(Buffer.from(encryptedValue, "base64url")),
+      decipher.final(),
+    ]).toString("utf8");
   } catch {
-    return null;
+    return "";
   }
 }
 
-function sessionSignature(payload) {
-  return createHmac("sha256", sessionSecret()).update(payload).digest("base64url");
+function settingsEncryptionSecret() {
+  return process.env.SETTINGS_ENCRYPTION_KEY || process.env.SESSION_SECRET || "";
 }
 
-function isValidSignature(payload, signature) {
-  const expected = Buffer.from(sessionSignature(payload));
-  const actual = Buffer.from(String(signature || ""));
-  return expected.length === actual.length && timingSafeEqual(expected, actual);
-}
-
-function sessionSecret() {
-  const secret = process.env.SESSION_SECRET || getSetting("session_secret");
-  if (secret) {
-    return secret;
-  }
-  const generated = randomToken(48);
-  setSetting("session_secret", generated);
-  return generated;
+function encryptionKey(secret) {
+  return createHash("sha256").update(secret).digest();
 }

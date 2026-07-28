@@ -7,11 +7,14 @@ import {
   normalizedProductKey,
 } from "./product-match.mjs";
 import { mercadoLivreHtmlParser as parser } from "./zyte.mjs";
+import { minimumChampionSales } from "./champion-policy.mjs";
 
 const DEFAULT_ENDPOINT = "https://api.scrape.do/";
-const DEFAULT_DETAIL_LIMIT = 9;
+const DEFAULT_DETAIL_LIMIT = 24;
 const DEFAULT_SEARCH_PAGES = 2;
 const activeSearches = new Map();
+const providerQueue = [];
+let activeProviderSearches = 0;
 
 export function isScrapeDoConfigured() {
   return Boolean(scrapeDoToken());
@@ -85,10 +88,51 @@ export function searchMercadoLivreScrapeDo(query) {
     return active;
   }
 
-  const search = executeMercadoLivreScrapeDo(query)
+  const usage = scrapeDoUsageSummary();
+  if (usage.budget > 0 && usage.used >= usage.budget) {
+    return Promise.resolve(
+      emptyResult(
+        "scrapedo_budget_exhausted",
+        "O limite operacional mensal da fonte de dados foi atingido. A equipe Confweb já foi avisada.",
+      ),
+    );
+  }
+
+  const search = withProviderSlot(() => executeMercadoLivreScrapeDo(query))
+    .then((result) => {
+      recordProviderUsage(key, Number(result?.providerCreditsUsed || 0), result?.ok ? "completed" : "incomplete");
+      return result;
+    })
+    .catch((error) => {
+      recordProviderUsage(key, 0, "failed");
+      throw error;
+    })
     .finally(() => activeSearches.delete(key));
   activeSearches.set(key, search);
   return search;
+}
+
+export function scrapeDoUsageSummary() {
+  const row = db.prepare(`
+    SELECT
+      COALESCE(SUM(credits), 0) AS used,
+      COUNT(*) AS searches,
+      COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) AS failures
+    FROM provider_usage
+    WHERE provider = 'scrapedo'
+      AND created_at >= datetime('now', 'start of month')
+  `).get();
+  const budget = monthlyCreditBudget();
+  const used = Number(row?.used || 0);
+  return {
+    used,
+    budget,
+    remaining: budget > 0 ? Math.max(0, budget - used) : null,
+    searches: Number(row?.searches || 0),
+    failures: Number(row?.failures || 0),
+    active: activeProviderSearches,
+    queued: providerQueue.length,
+  };
 }
 
 async function executeMercadoLivreScrapeDo(query) {
@@ -157,7 +201,9 @@ async function executeMercadoLivreScrapeDo(query) {
         enriched.push(result.item);
       }
     }
-    const completeInBatch = enriched.filter((item) => item.price > 0 && item.soldQuantity > 0).length;
+    const completeInBatch = enriched.filter((item) => (
+      item.price > 0 && item.soldQuantity >= minimumChampionSales()
+    )).length;
     if (completeInBatch >= 3) {
       break;
     }
@@ -167,7 +213,7 @@ async function executeMercadoLivreScrapeDo(query) {
     .filter((item) => (
       item.title
       && item.price > 0
-      && item.soldQuantity > 0
+      && item.soldQuantity >= minimumChampionSales()
       && matchesProductQuery(item.title, querySpec).ok
     ))
     .sort((a, b) => parser.championScore(a) - parser.championScore(b))
@@ -367,13 +413,13 @@ async function requestPage(targetUrl, options = {}) {
     params.set("setCookies", options.cookies);
   }
 
-  const response = await fetch(`${scrapeDoEndpoint()}?${params.toString()}`, {
-    headers: {
-      Accept: "text/html,application/xhtml+xml",
-      "User-Agent": "BuscaVendasConfweb/1.0",
-    },
-    signal: AbortSignal.timeout(timeoutMs()),
-  });
+  const requestUrl = `${scrapeDoEndpoint()}?${params.toString()}`;
+  let response = await fetchScrapeDoPage(requestUrl);
+  if ([502, 503, 504].includes(response.status)) {
+    await response.body?.cancel();
+    await delay(700 + randomInt(100, 500));
+    response = await fetchScrapeDoPage(requestUrl);
+  }
   const html = await response.text();
   if (!response.ok) {
     throw new Error(describeError(response.status, html));
@@ -384,6 +430,16 @@ async function requestPage(targetUrl, options = {}) {
     resolvedUrl: response.headers.get("scrape.do-resolved-url") || targetUrl,
     cost: Number(response.headers.get("scrape.do-request-cost") || 0),
   };
+}
+
+function fetchScrapeDoPage(url) {
+  return fetch(url, {
+    headers: {
+      Accept: "text/html,application/xhtml+xml",
+      "User-Agent": "BuscaVendasConfweb/1.0",
+    },
+    signal: AbortSignal.timeout(timeoutMs()),
+  });
 }
 
 function mapItem(item) {
@@ -471,15 +527,61 @@ function scrapeDoEndpoint() {
 }
 
 function detailLimit() {
-  return Math.max(3, Number(getSetting("scrapedo_detail_limit") || process.env.SCRAPEDO_DETAIL_LIMIT || DEFAULT_DETAIL_LIMIT));
+  return Math.min(36, Math.max(3, Number(
+    getSetting("scrapedo_detail_limit") || process.env.SCRAPEDO_DETAIL_LIMIT || DEFAULT_DETAIL_LIMIT,
+  )));
 }
 
 function searchPages() {
-  return Math.max(1, Number(getSetting("scrapedo_search_pages") || process.env.SCRAPEDO_SEARCH_PAGES || DEFAULT_SEARCH_PAGES));
+  return Math.min(4, Math.max(1, Number(
+    getSetting("scrapedo_search_pages") || process.env.SCRAPEDO_SEARCH_PAGES || DEFAULT_SEARCH_PAGES,
+  )));
 }
 
 function timeoutMs() {
   return Math.max(10_000, Number(getSetting("scrapedo_timeout_ms") || process.env.SCRAPEDO_TIMEOUT_MS || 45_000));
+}
+
+function monthlyCreditBudget() {
+  const configured = Number(
+    getSetting("scrapedo_monthly_credit_budget")
+    || process.env.SCRAPEDO_MONTHLY_CREDIT_BUDGET
+    || 225_000,
+  );
+  return Math.max(0, Number.isFinite(configured) ? configured : 225_000);
+}
+
+function recordProviderUsage(queryKey, credits, status) {
+  db.prepare(`
+    INSERT INTO provider_usage (provider, query_key, credits, status)
+    VALUES ('scrapedo', ?, ?, ?)
+  `).run(queryKey || null, Math.max(0, Number(credits || 0)), status);
+}
+
+function withProviderSlot(task) {
+  return new Promise((resolve, reject) => {
+    providerQueue.push({ task, resolve, reject });
+    drainProviderQueue();
+  });
+}
+
+function drainProviderQueue() {
+  const limit = Math.min(10, Math.max(1, Number(process.env.SCRAPEDO_MAX_CONCURRENCY || 4)));
+  while (activeProviderSearches < limit && providerQueue.length) {
+    const entry = providerQueue.shift();
+    activeProviderSearches += 1;
+    Promise.resolve()
+      .then(entry.task)
+      .then(entry.resolve, entry.reject)
+      .finally(() => {
+        activeProviderSearches -= 1;
+        drainProviderQueue();
+      });
+  }
+}
+
+function delay(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 function emptyResult(source, message) {

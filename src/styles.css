@@ -24,6 +24,130 @@
   background: var(--bg);
 }
 
+.password-guidance {
+  margin: -8px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.form-success {
+  margin: 0;
+  border: 1px solid #b8dfcc;
+  border-radius: 8px;
+  background: #effaf5;
+  color: var(--success);
+  padding: 12px;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.45;
+}
+
+.forgot-password {
+  min-height: 34px;
+  color: var(--blue);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.login-modal .consent-row {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  align-items: start;
+  gap: 9px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.login-modal .consent-row input {
+  width: 18px;
+  height: 18px;
+  margin: 1px 0 0;
+  accent-color: var(--blue);
+}
+
+.login-modal .consent-row button,
+.legal-footer button {
+  display: inline;
+  width: auto;
+  min-height: 0;
+  color: var(--blue);
+  font: inherit;
+  font-weight: 800;
+  text-decoration: underline;
+}
+
+.legal-footer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 10px 18px;
+  margin: 26px auto 20px;
+  padding: 16px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.legal-footer a {
+  color: var(--blue);
+  font-weight: 800;
+}
+
+.legal-page {
+  width: min(880px, calc(100% - 32px));
+  margin: 28px auto;
+  padding: 32px;
+}
+
+.legal-page h1 {
+  margin: 8px 0;
+}
+
+.legal-page h2 {
+  margin: 28px 0 8px;
+  font-size: 19px;
+}
+
+.legal-page p {
+  color: var(--muted);
+  line-height: 1.7;
+}
+
+.legal-kicker {
+  color: var(--blue);
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.legal-updated {
+  margin-top: 0;
+  font-size: 13px;
+}
+
+.legal-back {
+  width: fit-content;
+  min-height: 38px;
+  margin-bottom: 18px;
+  border: 1px solid var(--line);
+  color: var(--blue-dark);
+  padding: 0 14px;
+}
+
+@media (max-width: 700px) {
+  .legal-page {
+    width: calc(100% - 20px);
+    margin: 12px auto 96px;
+    padding: 22px 18px;
+  }
+
+  .legal-footer {
+    margin-bottom: 92px;
+  }
+}
+
 * {
   box-sizing: border-box;
 }

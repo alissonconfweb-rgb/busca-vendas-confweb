@@ -3,18 +3,13 @@ set -Eeuo pipefail
 
 cd "$(dirname "$0")"
 
-database="data/busca-vendas.sqlite"
 backup_dir="backups"
 timestamp="$(date -u +'%Y-%m-%dT%H-%M-%SZ')"
-
-if [[ ! -f "$database" ]]; then
-  echo "Banco nao encontrado em $database"
-  exit 1
-fi
+backup_name="busca-vendas-$timestamp.sqlite"
 
 mkdir -p "$backup_dir"
-cp --preserve=timestamps "$database" "$backup_dir/busca-vendas-$timestamp.sqlite"
-gzip "$backup_dir/busca-vendas-$timestamp.sqlite"
+docker compose exec -T app node server/backup-db.mjs "/backups/$backup_name"
+gzip "$backup_dir/$backup_name"
 find "$backup_dir" -type f -name 'busca-vendas-*.sqlite.gz' -mtime +14 -delete
 
-echo "Backup criado: $backup_dir/busca-vendas-$timestamp.sqlite.gz"
+echo "Backup criado e validado: $backup_dir/$backup_name.gz"

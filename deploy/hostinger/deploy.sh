@@ -9,7 +9,7 @@ if [[ ! -f .env.production ]]; then
 fi
 
 mkdir -p data backups
-chown -R 1000:1000 data
+chown -R 1000:1000 data backups
 chmod 700 data backups
 chmod 600 .env.production
 

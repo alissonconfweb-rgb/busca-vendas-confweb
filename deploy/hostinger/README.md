@@ -81,7 +81,7 @@ Esse arquivo leva usuários, pesquisas, configurações, tokens de integração,
 ## 5. Publicar Sem Trocar O DNS
 
 ```bash
-chmod +x deploy.sh backup.sh
+chmod +x deploy.sh backup.sh healthcheck.sh
 ./deploy.sh
 docker compose ps
 docker compose logs --tail=100 app
@@ -148,6 +148,7 @@ Adicione:
 
 ```cron
 20 3 * * * /opt/busca-vendas-confweb/deploy/hostinger/backup.sh >> /var/log/busca-vendas-backup.log 2>&1
+*/5 * * * * /opt/busca-vendas-confweb/deploy/hostinger/healthcheck.sh >> /var/log/busca-vendas-health.log 2>&1
 ```
 
 Também mantenha os backups automáticos ou snapshots do VPS habilitados no hPanel.

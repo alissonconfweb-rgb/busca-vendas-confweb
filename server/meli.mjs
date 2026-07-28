@@ -7,6 +7,7 @@ import { isProxyConfigured, isProxyEnabled, proxyPlaywrightConfig } from "./prox
 import { isScrapeDoEnabled, searchMercadoLivreScrapeDo } from "./scrapedo.mjs";
 import { isZyteConfigured, isZyteSearchEnabled, searchMercadoLivreZyte } from "./zyte.mjs";
 import { buildProductQuerySpec, matchesProductQuery, normalizeProductSearchQuery } from "./product-match.mjs";
+import { isChampionItem } from "./champion-policy.mjs";
 
 const currencyFormatter = new Intl.NumberFormat("pt-BR", {
   currency: "BRL",
@@ -324,13 +325,7 @@ function hasCompleteSalesTop3(result) {
     result?.ok &&
     result?.salesAvailable !== false &&
     items.length >= 3 &&
-    items.slice(0, 3).every((item) =>
-      Number(item.price) > 0 &&
-      typeof item.soldQuantity === "number" &&
-      item.soldQuantity > 0 &&
-      typeof item.revenue === "number" &&
-      item.revenue > 0,
-    ),
+    items.slice(0, 3).every(isChampionItem),
   );
 }
 
@@ -345,7 +340,10 @@ function searchWithToken(siteId, params, accessToken) {
 }
 
 function isMeliScraperEnabled() {
-  if (isZyteConfigured() && process.env.MELI_LOCAL_BROWSER_ENABLED !== "true") {
+  if (
+    (isScrapeDoEnabled() || isZyteConfigured())
+    && process.env.MELI_LOCAL_BROWSER_ENABLED !== "true"
+  ) {
     return false;
   }
   const configured = process.env.MELI_SCRAPER_ENABLED || getSetting("meli_scraper_enabled");

@@ -35,6 +35,37 @@ export function isAsaasConfigured() {
   return Boolean(asaasApiKey());
 }
 
+export function normalizeAsaasApiKey(value) {
+  return String(value || "").trim().replace(/^['"]|['"]$/g, "");
+}
+
+export function detectAsaasEnvironment(apiKey, fallback = "sandbox") {
+  const normalized = normalizeAsaasApiKey(apiKey).toLowerCase();
+  if (normalized.includes("hmlg") || normalized.includes("sandbox")) {
+    return "sandbox";
+  }
+  if (normalized.includes("prod")) {
+    return "production";
+  }
+  return fallback === "production" ? "production" : "sandbox";
+}
+
+export function configureAsaasApiKey(apiKey) {
+  const normalized = normalizeAsaasApiKey(apiKey);
+  if (!normalized) {
+    throw new Error("Cole a API Key da Asaas antes de salvar.");
+  }
+  const environment = detectAsaasEnvironment(normalized, getSetting("asaas_environment") || "sandbox");
+  setSetting("asaas_api_key", normalized);
+  setSetting("asaas_environment", environment);
+  setSetting("asaas_endpoint", environment === "production" ? PRODUCTION_URL : SANDBOX_URL);
+  setSetting("asaas_enabled", "true");
+  setSetting("asaas_webhook_ready", "false");
+  setSetting("asaas_webhook_id", "");
+  setSetting("asaas_last_error", "");
+  return environment;
+}
+
 export function asaasWebhookUrl(publicUrl = process.env.PUBLIC_URL) {
   const base = String(publicUrl || "").replace(/\/+$/, "");
   return base ? `${base}/api/asaas/webhook` : "/api/asaas/webhook";
@@ -419,17 +450,25 @@ export function billingBlocksSearch(user) {
 }
 
 export function syncAsaasSettingsFromEnv() {
-  const entries = {
-    asaas_enabled: process.env.ASAAS_ENABLED,
-    asaas_environment: process.env.ASAAS_ENVIRONMENT,
-    asaas_api_key: process.env.ASAAS_API_KEY,
-    asaas_webhook_token: process.env.ASAAS_WEBHOOK_TOKEN,
-  };
+  const envApiKey = normalizeAsaasApiKey(process.env.ASAAS_API_KEY || "");
+  if (envApiKey && !getSetting("asaas_api_key")) {
+    setSetting("asaas_api_key", envApiKey);
+  }
+  if (process.env.ASAAS_WEBHOOK_TOKEN && !getSetting("asaas_webhook_token")) {
+    setSetting("asaas_webhook_token", String(process.env.ASAAS_WEBHOOK_TOKEN).trim());
+  }
 
-  for (const [key, value] of Object.entries(entries)) {
-    if (value && !getSetting(key)) {
-      setSetting(key, String(value).trim());
-    }
+  const configuredKey = getSetting("asaas_api_key") || envApiKey;
+  if (configuredKey) {
+    const environment = detectAsaasEnvironment(
+      configuredKey,
+      process.env.ASAAS_ENVIRONMENT || getSetting("asaas_environment") || "sandbox",
+    );
+    setSetting("asaas_environment", environment);
+    setSetting("asaas_endpoint", environment === "production" ? PRODUCTION_URL : SANDBOX_URL);
+    setSetting("asaas_enabled", "true");
+  } else if (process.env.ASAAS_ENABLED) {
+    setSetting("asaas_enabled", String(process.env.ASAAS_ENABLED).trim().toLowerCase());
   }
 }
 
@@ -973,7 +1012,7 @@ function normalizeBillingType(value) {
 }
 
 function asaasApiKey() {
-  return (getSetting("asaas_api_key") || process.env.ASAAS_API_KEY || "").trim();
+  return normalizeAsaasApiKey(getSetting("asaas_api_key") || process.env.ASAAS_API_KEY || "");
 }
 
 function asaasEnvironment() {
@@ -999,8 +1038,16 @@ function asaasErrorMessage(data, status) {
 
 async function readJsonFromRequest(req) {
   const chunks = [];
+  let totalBytes = 0;
   for await (const chunk of req) {
-    chunks.push(chunk);
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    totalBytes += buffer.length;
+    if (totalBytes > 256 * 1024) {
+      const error = new Error("Webhook maior do que o limite permitido.");
+      error.statusCode = 413;
+      throw error;
+    }
+    chunks.push(buffer);
   }
   const raw = Buffer.concat(chunks).toString("utf8");
   return raw ? safeJson(raw) : {};

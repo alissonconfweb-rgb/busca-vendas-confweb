@@ -41,7 +41,7 @@ type PaidPlan = "starter" | "scale";
 type PlanCycle = "monthly" | "yearly";
 type BillingType = "PIX" | "CREDIT_CARD";
 type ChargeMode = "subscription" | "single";
-type Mode = "search" | "history" | "plans" | "checkout" | "learn" | "commercial" | "support" | "profile" | "admin";
+type Mode = "search" | "history" | "plans" | "checkout" | "learn" | "commercial" | "support" | "profile" | "admin" | "terms" | "privacy";
 
 type User = {
   id: number;
@@ -657,6 +657,10 @@ function ProductApp({ user, onUserChange }: { user: User | null; onUserChange: (
   const [selectedTip, setSelectedTip] = useState<Tip | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem("bv_sidebar_collapsed") !== "false");
 
+  useEffect(() => {
+    window.scrollTo({ top: 0, behavior: "auto" });
+  }, [mode]);
+
   const loadPrivateData = async () => {
     if (!user) {
       try {
@@ -827,9 +831,12 @@ function ProductApp({ user, onUserChange }: { user: User | null; onUserChange: (
             onLoginRequired={requireLogin}
           />
         )}
+        {mode === "terms" && <LegalPage kind="terms" onBack={() => setMode("search")} />}
+        {mode === "privacy" && <LegalPage kind="privacy" onBack={() => setMode("search")} />}
         {mode === "admin" && user && canUseAdmin(user) && (
           <AdminPanel user={user} onSettingsChange={() => setRefreshKey((key) => key + 1)} />
         )}
+        <LegalFooter onMode={setMode} />
       </main>
       {loginOpen && (
         <LoginModal
@@ -838,6 +845,10 @@ function ProductApp({ user, onUserChange }: { user: User | null; onUserChange: (
           onLogin={(loggedUser) => {
             onUserChange(loggedUser);
             setLoginOpen(false);
+          }}
+          onLegal={(legalMode) => {
+            setLoginOpen(false);
+            setMode(legalMode);
           }}
         />
       )}
@@ -1336,7 +1347,10 @@ function SearchPage({
     }, 80);
     const minimumFeedback = new Promise<void>((resolve) => window.setTimeout(resolve, 1800));
     try {
-      const data = await api<SearchResult>(`/api/search?q=${encodeURIComponent(cleanQuery)}`);
+      const data = await api<SearchResult>("/api/search", {
+        method: "POST",
+        body: JSON.stringify({ q: cleanQuery }),
+      });
       await minimumFeedback;
       setResult(sanitizeClientSearchResult(data, cleanQuery, settings));
       onHistoryRefresh();
@@ -3271,11 +3285,11 @@ function ProfilePage({
           </label>
           <label>
             Nova senha
-            <input name="newPassword" type={showPassword ? "text" : "password"} minLength={6} autoComplete="new-password" required />
+            <input name="newPassword" type={showPassword ? "text" : "password"} minLength={10} autoComplete="new-password" required />
           </label>
           <label>
             Confirmar nova senha
-            <input name="confirmPassword" type={showPassword ? "text" : "password"} minLength={6} autoComplete="new-password" required />
+            <input name="confirmPassword" type={showPassword ? "text" : "password"} minLength={10} autoComplete="new-password" required />
           </label>
           {message && <p className="success-text">{message}</p>}
           {error && <p className="form-error">{error}</p>}
@@ -3413,20 +3427,24 @@ function LoginModal({
   initialMode,
   onClose,
   onLogin,
+  onLegal,
 }: {
   initialMode: "login" | "register";
   onClose: () => void;
   onLogin: (user: User) => void;
+  onLegal: (mode: "terms" | "privacy") => void;
 }) {
   const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const [authMode, setAuthMode] = useState<"login" | "register">(initialMode);
+  const [authMode, setAuthMode] = useState<"login" | "register" | "recovery">(initialMode);
   const [showPassword, setShowPassword] = useState(false);
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setSubmitting(true);
     setError("");
+    setSuccess("");
     const controller = new AbortController();
     let finished = false;
     let timedOut = false;
@@ -3436,17 +3454,26 @@ function LoginModal({
       }
       timedOut = true;
       controller.abort();
-      setError("O servidor demorou para responder. Reinicie o app Node no cPanel e tente novamente.");
+      setError("O servidor demorou para responder. Aguarde alguns instantes e tente novamente.");
       setSubmitting(false);
-    }, 7000);
+    }, 12000);
     try {
-      const data = await api<{ user: User }>(authMode === "login" ? "/api/auth/login" : "/api/auth/register", {
+      const endpoint = authMode === "login"
+        ? "/api/auth/login"
+        : authMode === "register"
+          ? "/api/auth/register"
+          : "/api/auth/recovery-request";
+      const data = await api<{ user?: User; message?: string }>(endpoint, {
         method: "POST",
         signal: controller.signal,
         body: JSON.stringify(formJson(event.currentTarget)),
       });
       finished = true;
-      onLogin(data.user);
+      if (authMode === "recovery") {
+        setSuccess(data.message || "Solicitação registrada.");
+      } else if (data.user) {
+        onLogin(data.user);
+      }
     } catch (apiError) {
       if (!finished && !timedOut) {
         setError(apiError instanceof Error ? apiError.message : "Não foi possível entrar.");
@@ -3459,13 +3486,23 @@ function LoginModal({
   };
 
   return (
-    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Login">
+    <div
+      className="modal-backdrop"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Login"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) {
+          onClose();
+        }
+      }}
+    >
       <form className="login-modal" onSubmit={submit}>
         <button className="modal-close" type="button" onClick={onClose} aria-label="Fechar login">
           <X size={20} />
         </button>
         <BrandMark />
-        <h2>{authMode === "login" ? "Acesso seguro" : "Criar conta grátis"}</h2>
+        <h2>{authMode === "login" ? "Acesso seguro" : authMode === "register" ? "Criar conta grátis" : "Recuperar acesso"}</h2>
         <div className="auth-switch" aria-label="Escolha login ou cadastro">
           <button className={authMode === "login" ? "active" : ""} type="button" onClick={() => setAuthMode("login")}>
             Entrar
@@ -3490,13 +3527,13 @@ function LoginModal({
             <input name="phone" type="tel" placeholder="(11) 99999-9999" autoComplete="tel" required />
           </label>
         )}
-        <label>
+        {authMode !== "recovery" && <label>
           Senha
           <div className="password-field">
             <input
               name="password"
               type={showPassword ? "text" : "password"}
-              minLength={6}
+              minLength={authMode === "register" ? 10 : undefined}
               autoComplete={authMode === "login" ? "current-password" : "new-password"}
               required
             />
@@ -3509,15 +3546,101 @@ function LoginModal({
               {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
             </button>
           </div>
-        </label>
+        </label>}
+        {authMode === "register" && (
+          <>
+            <p className="password-guidance">Use pelo menos 10 caracteres, com letra maiúscula, minúscula e número.</p>
+            <label className="consent-row">
+              <input name="acceptedTerms" type="checkbox" value="true" required />
+              <span>
+                Li e aceito os{" "}
+                <button type="button" onClick={() => onLegal("terms")}>Termos de Uso</button>.
+              </span>
+            </label>
+            <label className="consent-row">
+              <input name="acceptedPrivacy" type="checkbox" value="true" required />
+              <span>
+                Li e aceito a{" "}
+                <button type="button" onClick={() => onLegal("privacy")}>Política de Privacidade</button>.
+              </span>
+            </label>
+          </>
+        )}
         {authMode === "register" && <p className="login-note">Plano grátis liberado com 1 pesquisa completa.</p>}
+        {authMode === "recovery" && (
+          <p className="login-note">A solicitação será encaminhada ao suporte para confirmação segura da sua identidade.</p>
+        )}
         {error && <p className="form-error">{error}</p>}
+        {success && <p className="form-success">{success}</p>}
         <button className="login-submit" type="submit" disabled={submitting}>
           {authMode === "login" ? <LogIn size={19} /> : <UserRound size={19} />}
-          {submitting ? "Aguarde..." : authMode === "login" ? "Entrar" : "Criar conta"}
+          {submitting ? "Aguarde..." : authMode === "login" ? "Entrar" : authMode === "register" ? "Criar conta" : "Solicitar recuperação"}
         </button>
+        {authMode === "login" && (
+          <button className="forgot-password" type="button" onClick={() => setAuthMode("recovery")}>
+            Esqueci minha senha
+          </button>
+        )}
+        {authMode === "recovery" && (
+          <button className="forgot-password" type="button" onClick={() => setAuthMode("login")}>
+            Voltar para o login
+          </button>
+        )}
       </form>
     </div>
+  );
+}
+
+function LegalFooter({ onMode }: { onMode: (mode: Mode) => void }) {
+  return (
+    <footer className="legal-footer">
+      <span>Busca Vendas por Confweb</span>
+      <button type="button" onClick={() => onMode("terms")}>Termos de Uso</button>
+      <button type="button" onClick={() => onMode("privacy")}>Política de Privacidade</button>
+      <a href="https://www.confweb.com.br" target="_blank" rel="noreferrer">Confweb</a>
+    </footer>
+  );
+}
+
+function LegalPage({ kind, onBack }: { kind: "terms" | "privacy"; onBack: () => void }) {
+  if (kind === "privacy") {
+    return (
+      <section className="bv-page legal-page">
+        <button className="legal-back" type="button" onClick={onBack}>Voltar ao Busca Vendas</button>
+        <span className="legal-kicker">Privacidade e segurança</span>
+        <h1>Política de Privacidade</h1>
+        <p className="legal-updated">Última atualização: 28 de julho de 2026.</p>
+        <h2>1. Quais dados tratamos</h2>
+        <p>Tratamos nome, e-mail, telefone, dados de acesso, histórico de pesquisas, plano contratado, registros de suporte e informações necessárias à cobrança. Os dados completos do cartão são encaminhados à infraestrutura de pagamentos do Asaas e não são exibidos no painel administrativo.</p>
+        <h2>2. Para que usamos os dados</h2>
+        <p>Usamos os dados para autenticar sua conta, entregar pesquisas, manter seu histórico, calcular limites do plano, processar pagamentos, responder ao suporte, prevenir fraude e melhorar a estabilidade do serviço.</p>
+        <h2>3. Operadores e compartilhamento</h2>
+        <p>Podemos usar fornecedores de infraestrutura, pagamentos e coleta de dados públicos, incluindo Hostinger, Asaas e Scrape.do. Compartilhamos somente o necessário para executar cada serviço e cumprir obrigações legais.</p>
+        <h2>4. Segurança e retenção</h2>
+        <p>Aplicamos controle de acesso, senhas protegidas por hash, sessões revogáveis, conexão HTTPS, criptografia de credenciais de integração e backups operacionais. Mantemos os dados enquanto a conta estiver ativa ou pelo prazo necessário para obrigações legais e financeiras.</p>
+        <h2>5. Seus direitos</h2>
+        <p>Você pode pedir confirmação, acesso, correção, portabilidade ou exclusão dos dados, observadas as retenções legais aplicáveis. Solicitações podem ser enviadas pelo suporte do Busca Vendas ou para alisson.confweb@gmail.com.</p>
+      </section>
+    );
+  }
+
+  return (
+    <section className="bv-page legal-page">
+      <button className="legal-back" type="button" onClick={onBack}>Voltar ao Busca Vendas</button>
+      <span className="legal-kicker">Regras do serviço</span>
+      <h1>Termos de Uso</h1>
+      <p className="legal-updated">Última atualização: 28 de julho de 2026.</p>
+      <h2>1. O serviço</h2>
+      <p>O Busca Vendas ajuda a analisar o potencial comercial de produtos na internet a partir de anúncios e métricas públicas do Mercado Livre. Os resultados apoiam decisões comerciais, mas não constituem garantia de vendas, lucro ou desempenho futuro.</p>
+      <h2>2. Conta e uso permitido</h2>
+      <p>Você deve fornecer dados verdadeiros, proteger sua senha e usar a plataforma de forma lícita. É proibido compartilhar acesso, automatizar pesquisas sem autorização, tentar contornar limites ou interferir na segurança e disponibilidade do serviço.</p>
+      <h2>3. Planos, cobrança e acesso</h2>
+      <p>O plano grátis inclui uma pesquisa completa. Planos mensais são cobrados de forma recorrente no cartão; planos anuais são cobrados em pagamento único por Pix ou cartão. Em caso de inadimplência, cancelamento ou estorno, os recursos pagos podem ser suspensos até a regularização.</p>
+      <h2>4. Dados de mercado</h2>
+      <p>Preços, vendas e anúncios podem mudar ou deixar de estar públicos. A Confweb emprega cache e atualização periódica para reduzir custo e melhorar disponibilidade, informando a data da consulta quando aplicável.</p>
+      <h2>5. Cancelamento e suporte</h2>
+      <p>O cancelamento interrompe cobranças futuras, sem apagar registros financeiros que precisem ser mantidos por lei. Dúvidas, solicitações e problemas podem ser enviados pela área de suporte do aplicativo ou para alisson.confweb@gmail.com.</p>
+    </section>
   );
 }
 
@@ -3895,6 +4018,14 @@ function AdminUsers({
                 <span>{item.role === "admin" ? "Admin autorizado" : "Cliente"}</span>
               )}
               <input name="search_limit" type="number" defaultValue={item.search_limit ?? ""} placeholder="Ilimitado" />
+              <input
+                name="new_password"
+                type="password"
+                minLength={10}
+                autoComplete="new-password"
+                placeholder="Nova senha (opcional)"
+                title="Use para definir uma senha temporária após confirmar a identidade do usuário."
+              />
               <span>{itemIsCreator ? "Criador" : `${item.searches_used} usadas`}</span>
               <div className="user-row-actions">
                 <button type="submit">Salvar</button>
@@ -4778,33 +4909,21 @@ function AdminSettings({ settings, afterSave }: { settings: SettingsMap; afterSa
 
 function AdminSettingsSimple({ settings, afterSave }: { settings: SettingsMap; afterSave: (text?: string) => void }) {
   const [busy, setBusy] = useState<"asaas-save" | "asaas-test" | "scrapedo-save" | "scrapedo-test" | "">("");
-  const [asaasEnvironment, setAsaasEnvironment] = useState(settings.asaas_environment || "sandbox");
   const [asaasError, setAsaasError] = useState("");
   const [scrapeDoError, setScrapeDoError] = useState("");
-
-  useEffect(() => {
-    setAsaasEnvironment(settings.asaas_environment || "sandbox");
-  }, [settings.asaas_environment]);
 
   const saveAsaas = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const payload = formJson(event.currentTarget);
-    payload.asaas_enabled = "true";
-    payload.asaas_environment = asaasEnvironment;
-    payload.asaas_endpoint = asaasEnvironment === "production"
-      ? "https://api.asaas.com/v3"
-      : "https://api-sandbox.asaas.com/v3";
-    for (const key of ["asaas_api_key"]) {
-      if (!String(payload[key] || "").trim()) {
-        delete payload[key];
-      }
-    }
 
     setAsaasError("");
     setBusy("asaas-save");
     try {
-      await api("/api/admin/settings", { method: "PATCH", body: JSON.stringify(payload) });
-      const setup = await api<{ message?: string }>("/api/admin/asaas/setup", { method: "POST" });
+      const setup = await api<{ message?: string }>("/api/admin/asaas/configure", {
+        method: "POST",
+        body: JSON.stringify({ apiKey: payload.asaas_api_key || "" }),
+      });
+      event.currentTarget.reset();
       afterSave(setup.message || "Asaas salvo, validado e pronto para testar.");
     } catch (error) {
       setAsaasError(error instanceof Error ? error.message : "Não foi possível salvar o Asaas.");
@@ -4936,6 +5055,22 @@ function AdminSettingsSimple({ settings, afterSave }: { settings: SettingsMap; a
             <span>Atualização dos anúncios</span>
             <strong>A cada {settings.market_cache_ttl_days || "7"} dias</strong>
           </div>
+          <div>
+            <span>Créditos usados no mês</span>
+            <strong>
+              {number.format(Number(settings.scrapedo_monthly_credits_used || 0))}
+              {" / "}
+              {number.format(Number(settings.scrapedo_monthly_credit_budget || 0))}
+            </strong>
+          </div>
+          <div>
+            <span>Consultas externas no mês</span>
+            <strong>{number.format(Number(settings.scrapedo_provider_searches || 0))}</strong>
+          </div>
+          <div>
+            <span>Fila da API agora</span>
+            <strong>{number.format(Number(settings.scrapedo_queued_requests || 0))}</strong>
+          </div>
         </div>
 
         {(scrapeDoError || settings.scrapedo_last_error) && (
@@ -4964,13 +5099,13 @@ function AdminSettingsSimple({ settings, afterSave }: { settings: SettingsMap; a
           </div>
           <div className="credential-status">
             <b>API Key: {settings.asaas_api_key_configured ? "salva" : "pendente"}</b>
-            <b>Ambiente: {asaasEnvironment === "production" ? "produção" : "sandbox"}</b>
+            <b>Ambiente: {settings.asaas_environment === "production" ? "produção" : "sandbox"}</b>
             <b>Webhook: {settings.asaas_webhook_ready === "true" ? "pronto" : "será preparado ao salvar"}</b>
           </div>
         </div>
 
         <div className="settings-grid">
-          <label>
+          <label className="wide">
             Asaas API Key
             <input
               name="asaas_api_key"
@@ -4978,13 +5113,11 @@ function AdminSettingsSimple({ settings, afterSave }: { settings: SettingsMap; a
               autoComplete="off"
               placeholder={settings.asaas_api_key_configured ? "API Key já salva; deixe em branco para manter" : "Cole a API Key da Asaas"}
             />
+            <small className="field-hint">A chave informa automaticamente se o ambiente é Sandbox ou Produção.</small>
           </label>
           <label>
-            Ambiente
-            <select name="asaas_environment" value={asaasEnvironment} onChange={(event) => setAsaasEnvironment(event.target.value)}>
-              <option value="sandbox">Sandbox para testes</option>
-              <option value="production">Produção</option>
-            </select>
+            Ambiente detectado
+            <input readOnly value={settings.asaas_environment === "production" ? "Produção oficial" : "Sandbox para testes"} />
           </label>
           <label>
             URL do webhook
@@ -4995,7 +5128,7 @@ function AdminSettingsSimple({ settings, afterSave }: { settings: SettingsMap; a
         <div className="asaas-test-guide">
           <div>
             <span>1</span>
-            <p><b>Cole a API Key do Sandbox.</b> O Busca Vendas valida a conta sem criar cobrança.</p>
+            <p><b>Cole a API Key.</b> O Busca Vendas identifica o ambiente e valida a conta sem criar cobrança.</p>
           </div>
           <div>
             <span>2</span>
@@ -5003,7 +5136,7 @@ function AdminSettingsSimple({ settings, afterSave }: { settings: SettingsMap; a
           </div>
           <div>
             <span>3</span>
-            <p><b>Abra Planos.</b> Teste cartão mensal ou Pix anual sem movimentar dinheiro real.</p>
+            <p><b>Abra Planos.</b> No Sandbox você testa; em Produção as cobranças são reais.</p>
           </div>
           {settings.asaas_last_event && (
             <small>Último evento recebido: {settings.asaas_last_event}</small>
@@ -5017,11 +5150,11 @@ function AdminSettingsSimple({ settings, afterSave }: { settings: SettingsMap; a
         <div className="settings-card-actions">
           <button className="primary-action" type="submit" disabled={isBusy}>
             <CreditCard size={18} />
-            {busy === "asaas-save" ? "Preparando Sandbox..." : "Salvar e preparar Sandbox"}
+            {busy === "asaas-save" ? "Salvando e validando..." : "Salvar e preparar Asaas"}
           </button>
           {settings.asaas_api_key_configured && (
             <button className="secondary-action" type="button" onClick={testAsaas} disabled={isBusy}>
-              {busy === "asaas-test" ? "Validando..." : "Validar Sandbox e webhook"}
+              {busy === "asaas-test" ? "Validando..." : "Validar chave e webhook"}
             </button>
           )}
         </div>

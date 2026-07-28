@@ -1,12 +1,12 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { getSetting } from "./db.mjs";
 import {
   buildProductQuerySpec,
   matchesProductQuery,
   normalizedProductKey,
   normalizeProductSearchQuery,
 } from "./product-match.mjs";
+import { minimumChampionSales } from "./champion-policy.mjs";
 
 const CACHE_TTL_MS = Number(process.env.MELI_SCRAPER_CACHE_MS || 60 * 60 * 1000);
 const STALE_CACHE_TTL_MS = Number(process.env.MELI_SCRAPER_STALE_CACHE_MS || 6 * 60 * 60 * 1000);
@@ -90,10 +90,9 @@ async function runScraper(query, options = {}) {
   const exactCandidates = scraped.items
     .map((item, index) => ({ ...item, position: index + 1, match: matchesProductQuery(item.title, spec) }))
     .filter((item) => item.match.ok && item.price > 0 && typeof item.soldQuantity === "number" && item.soldQuantity > 0);
-  const candidates = exactCandidates;
+  const candidates = exactCandidates.filter((item) => item.soldQuantity >= minChampionSales);
   const uniqueItems = dedupeAndRankChampions(candidates).slice(0, 3);
   const mappedItems = uniqueItems.map(mapScrapedItem);
-  const hasBelowMinimum = uniqueItems.some((item) => item.soldQuantity < minChampionSales);
   const demand = mappedItems.reduce((sum, item) => sum + (typeof item.soldQuantity === "number" ? item.soldQuantity : 0), 0);
   const revenue = mappedItems.reduce((sum, item) => sum + (typeof item.revenue === "number" ? item.revenue : 0), 0);
   const actualDemand = mappedItems.reduce((sum, item) => sum + (typeof item.soldQuantity === "number" ? item.soldQuantity : 0), 0);
@@ -126,10 +125,8 @@ async function runScraper(query, options = {}) {
     source: options.proxy ? "mercado_livre_proxy" : "mercado_livre_scraper",
     metricsMode: hasSales ? "sales" : "market_signal",
     salesAvailable: hasSales,
-    thresholdRelaxed: hasBelowMinimum,
-    message: hasSales && hasBelowMinimum
-      ? `Anúncios reais encontrados pelo motor Confweb. Priorizamos anúncios acima de ${numberFormatter.format(minChampionSales)} vendas; quando não há 3 campeões acima desse volume, completamos com os melhores anúncios reais disponíveis.`
-      : hasSales
+    thresholdRelaxed: false,
+    message: hasSales
       ? "Anúncios reais encontrados pelo motor Confweb, com vendas extraídas de sinais públicos do próprio anúncio."
       : uniqueItems.length >= 3
       ? "Anúncios reais encontrados pelo motor Confweb com filtro exato. Vendas por anúncio não apareceram publicamente, então não foram simuladas."
@@ -150,11 +147,6 @@ async function runScraper(query, options = {}) {
 function scraperCacheKey(query, options = {}) {
   const mode = options.proxy ? "proxy" : options.accessToken ? "oauth" : "public";
   return `${CACHE_VERSION}:min${minimumChampionSales()}:${mode}:${normalizedProductKey(query)}`;
-}
-
-function minimumChampionSales() {
-  const value = Number(getSetting("min_champion_sales") || process.env.MIN_CHAMPION_SALES || 1000);
-  return Number.isFinite(value) && value > 0 ? Math.floor(value) : 1000;
 }
 
 function incompleteChampionMessage({ query, uniqueItems, exactCandidates, minChampionSales }) {

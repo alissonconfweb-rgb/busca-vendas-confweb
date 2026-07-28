@@ -1,8 +1,19 @@
 import { createReadStream, existsSync, statSync } from "node:fs";
 import { createServer } from "node:http";
 import { extname, join, resolve } from "node:path";
-import { db, createSession, deleteSession, findUserByEmail, getSetting, initDatabase, publicUser, setSetting, settingsObject, userFromSession } from "./db.mjs";
-import { loadLocalEnv } from "./env.mjs";
+import {
+  db,
+  createSession,
+  deleteSession,
+  deleteSessionsForUser,
+  findUserByEmail,
+  getSetting,
+  initDatabase,
+  publicUser,
+  setSetting,
+  settingsObject,
+  userFromSession,
+} from "./db.mjs";
 import { buildMeliAuthorizationUrl, createMeliPkcePair, disconnectMeliOAuth, exchangeMeliAuthorizationCode, getMeliRedirectUri, searchMercadoLivre, testMercadoLivreCatalog } from "./meli.mjs";
 import { shouldUseMarketEstimate } from "./market-estimate.mjs";
 import { bootstrapAdminFromEnv } from "./bootstrap-admin.mjs";
@@ -13,6 +24,7 @@ import { isZyteConfigured, isZyteSearchEnabled, syncZyteSettingsFromEnv, testZyt
 import {
   isScrapeDoConfigured,
   normalizeScrapeDoToken,
+  scrapeDoUsageSummary,
   syncScrapeDoSettingsFromEnv,
   testScrapeDoConnection,
 } from "./scrapedo.mjs";
@@ -20,6 +32,7 @@ import { buildProductQuerySpec, normalizedProductKey, normalizeProductSearchQuer
 import {
   asaasWebhookUrl,
   billingBlocksSearch,
+  configureAsaasApiKey,
   createAsaasCheckout,
   handleAsaasWebhook,
   refreshAsaasCheckoutStatus,
@@ -29,8 +42,9 @@ import {
 } from "./asaas.mjs";
 import { lookupBrazilianPostalCode } from "./postal-code.mjs";
 import { hashPassword, hashToken, randomToken, verifyPassword } from "./security.mjs";
+import { applyRateLimit, MemoryRateLimiter } from "./rate-limit.mjs";
+import { isChampionItem, minimumChampionSales } from "./champion-policy.mjs";
 
-loadLocalEnv();
 initDatabase();
 
 const PORT = Number(process.env.PORT || 3001);
@@ -42,6 +56,7 @@ const DIST_DIR = resolve(process.cwd(), "dist");
 const MELI_OAUTH_STATE_TTL_MS = 15 * 60 * 1000;
 const SEARCH_RESPONSE_TIMEOUT_MS = Number(process.env.SEARCH_RESPONSE_TIMEOUT_MS || 85_000);
 const marketRefreshFlights = new Map();
+const rateLimiter = new MemoryRateLimiter();
 const PUBLIC_SETTING_KEYS = new Set([
   "app_name",
   "starter_monthly",
@@ -60,6 +75,7 @@ syncZyteSettingsFromEnv();
 syncScrapeDoSettingsFromEnv();
 syncAsaasSettingsFromEnv();
 migrateMarketSearchCacheKeys();
+pruneInvalidChampionCaches();
 seedMarketItemCacheFromSearches();
 if (isZyteConfigured() && isZyteSearchEnabled() && process.env.MELI_LOCAL_BROWSER_ENABLED !== "true") {
   enforceZytePrimarySettings();
@@ -73,9 +89,19 @@ const server = createServer(async (req, res) => {
     await route(req, res);
   } catch (error) {
     console.error(error);
-    json(res, 500, { error: "Erro interno no servidor." });
+    if (res.headersSent) {
+      res.end();
+      return;
+    }
+    const status = Number(error?.statusCode || 500);
+    json(res, status, {
+      error: status >= 500 ? "Erro interno no servidor." : error.message,
+    });
   }
 });
+server.requestTimeout = 95_000;
+server.headersTimeout = 15_000;
+server.keepAliveTimeout = 5_000;
 
 server.listen(PORT, HOST, () => {
   console.log(`Busca Vendas rodando em http://${HOST}:${PORT}`);
@@ -114,7 +140,24 @@ async function route(req, res) {
   }
 
   if (url.pathname === "/api/health") {
-    return json(res, 200, { ok: true });
+    return json(res, 200, healthPayload());
+  }
+
+  const exemptFromGlobalLimit = url.pathname === "/api/asaas/webhook"
+    || url.pathname === "/api/meli/notifications";
+  if (
+    !exemptFromGlobalLimit
+    && !limitRequest(req, res, "global", clientIp(req), 300, 60_000)
+  ) {
+    return;
+  }
+
+  if (
+    ["POST", "PATCH", "PUT", "DELETE"].includes(method)
+    && !exemptFromGlobalLimit
+    && !hasTrustedRequestOrigin(req)
+  ) {
+    return json(res, 403, { error: "Origem da requisição não autorizada." });
   }
 
   if (url.pathname === "/api/meli/notifications" && ["GET", "POST"].includes(method)) {
@@ -127,12 +170,59 @@ async function route(req, res) {
     return json(res, result.status, result.body);
   }
 
-  if (url.pathname === "/api/auth/login" && method === "POST") {
+  if (url.pathname === "/api/auth/recovery-request" && method === "POST") {
+    if (!limitRequest(req, res, "recovery-ip", clientIp(req), 3, 60 * 60_000)) {
+      return;
+    }
     const body = await readJson(req);
-    const user = findUserByEmail(body.email || "");
+    const email = normalizeEmail(body.email);
+    if (!limitRequest(req, res, "recovery-email", email || "invalid", 2, 60 * 60_000)) {
+      return;
+    }
+    if (isValidEmail(email)) {
+      const account = findUserByEmail(email);
+      if (account) {
+        const existing = db.prepare(`
+          SELECT id
+          FROM support_tickets
+          WHERE user_id = ?
+            AND subject = 'Recuperação de acesso'
+            AND status = 'open'
+            AND created_at >= datetime('now', '-24 hours')
+          LIMIT 1
+        `).get(account.id);
+        if (!existing) {
+          db.prepare(`
+            INSERT INTO support_tickets (user_id, subject, message, status, priority)
+            VALUES (?, 'Recuperação de acesso', ?, 'open', 'high')
+          `).run(
+            account.id,
+            `O usuário solicitou recuperação de senha para ${email}. Confirme a identidade antes de definir uma senha temporária no painel de usuários.`,
+          );
+        }
+      }
+    }
+    return json(res, 200, {
+      message: "Se a conta existir, a solicitação foi registrada. A equipe Confweb entrará em contato pelos dados cadastrados.",
+    });
+  }
+
+  if (url.pathname === "/api/auth/login" && method === "POST") {
+    if (!limitRequest(req, res, "login-ip", clientIp(req), 10, 15 * 60_000)) {
+      return;
+    }
+    const body = await readJson(req);
+    const email = normalizeEmail(body.email);
+    if (!limitRequest(req, res, "login-email", email || "invalid", 10, 15 * 60_000)) {
+      return;
+    }
+    const user = findUserByEmail(email);
 
     if (!user || !verifyPassword(body.password || "", user.password_hash)) {
       return json(res, 401, { error: "E-mail ou senha inválidos." });
+    }
+    if (user.status !== "active") {
+      return json(res, 403, { error: "Esta conta está bloqueada. Fale com o suporte da Confweb." });
     }
 
     const session = createSession(user.id);
@@ -141,21 +231,37 @@ async function route(req, res) {
   }
 
   if (url.pathname === "/api/auth/register" && method === "POST") {
+    if (!limitRequest(req, res, "register", clientIp(req), 5, 60 * 60_000)) {
+      return;
+    }
     const body = await readJson(req);
-    const email = required(body.email).toLowerCase();
+    const email = normalizeEmail(required(body.email));
     const password = required(body.password);
-    const phone = required(body.phone);
-    if (password.length < 6) {
-      return json(res, 400, { error: "A senha precisa ter pelo menos 6 caracteres." });
+    const phone = normalizePhone(required(body.phone));
+    if (!isValidEmail(email)) {
+      return json(res, 400, { error: "Informe um e-mail válido." });
+    }
+    if (phone.length < 10 || phone.length > 13) {
+      return json(res, 400, { error: "Informe um telefone válido com DDD." });
+    }
+    const passwordError = validateNewPassword(password);
+    if (passwordError) {
+      return json(res, 400, { error: passwordError });
+    }
+    if (!booleanValue(body.acceptedTerms) || !booleanValue(body.acceptedPrivacy)) {
+      return json(res, 400, { error: "Aceite os Termos de Uso e a Política de Privacidade para criar a conta." });
     }
     if (findUserByEmail(email)) {
       return json(res, 409, { error: "Esse e-mail já está cadastrado. Faça login para continuar." });
     }
 
     const result = db.prepare(`
-      INSERT INTO users (name, email, phone, password_hash, role, status, plan, search_limit)
-      VALUES (?, ?, ?, ?, 'user', 'active', 'free', 1)
-    `).run(required(body.name), email, phone, hashPassword(password));
+      INSERT INTO users (
+        name, email, phone, password_hash, role, status, plan, search_limit,
+        terms_accepted_at, privacy_accepted_at
+      )
+      VALUES (?, ?, ?, ?, 'user', 'active', 'free', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    `).run(required(body.name).slice(0, 100), email, phone, hashPassword(password));
     const user = db.prepare("SELECT * FROM users WHERE id = ?").get(result.lastInsertRowid);
     const session = createSession(user.id);
     setCookie(res, session.token, session.expires);
@@ -197,6 +303,9 @@ async function route(req, res) {
   }
 
   if (url.pathname === "/api/account/password" && method === "POST") {
+    if (!limitRequest(req, res, "password-change", user.id, 5, 60 * 60_000)) {
+      return;
+    }
     const body = await readJson(req);
     const currentPassword = String(body.currentPassword || "");
     const newPassword = String(body.newPassword || "");
@@ -205,8 +314,9 @@ async function route(req, res) {
       return json(res, 400, { error: "Informe a senha atual e a nova senha." });
     }
 
-    if (newPassword.length < 6) {
-      return json(res, 400, { error: "A nova senha precisa ter pelo menos 6 caracteres." });
+    const passwordError = validateNewPassword(newPassword);
+    if (passwordError) {
+      return json(res, 400, { error: passwordError });
     }
 
     const fullUser = db.prepare("SELECT * FROM users WHERE id = ?").get(user.id);
@@ -214,16 +324,24 @@ async function route(req, res) {
       return json(res, 401, { error: "Senha atual incorreta." });
     }
 
-    db.prepare("UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(
+    db.prepare(`
+      UPDATE users
+      SET password_hash = ?, password_changed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(
       hashPassword(newPassword),
       user.id,
     );
+    deleteSessionsForUser(user.id);
+    const session = createSession(user.id);
+    setCookie(res, session.token, session.expires);
 
     return json(res, 200, { ok: true, message: "Senha atualizada com sucesso." });
   }
 
-  if (url.pathname === "/api/search" && method === "GET") {
-    return handleSearch(req, res, user, url.searchParams.get("q") || "", {
+  if (url.pathname === "/api/search" && method === "POST") {
+    const body = await readJson(req);
+    return handleSearch(req, res, user, body.q || "", {
       fresh: canUseAdmin(user) && ["1", "true", "yes", "sim"].includes(String(url.searchParams.get("fresh") || "").toLowerCase()),
     });
   }
@@ -286,6 +404,9 @@ async function route(req, res) {
   }
 
   if (url.pathname === "/api/support" && method === "POST") {
+    if (!limitRequest(req, res, "support", user.id, 10, 60 * 60_000)) {
+      return;
+    }
     const body = await readJson(req);
     const subject = required(body.subject).slice(0, 120);
     const message = required(body.message).slice(0, 3000);
@@ -302,6 +423,9 @@ async function route(req, res) {
   }
 
   if (url.pathname === "/api/postal-code" && method === "GET") {
+    if (!limitRequest(req, res, "postal-code", user.id, 30, 60 * 60_000)) {
+      return;
+    }
     try {
       const address = await lookupBrazilianPostalCode(url.searchParams.get("cep") || "");
       return json(res, 200, address);
@@ -312,6 +436,9 @@ async function route(req, res) {
   }
 
   if (url.pathname === "/api/checkout/start" && method === "POST") {
+    if (!limitRequest(req, res, "checkout", user.id, 6, 10 * 60_000)) {
+      return;
+    }
     const body = await readJson(req);
     try {
       const result = await createAsaasCheckout({
@@ -354,6 +481,12 @@ async function route(req, res) {
 }
 
 async function handleSearch(req, res, user, query, options = {}) {
+  if (!limitRequest(req, res, "search-user", user.id, canUseAdmin(user) ? 60 : 20, 60_000)) {
+    return;
+  }
+  if (!limitRequest(req, res, "search-ip", clientIp(req), 30, 60_000)) {
+    return;
+  }
   const cleanQuery = query.trim();
   if (!cleanQuery) {
     return json(res, 400, { error: "Informe uma palavra-chave." });
@@ -423,11 +556,7 @@ function isCompleteChampionResult(result) {
     result?.ok &&
     result?.salesAvailable === true &&
     items.length >= 3 &&
-    items.slice(0, 3).every((item) => (
-      Number(item?.soldQuantity) > 0 &&
-      Number(item?.price) > 0 &&
-      Number(item?.revenue) > 0
-    )) &&
+    items.slice(0, 3).every(isChampionItem) &&
     Number(result?.totals?.demand) > 0 &&
     Number(result?.totals?.revenue) > 0,
   );
@@ -692,6 +821,30 @@ function migrateMarketSearchCacheKeys() {
     db.prepare("DELETE FROM market_search_cache WHERE key = ?").run(row.key);
   }
   setSetting("market_cache_key_version", "2");
+}
+
+function pruneInvalidChampionCaches() {
+  const minimum = minimumChampionSales();
+  if (getSetting("champion_cache_policy_min") === String(minimum)) {
+    return;
+  }
+
+  const removeCache = db.prepare("DELETE FROM market_search_cache WHERE key = ?");
+  const removeHistory = db.prepare("DELETE FROM search_history WHERE id = ?");
+  const prune = db.transaction(() => {
+    for (const row of db.prepare("SELECT key, payload FROM market_search_cache").all()) {
+      if (!isCompleteChampionResult(parseSearchPayload(row.payload))) {
+        removeCache.run(row.key);
+      }
+    }
+    for (const row of db.prepare("SELECT id, payload FROM search_history").all()) {
+      if (!isCompleteChampionResult(parseSearchPayload(row.payload))) {
+        removeHistory.run(row.id);
+      }
+    }
+    setSetting("champion_cache_policy_min", String(minimum));
+  });
+  prune();
 }
 
 function seedMarketItemCacheFromSearches() {
@@ -998,6 +1151,36 @@ async function handleAdmin(req, res, url, currentUser) {
     }
   }
 
+  if (path === "asaas/configure" && method === "POST") {
+    const body = await readJson(req);
+    const suppliedKey = String(body.apiKey || "").trim();
+    const existingKey = getSetting("asaas_api_key") || process.env.ASAAS_API_KEY || "";
+    try {
+      const environment = suppliedKey
+        ? configureAsaasApiKey(suppliedKey)
+        : getSetting("asaas_environment") || "sandbox";
+      if (!suppliedKey && !existingKey) {
+        return json(res, 400, { error: "Cole a API Key da Asaas antes de salvar." });
+      }
+      const result = await setupAsaasIntegration({
+        email: currentUser.email,
+        publicUrl: process.env.PUBLIC_URL || getSetting("frontend_origin"),
+      });
+      return json(res, 200, {
+        ...result,
+        environment,
+        message: environment === "production"
+          ? "Asaas Produção validado e webhook oficial preparado."
+          : "Asaas Sandbox validado e webhook de testes preparado.",
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Falha ao preparar a integração Asaas.";
+      setSetting("asaas_webhook_ready", "false");
+      setSetting("asaas_last_error", message);
+      return json(res, 400, { ok: false, error: message });
+    }
+  }
+
   if (path === "asaas/setup" && method === "POST") {
     try {
       const result = await setupAsaasIntegration({
@@ -1006,7 +1189,9 @@ async function handleAdmin(req, res, url, currentUser) {
       });
       return json(res, 200, {
         ...result,
-        message: "Sandbox validado e webhook preparado automaticamente.",
+        message: result.environment === "production"
+          ? "Asaas Produção e webhook oficial validados."
+          : "Asaas Sandbox e webhook de testes validados.",
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Falha ao preparar a integração Asaas.";
@@ -1161,19 +1346,34 @@ async function handleAdmin(req, res, url, currentUser) {
   if (path === "users" && method === "POST") {
     const body = await readJson(req);
     const plan = body.plan || "free";
+    const name = required(body.name).slice(0, 100);
+    const email = normalizeEmail(required(body.email));
+    const phone = normalizePhone(required(body.phone));
+    const password = required(body.password);
+    if (!isValidEmail(email)) {
+      return json(res, 400, { error: "Informe um e-mail válido." });
+    }
+    if (phone.length < 10 || phone.length > 13) {
+      return json(res, 400, { error: "Informe um telefone válido com DDD." });
+    }
+    const passwordError = validateNewPassword(password);
+    if (passwordError) {
+      return json(res, 400, { error: passwordError });
+    }
+    if (findUserByEmail(email)) {
+      return json(res, 409, { error: "Esse e-mail já está cadastrado." });
+    }
     const searchLimit = plan === "scale" ? null : nullableNumber(body.search_limit ?? (plan === "starter" ? 10 : 1));
-    const email = required(body.email);
-    const phone = String(body.phone || "").trim();
     const role = isCreator(currentUser) && (body.role === "admin" || email.toLowerCase() === CREATOR_EMAIL) ? "admin" : "user";
     const billingStatus = ["starter", "scale"].includes(plan) ? "active" : "none";
     const result = db.prepare(`
       INSERT INTO users (name, email, phone, password_hash, role, status, plan, search_limit, billing_status)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
-      required(body.name),
+      name,
       email,
       phone,
-      hashPassword(required(body.password)),
+      hashPassword(password),
       role,
       body.status || "active",
       plan,
@@ -1194,6 +1394,13 @@ async function handleAdmin(req, res, url, currentUser) {
     const target = db.prepare("SELECT id, email, role FROM users WHERE id = ?").get(Number(userMatch[1]));
     if (!target) {
       return json(res, 404, { error: "Usuário não encontrado." });
+    }
+    const newPassword = String(body.new_password || "");
+    if (newPassword) {
+      const passwordError = validateNewPassword(newPassword);
+      if (passwordError) {
+        return json(res, 400, { error: passwordError });
+      }
     }
     const role = target.email.toLowerCase() === CREATOR_EMAIL
       ? "admin"
@@ -1228,6 +1435,14 @@ async function handleAdmin(req, res, url, currentUser) {
       body.plan,
       Number(userMatch[1]),
     );
+    if (newPassword) {
+      db.prepare(`
+        UPDATE users
+        SET password_hash = ?, password_changed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).run(hashPassword(newPassword), Number(userMatch[1]));
+      deleteSessionsForUser(Number(userMatch[1]));
+    }
     return json(res, 200, { ok: true });
   }
 
@@ -1485,6 +1700,14 @@ function safeSettings(user) {
     settings.market_item_cache_ttl_days = settings.market_cache_ttl_days;
     settings.market_cache_entries = String(db.prepare("SELECT COUNT(*) AS total FROM market_search_cache").get().total || 0);
     settings.market_item_cache_entries = String(db.prepare("SELECT COUNT(*) AS total FROM market_item_cache").get().total || 0);
+    const scrapeDoUsage = scrapeDoUsageSummary();
+    settings.scrapedo_monthly_credits_used = String(scrapeDoUsage.used);
+    settings.scrapedo_monthly_credit_budget = String(scrapeDoUsage.budget);
+    settings.scrapedo_monthly_credits_remaining = scrapeDoUsage.remaining === null ? "" : String(scrapeDoUsage.remaining);
+    settings.scrapedo_provider_searches = String(scrapeDoUsage.searches);
+    settings.scrapedo_provider_failures = String(scrapeDoUsage.failures);
+    settings.scrapedo_active_requests = String(scrapeDoUsage.active);
+    settings.scrapedo_queued_requests = String(scrapeDoUsage.queued);
     settings.proxy_password_configured = settings.proxy_password || process.env.PROXY_PASSWORD ? "true" : "";
     settings.proxy_connected = settings.proxy_enabled === "true" && settings.proxy_url ? "true" : "";
     settings.proxy_password = "";
@@ -1750,12 +1973,35 @@ function clearCookie(res) {
   res.setHeader("Set-Cookie", `${COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${secure}`);
 }
 
-async function readJson(req) {
-  let body = "";
-  for await (const chunk of req) {
-    body += chunk;
+async function readJson(req, { maxBytes = 64 * 1024 } = {}) {
+  const contentLength = Number(req.headers["content-length"] || 0);
+  if (contentLength > maxBytes) {
+    throw requestError(413, "A requisição ultrapassou o tamanho permitido.");
   }
-  return body ? JSON.parse(body) : {};
+  const contentType = String(req.headers["content-type"] || "").toLowerCase();
+  if (contentLength > 0 && !contentType.includes("application/json")) {
+    throw requestError(415, "Envie os dados no formato JSON.");
+  }
+
+  const chunks = [];
+  let receivedBytes = 0;
+  for await (const chunk of req) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    receivedBytes += buffer.length;
+    if (receivedBytes > maxBytes) {
+      throw requestError(413, "A requisição ultrapassou o tamanho permitido.");
+    }
+    chunks.push(buffer);
+  }
+  const body = Buffer.concat(chunks).toString("utf8");
+  if (!body) {
+    return {};
+  }
+  try {
+    return JSON.parse(body);
+  } catch {
+    throw requestError(400, "O conteúdo enviado não é um JSON válido.");
+  }
 }
 
 async function drainRequest(req) {
@@ -1823,6 +2069,87 @@ function normalizeSettingValue(key, value) {
 function clientIp(req) {
   const forwarded = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
   return forwarded || req.socket?.remoteAddress || "127.0.0.1";
+}
+
+function limitRequest(req, res, scope, identity, limit, windowMs) {
+  return applyRateLimit({
+    limiter: rateLimiter,
+    req,
+    res,
+    scope,
+    identity: String(identity || clientIp(req)),
+    limit,
+    windowMs,
+  });
+}
+
+function hasTrustedRequestOrigin(req) {
+  const origin = String(req.headers.origin || "").trim();
+  if (!origin) {
+    return true;
+  }
+  const forwardedProto = String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim();
+  const protocol = forwardedProto || (req.socket?.encrypted ? "https" : "http");
+  const requestOrigin = req.headers.host ? `${protocol}://${req.headers.host}` : "";
+  const allowedOrigins = [
+    process.env.PUBLIC_URL,
+    process.env.FRONTEND_ORIGIN,
+    requestOrigin,
+    !IS_PRODUCTION ? "http://127.0.0.1:5173" : "",
+    !IS_PRODUCTION ? "http://localhost:5173" : "",
+  ]
+    .filter(Boolean)
+    .map((value) => {
+      try {
+        return new URL(value).origin;
+      } catch {
+        return "";
+      }
+    });
+  return allowedOrigins.includes(origin);
+}
+
+function normalizeEmail(value) {
+  return String(value || "").trim().toLowerCase().slice(0, 254);
+}
+
+function normalizePhone(value) {
+  return String(value || "").replace(/\D/g, "").slice(0, 13);
+}
+
+function isValidEmail(value) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/i.test(String(value || ""));
+}
+
+function booleanValue(value) {
+  return value === true || ["true", "1", "on", "yes"].includes(String(value || "").toLowerCase());
+}
+
+function validateNewPassword(value) {
+  const password = String(value || "");
+  if (password.length < 10) {
+    return "A senha precisa ter pelo menos 10 caracteres.";
+  }
+  if (!/[a-z]/.test(password) || !/[A-Z]/.test(password) || !/\d/.test(password)) {
+    return "Use uma senha com letras maiúsculas, minúsculas e pelo menos um número.";
+  }
+  return "";
+}
+
+function requestError(statusCode, message) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  return error;
+}
+
+function healthPayload() {
+  const database = db.prepare("SELECT 1 AS ok").get()?.ok === 1;
+  return {
+    ok: database,
+    database,
+    uptimeSeconds: Math.floor(process.uptime()),
+    version: process.env.APP_VERSION || "development",
+  };
 }
 
 function serveStatic(req, res, url) {
