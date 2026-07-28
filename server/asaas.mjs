@@ -240,6 +240,7 @@ export async function createAsaasCheckout({ user, body, settings, remoteIp }) {
       resetUsage: true,
     });
   }
+  setSetting("asaas_last_error", "");
 
   return {
     ok: true,
@@ -330,6 +331,7 @@ export async function refreshAsaasCheckoutStatus({ user, financeId }) {
   const updated = db.prepare("SELECT * FROM finance_records WHERE id = ?").get(record.id);
   const paid = updated.status === "paid";
   const providerStatus = providerPayment?.status || updated.status;
+  setSetting("asaas_last_error", "");
   return {
     ok: true,
     financeId: updated.id,
@@ -429,6 +431,7 @@ export async function handleAsaasWebhook(req, publicUrl) {
 
   setSetting("asaas_last_event", `${eventName || "evento"} ${status || ""}`.trim());
   setSetting("asaas_last_webhook_url", asaasWebhookUrl(publicUrl));
+  setSetting("asaas_last_error", "");
   return { ok: true, status: 200, body: { ok: true } };
 }
 

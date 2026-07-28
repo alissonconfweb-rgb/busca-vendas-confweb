@@ -5143,8 +5143,10 @@ function AdminSettingsSimple({ settings, afterSave }: { settings: SettingsMap; a
           )}
         </div>
 
-        {(asaasError || settings.asaas_last_error) && (
-          <strong className="oauth-error">{asaasError || settings.asaas_last_error}</strong>
+        {(asaasError || (settings.asaas_webhook_ready !== "true" && settings.asaas_last_error)) && (
+          <strong className="oauth-error">
+            {asaasError || settings.asaas_last_error}
+          </strong>
         )}
 
         <div className="settings-card-actions">
