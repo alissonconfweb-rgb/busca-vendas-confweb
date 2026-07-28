@@ -287,10 +287,13 @@ async function route(req, res) {
 
   if (url.pathname === "/api/support" && method === "POST") {
     const body = await readJson(req);
+    const subject = required(body.subject).slice(0, 120);
+    const message = required(body.message).slice(0, 3000);
+    const priority = oneOf(body.priority || "normal", ["low", "normal", "high"], "Prioridade inválida.");
     const result = db.prepare(`
       INSERT INTO support_tickets (user_id, subject, message, priority)
       VALUES (?, ?, ?, ?)
-    `).run(user.id, required(body.subject), required(body.message), body.priority || "normal");
+    `).run(user.id, subject, message, priority);
     return json(res, 201, db.prepare("SELECT * FROM support_tickets WHERE id = ?").get(result.lastInsertRowid));
   }
 
@@ -946,7 +949,7 @@ async function handleAdmin(req, res, url, currentUser) {
       : 7;
     setSetting("market_cache_ttl_days", String(cacheTtlDays));
     setSetting("market_cache_stale_days", "30");
-    setSetting("market_item_cache_ttl_days", "3");
+    setSetting("market_item_cache_ttl_days", String(cacheTtlDays));
     setSetting("zyte_search_enabled", "false");
     setSetting("meli_scraper_enabled", "false");
     setSetting("proxy_enabled", "false");
@@ -1331,11 +1334,19 @@ async function handleAdmin(req, res, url, currentUser) {
   const ticketMatch = path.match(/^support\/(\d+)$/);
   if (ticketMatch && method === "PATCH") {
     const body = await readJson(req);
+    const ticketId = Number(ticketMatch[1]);
+    const ticket = db.prepare("SELECT id FROM support_tickets WHERE id = ?").get(ticketId);
+    if (!ticket) {
+      return json(res, 404, { error: "Chamado não encontrado." });
+    }
+    const status = oneOf(body.status, ["open", "waiting", "closed"], "Status inválido.");
+    const priority = oneOf(body.priority, ["low", "normal", "high"], "Prioridade inválida.");
+    const response = String(body.response || "").trim().slice(0, 3000) || null;
     db.prepare("UPDATE support_tickets SET status = ?, priority = ?, response = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(
-      body.status,
-      body.priority,
-      body.response || null,
-      Number(ticketMatch[1]),
+      status,
+      priority,
+      response,
+      ticketId,
     );
     return json(res, 200, { ok: true });
   }
@@ -1471,7 +1482,7 @@ function safeSettings(user) {
     settings.min_champion_sales = settings.min_champion_sales || process.env.MIN_CHAMPION_SALES || "1000";
     settings.market_cache_ttl_days = settings.market_cache_ttl_days || process.env.MARKET_CACHE_TTL_DAYS || "7";
     settings.market_cache_stale_days = settings.market_cache_stale_days || process.env.MARKET_CACHE_STALE_DAYS || "30";
-    settings.market_item_cache_ttl_days = settings.market_item_cache_ttl_days || process.env.MARKET_ITEM_CACHE_TTL_DAYS || "3";
+    settings.market_item_cache_ttl_days = settings.market_cache_ttl_days;
     settings.market_cache_entries = String(db.prepare("SELECT COUNT(*) AS total FROM market_search_cache").get().total || 0);
     settings.market_item_cache_entries = String(db.prepare("SELECT COUNT(*) AS total FROM market_item_cache").get().total || 0);
     settings.proxy_password_configured = settings.proxy_password || process.env.PROXY_PASSWORD ? "true" : "";
@@ -1781,6 +1792,14 @@ function required(value) {
     throw new Error("Campo obrigatório ausente.");
   }
   return text;
+}
+
+function oneOf(value, allowed, message) {
+  const normalized = String(value ?? "").trim();
+  if (!allowed.includes(normalized)) {
+    throw new Error(message);
+  }
+  return normalized;
 }
 
 function nullableNumber(value) {

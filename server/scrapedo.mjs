@@ -340,8 +340,14 @@ function marketItemCacheKey(candidate) {
 }
 
 function marketItemCacheTtlMs() {
-  const days = Number(getSetting("market_item_cache_ttl_days") || process.env.MARKET_ITEM_CACHE_TTL_DAYS || 3);
-  return Math.max(1, Number.isFinite(days) ? days : 3) * 24 * 60 * 60 * 1000;
+  const days = Number(
+    getSetting("market_cache_ttl_days")
+    || process.env.MARKET_CACHE_TTL_DAYS
+    || getSetting("market_item_cache_ttl_days")
+    || process.env.MARKET_ITEM_CACHE_TTL_DAYS
+    || 7,
+  );
+  return Math.max(1, Number.isFinite(days) ? days : 7) * 24 * 60 * 60 * 1000;
 }
 
 async function requestPage(targetUrl, options = {}) {

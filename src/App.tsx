@@ -133,6 +133,7 @@ type Ticket = {
   response?: string | null;
   user_email?: string;
   created_at: string;
+  updated_at?: string;
 };
 
 type Contact = {
@@ -3287,6 +3288,22 @@ function ProfilePage({
   );
 }
 
+function ticketStatusLabel(status: string) {
+  return {
+    open: "Aberto",
+    waiting: "Aguardando resposta",
+    closed: "Fechado",
+  }[status] || status;
+}
+
+function ticketPriorityLabel(priority: string) {
+  return {
+    low: "Baixa",
+    normal: "Normal",
+    high: "Alta",
+  }[priority] || priority;
+}
+
 function SupportPage({
   user,
   tickets,
@@ -3299,20 +3316,33 @@ function SupportPage({
   onLoginRequired: () => boolean;
 }) {
   const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!onLoginRequired()) {
       return;
     }
+
     const form = event.currentTarget;
-    const ticket = await api<Ticket>("/api/support", {
-      method: "POST",
-      body: JSON.stringify(formJson(form)),
-    });
-    onTicketsChange([ticket, ...tickets]);
-    form.reset();
-    setMessage("Chamado aberto com sucesso.");
+    setSubmitting(true);
+    setMessage("");
+    setError("");
+
+    try {
+      const ticket = await api<Ticket>("/api/support", {
+        method: "POST",
+        body: JSON.stringify(formJson(form)),
+      });
+      onTicketsChange([ticket, ...tickets]);
+      form.reset();
+      setMessage("Chamado aberto com sucesso. Acompanhe a resposta abaixo.");
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : "Não foi possível abrir o chamado.");
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   if (!user) {
@@ -3322,26 +3352,47 @@ function SupportPage({
   return (
     <section className="bv-page simple-page">
       <h1>Suporte</h1>
-      <p>Abra chamados reais e acompanhe resposta do admin.</p>
+      <p>Envie sua dúvida para a equipe Confweb e acompanhe a resposta por aqui.</p>
       <form className="support-form" onSubmit={submit}>
-        <input name="subject" placeholder="Assunto" required />
+        <input name="subject" placeholder="Assunto" maxLength={120} required />
         <select name="priority" defaultValue="normal">
           <option value="low">Baixa</option>
           <option value="normal">Normal</option>
           <option value="high">Alta</option>
         </select>
-        <textarea name="message" placeholder="Descreva sua dúvida" required />
-        <button type="submit">Enviar suporte</button>
+        <textarea name="message" placeholder="Descreva sua dúvida" maxLength={3000} required />
+        <button type="submit" disabled={submitting}>
+          {submitting ? "Enviando..." : "Enviar para o suporte"}
+        </button>
       </form>
       {message && <p className="success-text">{message}</p>}
+      {error && <p className="form-error">{error}</p>}
       <div className="ticket-list">
-        {tickets.map((ticket) => (
+        {tickets.length ? tickets.map((ticket) => (
           <article key={ticket.id}>
-            <strong>{ticket.subject}</strong>
-            <span>{ticket.status} · {ticket.priority}</span>
-            <p>{ticket.response || ticket.message}</p>
+            <div className="support-ticket-head">
+              <strong>{ticket.subject}</strong>
+              <span className={`support-ticket-status is-${ticket.status}`}>
+                {ticketStatusLabel(ticket.status)}
+              </span>
+            </div>
+            <span>
+              Prioridade {ticketPriorityLabel(ticket.priority)} · Aberto em {formatCacheDate(ticket.created_at)}
+            </span>
+            <div className="support-ticket-message">
+              <small>Sua mensagem</small>
+              <p>{ticket.message}</p>
+            </div>
+            {ticket.response && (
+              <div className="support-ticket-response">
+                <small>Resposta da equipe Confweb</small>
+                <p>{ticket.response}</p>
+              </div>
+            )}
           </article>
-        ))}
+        )) : (
+          <p className="muted-box">Você ainda não abriu nenhum chamado. Envie sua dúvida pelo formulário acima.</p>
+        )}
       </div>
     </section>
   );
@@ -4124,21 +4175,54 @@ function AdminTips({ tips, afterSave }: { tips: Tip[]; afterSave: () => void }) 
   );
 }
 
-function AdminSupport({ tickets, afterSave }: { tickets: Ticket[]; afterSave: () => void }) {
+function AdminSupport({
+  tickets,
+  afterSave,
+}: {
+  tickets: Ticket[];
+  afterSave: (message?: string) => void | Promise<void>;
+}) {
+  const [savingId, setSavingId] = useState<number | null>(null);
+  const [error, setError] = useState("");
+
   const update = async (event: FormEvent<HTMLFormElement>, ticketId: number) => {
     event.preventDefault();
     const form = event.currentTarget;
-    await api(`/api/admin/support/${ticketId}`, { method: "PATCH", body: JSON.stringify(formJson(form)) });
-    afterSave();
+    setSavingId(ticketId);
+    setError("");
+
+    try {
+      await api(`/api/admin/support/${ticketId}`, {
+        method: "PATCH",
+        body: JSON.stringify(formJson(form)),
+      });
+      await afterSave("Resposta do suporte salva.");
+    } catch (updateError) {
+      setError(updateError instanceof Error ? updateError.message : "Não foi possível salvar a resposta.");
+    } finally {
+      setSavingId(null);
+    }
   };
+
+  if (!tickets.length) {
+    return (
+      <div className="support-admin-empty">
+        <Headphones size={30} />
+        <strong>Nenhum chamado recebido</strong>
+        <p>Quando um usuário enviar uma dúvida pela área Suporte, ela aparecerá aqui para resposta.</p>
+      </div>
+    );
+  }
 
   return (
     <div className="table-list">
+      {error && <p className="form-error">{error}</p>}
       {tickets.map((ticket) => (
         <form className="support-admin-row" key={ticket.id} onSubmit={(event) => update(event, ticket.id)}>
-          <div>
+          <div className="support-admin-summary">
             <strong>{ticket.subject}</strong>
-            <span>{ticket.user_email || "Usuário"} · {ticket.message}</span>
+            <span>{ticket.user_email || "Usuário"} · {formatCacheDate(ticket.created_at)}</span>
+            <p>{ticket.message}</p>
           </div>
           <select name="status" defaultValue={ticket.status}>
             <option value="open">Aberto</option>
@@ -4150,8 +4234,15 @@ function AdminSupport({ tickets, afterSave }: { tickets: Ticket[]; afterSave: ()
             <option value="normal">Normal</option>
             <option value="high">Alta</option>
           </select>
-          <input name="response" defaultValue={ticket.response || ""} placeholder="Resposta" />
-          <button type="submit">Responder</button>
+          <textarea
+            name="response"
+            defaultValue={ticket.response || ""}
+            placeholder="Escreva a resposta para o usuário"
+            maxLength={3000}
+          />
+          <button type="submit" disabled={savingId === ticket.id}>
+            {savingId === ticket.id ? "Salvando..." : "Responder"}
+          </button>
         </form>
       ))}
     </div>
@@ -4843,7 +4934,7 @@ function AdminSettingsSimple({ settings, afterSave }: { settings: SettingsMap; a
           </div>
           <div>
             <span>Atualização dos anúncios</span>
-            <strong>A cada {settings.market_item_cache_ttl_days || "3"} dias</strong>
+            <strong>A cada {settings.market_cache_ttl_days || "7"} dias</strong>
           </div>
         </div>
 

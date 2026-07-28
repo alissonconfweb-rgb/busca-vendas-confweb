@@ -286,7 +286,7 @@ function seedDefaults() {
     min_champion_sales: "1000",
     market_cache_ttl_days: "7",
     market_cache_stale_days: "30",
-    market_item_cache_ttl_days: "3",
+    market_item_cache_ttl_days: "7",
     asaas_enabled: "false",
     asaas_environment: "sandbox",
     asaas_endpoint: "https://api-sandbox.asaas.com/v3",

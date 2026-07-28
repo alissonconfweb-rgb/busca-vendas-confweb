@@ -2739,7 +2739,7 @@ button.learn-card span {
 
 .ticket-list article {
   display: grid;
-  gap: 5px;
+  gap: 10px;
 }
 
 .ticket-list span,
@@ -2750,6 +2750,85 @@ button.learn-card span {
   color: var(--muted);
   font-size: 13px;
   font-weight: 700;
+}
+
+.support-ticket-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.support-ticket-status {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  padding: 5px 9px;
+  color: var(--blue-dark) !important;
+  background: #edf5fc;
+  font-size: 11px !important;
+  font-weight: 900 !important;
+}
+
+.support-ticket-status.is-closed {
+  color: var(--success) !important;
+  background: #eaf8f1;
+}
+
+.support-ticket-status.is-waiting {
+  color: #a65300 !important;
+  background: #fff4e6;
+}
+
+.support-ticket-message,
+.support-ticket-response {
+  display: grid;
+  gap: 5px;
+  border-radius: 10px;
+  padding: 11px 12px;
+  background: #f7f9fc;
+}
+
+.support-ticket-response {
+  border: 1px solid #cde7d9;
+  background: #effaf4;
+}
+
+.support-ticket-message small,
+.support-ticket-response small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.support-ticket-message p,
+.support-ticket-response p,
+.support-admin-summary p {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.support-admin-empty {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  border: 1px dashed var(--line);
+  border-radius: 16px;
+  padding: 34px 20px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.72);
+  text-align: center;
+}
+
+.support-admin-empty strong {
+  color: var(--text);
+  font-size: 18px;
+}
+
+.support-admin-empty p {
+  max-width: 560px;
+  margin: 0;
 }
 
 .history-row {
@@ -3889,6 +3968,22 @@ article.finance-row {
 
 .support-admin-row {
   grid-template-columns: minmax(180px, 0.9fr) 140px 140px minmax(180px, 1fr) auto;
+}
+
+.support-admin-summary {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.support-admin-summary p {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.support-admin-row textarea {
+  min-height: 76px;
+  resize: vertical;
 }
 
 @media (max-width: 1380px) {
