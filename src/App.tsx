@@ -331,10 +331,11 @@ const defaultContacts: Contact[] = [
 ];
 
 const searchSteps = [
-  "Abrindo o Mercado Livre",
+  "Buscando anúncios",
   "Filtrando produto exato",
-  "Validando anúncios reais",
-  "Selecionando Top 3",
+  "Conferindo vendas públicas",
+  "Ampliando a varredura",
+  "Montando seu Top 3",
 ];
 
 const clientEstimateProfiles = [
@@ -1651,13 +1652,13 @@ function ResultsPanel({
 function SearchProgress({ query, elapsedMs }: { query: string; elapsedMs: number }) {
   const seconds = Math.floor(elapsedMs / 1000);
   const currentStep = Math.min(searchSteps.length - 1, Math.floor(seconds / 8));
-  const progress = Math.min(92, 12 + seconds * 2.6);
+  const progress = Math.min(94, 10 + seconds * 2.2);
   const statusText =
     seconds < 12
       ? "Conectando com o Mercado Livre e buscando os 3 anúncios campeões."
       : seconds < 28
         ? "Comparando títulos para evitar produto parecido ou medida errada."
-        : "Finalizando o Top 3; no modo provisório essa etapa pode levar um pouco mais.";
+        : "Buscando mais fundo para completar o Top 3 somente com vendas públicas reais.";
 
   return (
     <div className="search-progress" role="status" aria-live="polite">
@@ -4406,8 +4407,8 @@ function AdminSettings({ settings, afterSave }: { settings: SettingsMap; afterSa
     const payload = formJson(form);
     payload.scrapedo_enabled = "true";
     payload.scrapedo_endpoint = "https://api.scrape.do/";
-    payload.scrapedo_search_pages = "2";
-    payload.scrapedo_detail_limit = "9";
+    payload.scrapedo_search_pages = "4";
+    payload.scrapedo_detail_limit = "36";
     payload.zyte_search_enabled = "false";
     payload.zyte_mode = "browser_html";
     payload.zyte_endpoint = "https://api.zyte.com/v1/extract";

@@ -22,6 +22,7 @@ import { syncOxylabsSettingsFromEnv, testOxylabsConnection } from "./oxylabs.mjs
 import { syncProxySettingsFromEnv, testProxyConnection } from "./proxy.mjs";
 import { isZyteConfigured, isZyteSearchEnabled, syncZyteSettingsFromEnv, testZyteConnection } from "./zyte.mjs";
 import {
+  ensureScrapeDoSearchDepth,
   isScrapeDoConfigured,
   normalizeScrapeDoToken,
   scrapeDoUsageSummary,
@@ -73,6 +74,7 @@ syncOxylabsSettingsFromEnv();
 syncProxySettingsFromEnv();
 syncZyteSettingsFromEnv();
 syncScrapeDoSettingsFromEnv();
+ensureScrapeDoSearchDepth();
 syncAsaasSettingsFromEnv();
 migrateMarketSearchCacheKeys();
 pruneInvalidChampionCaches();
@@ -1093,8 +1095,8 @@ async function handleAdmin(req, res, url, currentUser) {
     }
     setSetting("scrapedo_enabled", "true");
     setSetting("scrapedo_endpoint", "https://api.scrape.do/");
-    setSetting("scrapedo_search_pages", "2");
-    setSetting("scrapedo_detail_limit", "9");
+    setSetting("scrapedo_search_pages", "4");
+    setSetting("scrapedo_detail_limit", "36");
     setSetting("scrapedo_timeout_ms", "45000");
     const requestedCacheTtl = Number(body.cacheTtlDays || getSetting("market_cache_ttl_days") || 7);
     const cacheTtlDays = Number.isFinite(requestedCacheTtl)
@@ -1683,8 +1685,8 @@ function safeSettings(user) {
     settings.zyte_api_key = "";
     settings.scrapedo_enabled = settings.scrapedo_enabled || process.env.SCRAPEDO_ENABLED || "true";
     settings.scrapedo_endpoint = settings.scrapedo_endpoint || process.env.SCRAPEDO_ENDPOINT || "https://api.scrape.do/";
-    settings.scrapedo_search_pages = settings.scrapedo_search_pages || process.env.SCRAPEDO_SEARCH_PAGES || "2";
-    settings.scrapedo_detail_limit = settings.scrapedo_detail_limit || process.env.SCRAPEDO_DETAIL_LIMIT || "9";
+    settings.scrapedo_search_pages = settings.scrapedo_search_pages || process.env.SCRAPEDO_SEARCH_PAGES || "4";
+    settings.scrapedo_detail_limit = settings.scrapedo_detail_limit || process.env.SCRAPEDO_DETAIL_LIMIT || "36";
     settings.scrapedo_timeout_ms = settings.scrapedo_timeout_ms || process.env.SCRAPEDO_TIMEOUT_MS || "45000";
     settings.scrapedo_api_token_configured = settings.scrapedo_api_token || process.env.SCRAPEDO_API_TOKEN ? "true" : "";
     settings.scrapedo_connected = isScrapeDoConfigured() && settings.scrapedo_verified === "true" ? "true" : "";

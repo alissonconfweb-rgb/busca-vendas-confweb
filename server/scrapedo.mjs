@@ -10,8 +10,8 @@ import { mercadoLivreHtmlParser as parser } from "./zyte.mjs";
 import { minimumChampionSales } from "./champion-policy.mjs";
 
 const DEFAULT_ENDPOINT = "https://api.scrape.do/";
-const DEFAULT_DETAIL_LIMIT = 24;
-const DEFAULT_SEARCH_PAGES = 2;
+const DEFAULT_DETAIL_LIMIT = 36;
+const DEFAULT_SEARCH_PAGES = 4;
 const activeSearches = new Map();
 const providerQueue = [];
 let activeProviderSearches = 0;
@@ -132,6 +132,31 @@ export function scrapeDoUsageSummary() {
     failures: Number(row?.failures || 0),
     active: activeProviderSearches,
     queued: providerQueue.length,
+  };
+}
+
+export function ensureScrapeDoSearchDepth() {
+  const configuredPages = Number(
+    getSetting("scrapedo_search_pages") || process.env.SCRAPEDO_SEARCH_PAGES || DEFAULT_SEARCH_PAGES,
+  );
+  const configuredDetailLimit = Number(
+    getSetting("scrapedo_detail_limit") || process.env.SCRAPEDO_DETAIL_LIMIT || DEFAULT_DETAIL_LIMIT,
+  );
+  const pages = Number.isFinite(configuredPages)
+    ? Math.max(DEFAULT_SEARCH_PAGES, configuredPages)
+    : DEFAULT_SEARCH_PAGES;
+  const details = Number.isFinite(configuredDetailLimit)
+    ? Math.max(DEFAULT_DETAIL_LIMIT, configuredDetailLimit)
+    : DEFAULT_DETAIL_LIMIT;
+
+  setSetting("scrapedo_search_pages", String(Math.min(4, pages)));
+  setSetting("scrapedo_detail_limit", String(Math.min(48, details)));
+}
+
+export function scrapeDoSearchPolicy() {
+  return {
+    pages: searchPages(),
+    detailLimit: detailLimit(),
   };
 }
 
@@ -527,7 +552,7 @@ function scrapeDoEndpoint() {
 }
 
 function detailLimit() {
-  return Math.min(36, Math.max(3, Number(
+  return Math.min(48, Math.max(12, Number(
     getSetting("scrapedo_detail_limit") || process.env.SCRAPEDO_DETAIL_LIMIT || DEFAULT_DETAIL_LIMIT,
   )));
 }
