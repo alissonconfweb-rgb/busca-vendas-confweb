@@ -103,6 +103,8 @@ type SearchResult = {
   source: string;
   metricsMode?: "sales" | "market_signal";
   salesAvailable?: boolean;
+  opportunityMode?: "emerging";
+  marketThreshold?: number;
   message: string;
   items: MarketplaceItem[];
   exactMatches?: number;
@@ -1443,13 +1445,15 @@ function SearchPage({
   );
 }
 
-function whatsappHref(contacts: Contact[], query: string, salesPotential: number) {
+function whatsappHref(contacts: Contact[], query: string, salesPotential: number, emergingMode = false) {
   const contact = contacts.find((item) => /whats/i.test(item.channel)) || contacts[0];
   const digits = (contact?.value || "").replace(/\D/g, "");
   const phone = digits.startsWith("55") ? digits : digits ? `55${digits}` : "5511999999999";
   const message = [
     `Olá, Confweb! Pesquisei "${query}" no Busca Vendas.`,
-    `Vi potencial de ${money.format(salesPotential)} nos 3 anúncios campeões.`,
+    emergingMode
+      ? `Encontrei um mercado ainda pouco explorado, com ${money.format(salesPotential)} movimentados pelos 3 líderes analisados.`
+      : `Vi potencial de ${money.format(salesPotential)} nos 3 anúncios campeões.`,
     "Quero ajuda para vender nos marketplaces.",
   ].join(" ");
 
@@ -1513,8 +1517,10 @@ function ResultsPanel({
   const cacheModeResult = result?.source === "confweb_cache";
   const marketplaceModeResult = result?.source === "mercado_livre";
   const estimateMode = result?.source === "market_estimate";
+  const emergingMode = result?.opportunityMode === "emerging";
+  const marketThreshold = result?.marketThreshold || 1000;
   const salesPotential = result?.totals.revenue || 0;
-  const commercialHref = whatsappHref(contacts, query, salesPotential);
+  const commercialHref = whatsappHref(contacts, query, salesPotential, emergingMode);
   const sourceText = estimateMode
     ? "Fonte: raio-x estratégico Confweb - sem API"
     : result
@@ -1564,7 +1570,7 @@ function ResultsPanel({
     <section className="market-panel">
       <div className="panel-head">
         <div>
-          <h2>{estimateMode ? "Raio-x de oportunidade" : "Top 3 anúncios campeões"}</h2>
+          <h2>{estimateMode ? "Raio-x de oportunidade" : emergingMode ? "3 líderes deste mercado" : "Top 3 anúncios campeões"}</h2>
           <p>{sourceText}</p>
         </div>
         <a href={marketUrl} target="_blank" rel="noreferrer">
@@ -1618,16 +1624,22 @@ function ResultsPanel({
               <ProductMarginCard item={item} locked={!canSeeMargin} onPlans={onPlans} />
             </article>
           ))}
-          <div className="market-cta">
+          <div className={`market-cta ${emergingMode ? "emerging-market-cta" : ""}`}>
             <div>
               <strong>
-                Seu produto tem potencial{estimateMode ? " estimado" : ""}: {canSeeMargin ? money.format(salesPotential) : maskCurrency(salesPotential)} em vendas.
+                {emergingMode
+                  ? "Você encontrou um mercado com espaço para se destacar."
+                  : <>Seu produto tem potencial{estimateMode ? " estimado" : ""}: {canSeeMargin ? money.format(salesPotential) : maskCurrency(salesPotential)} em vendas.</>}
               </strong>
               <p>
                 {!canSeeMargin
-                  ? "Você já viu que existem compradores. Libere o faturamento completo e descubra quanto pode ganhar por venda."
+                  ? emergingMode
+                    ? `Existem compradores, mas nenhum líder analisado passou de ${number.format(marketThreshold)} vendas. Revele os números e teste seu preço antes de investir.`
+                    : "Você já viu que existem compradores. Libere o faturamento completo e descubra quanto pode ganhar por venda."
                   : estimateMode
                     ? "Use este raio-x como triagem inicial. Quando a leitura real responder, exibimos os anúncios e vendas públicas."
+                    : emergingMode
+                      ? `Na amostra analisada, nenhum anúncio passou de ${number.format(marketThreshold)} vendas. Uma oferta melhor posicionada pode conquistar espaço, mas valide preço e divulgação antes de investir.`
                     : "Bora pegar uma fatia desse mercado? Venda nos maiores marketplaces do Brasil com a Confweb."}
               </p>
             </div>
@@ -2066,21 +2078,27 @@ function DemandCard({
 }) {
   const championCount = result?.items?.length || 0;
   const estimateMode = result?.source === "market_estimate";
+  const emergingMode = result?.opportunityMode === "emerging";
+  const marketThreshold = result?.marketThreshold || 1000;
   const totalRevenue = result?.totals.revenue || 0;
 
   return (
-    <section className={`demand-card opportunity-card ${locked ? "opportunity-locked" : ""}`}>
+    <section className={`demand-card opportunity-card ${emergingMode ? "emerging-opportunity" : ""} ${locked ? "opportunity-locked" : ""}`}>
       <div className="opportunity-heading">
         <span className="opportunity-icon"><TrendingUp size={27} /></span>
         <div>
-          <span className="opportunity-kicker">O mercado já está acontecendo</span>
-          <h2>Olha o tamanho dessa oportunidade</h2>
-          <p>Somando apenas os 3 anúncios campeões encontrados.</p>
+          <span className="opportunity-kicker">{emergingMode ? "Mercado ainda pouco explorado" : "O mercado já está acontecendo"}</span>
+          <h2>{emergingMode ? "Há espaço para construir uma posição forte" : "Olha o tamanho dessa oportunidade"}</h2>
+          <p>
+            {emergingMode
+              ? `Entre os anúncios reais analisados, nenhum passou de ${number.format(marketThreshold)} vendas. Isso pode indicar uma categoria menos consolidada e espaço para uma oferta bem posicionada.`
+              : "Somando apenas os 3 anúncios campeões encontrados."}
+          </p>
         </div>
       </div>
       <dl className="opportunity-metrics">
         <div className="opportunity-metric sales">
-          <dt>{estimateMode ? "Vendas projetadas" : "Vendas dos campeões"}</dt>
+          <dt>{estimateMode ? "Vendas projetadas" : emergingMode ? "Vendas dos líderes" : "Vendas dos campeões"}</dt>
           <dd>{number.format(result?.totals.demand || 0)}</dd>
           <small>pessoas já compraram</small>
         </div>
@@ -2095,9 +2113,9 @@ function DemandCard({
           <small>referência para sua oferta</small>
         </div>
         <div className="opportunity-metric champions">
-          <dt>{estimateMode ? "Cenários analisados" : "Anúncios campeões"}</dt>
+          <dt>{estimateMode ? "Cenários analisados" : emergingMode ? "Líderes analisados" : "Anúncios campeões"}</dt>
           <dd>{number.format(championCount)}</dd>
-          <small>com vendas comprovadas</small>
+          <small>{emergingMode ? "com vendas públicas reais" : "com vendas comprovadas"}</small>
         </div>
       </dl>
       {locked && (

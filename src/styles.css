@@ -1616,6 +1616,29 @@ textarea:focus {
   background: linear-gradient(180deg, var(--orange), #f4bd27);
 }
 
+.opportunity-card.emerging-opportunity {
+  border-color: rgba(22, 118, 79, 0.3);
+  background: #f7fcf9;
+}
+
+.opportunity-card.emerging-opportunity::before {
+  background: #16764f;
+}
+
+.emerging-opportunity .opportunity-icon {
+  background: #16764f;
+  box-shadow: 0 12px 24px rgba(22, 118, 79, 0.18);
+}
+
+.emerging-opportunity .opportunity-kicker {
+  color: #12603f;
+}
+
+.market-cta.emerging-market-cta {
+  border-color: rgba(22, 118, 79, 0.25);
+  background: #f3faf6;
+}
+
 .opportunity-heading {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);

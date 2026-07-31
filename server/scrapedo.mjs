@@ -253,55 +253,63 @@ async function executeMercadoLivreScrapeDo(query) {
   const currentChampionCount = enriched.filter((item) => (
     item.price > 0 && item.soldQuantity >= minimumChampionSales()
   )).length;
-  const cachedChampions = currentChampionCount >= 3 ? [] : getCachedChampionItems(querySpec);
-  itemCacheHits += cachedChampions.length;
-  const enrichedPool = dedupe([...enriched, ...cachedChampions]);
+  const cachedVerifiedItems = currentChampionCount >= 3 ? [] : getCachedVerifiedItems(querySpec);
+  itemCacheHits += cachedVerifiedItems.length;
+  const enrichedPool = dedupe([...enriched, ...cachedVerifiedItems]);
 
-  const completeItems = enrichedPool
+  const verifiedSalesItems = enrichedPool
     .filter((item) => (
       item.title
       && item.price > 0
-      && item.soldQuantity >= minimumChampionSales()
+      && item.soldQuantity > 0
       && matchesProductQuery(item.title, querySpec).ok
     ))
-    .sort((a, b) => parser.championScore(a) - parser.championScore(b))
+    .sort((a, b) => (
+      Number(b.soldQuantity) - Number(a.soldQuantity)
+      || parser.championScore(a) - parser.championScore(b)
+    ));
+
+  const championItems = verifiedSalesItems
+    .filter((item) => item.soldQuantity >= minimumChampionSales())
     .slice(0, 3)
     .map(mapItem);
 
-  if (completeItems.length < 3) {
-    return {
-      ...emptyResult(
-        "scrapedo_incomplete_sales",
-        `A Scrape.do encontrou ${completeItems.length} anúncio(s) exato(s) com vendas públicas para "${query}".`,
-      ),
-      exactMatches: completeItems.length,
+  if (championItems.length >= 3) {
+    return buildSalesResult(championItems, {
+      message: "Dados públicos reais do Mercado Livre coletados pela Scrape.do.",
+      exactMatches: championItems.length,
       totalAvailable: totalAvailable || uniqueCandidates.length,
       providerCreditsUsed: creditsUsed,
       itemCacheHits,
-    };
+    });
   }
 
-  const demand = completeItems.reduce((sum, item) => sum + item.soldQuantity, 0);
-  const revenue = completeItems.reduce((sum, item) => sum + item.revenue, 0);
+  const emergingItems = verifiedSalesItems
+    .filter((item) => item.soldQuantity < minimumChampionSales())
+    .slice(0, 3)
+    .map(mapItem);
+
+  if (championItems.length === 0 && emergingItems.length >= 3 && !lastPageError) {
+    return buildSalesResult(emergingItems, {
+      message: `Na amostra analisada, nenhum anúncio passou de ${minimumChampionSales().toLocaleString("pt-BR")} vendas públicas.`,
+      exactMatches: emergingItems.length,
+      totalAvailable: totalAvailable || uniqueCandidates.length,
+      providerCreditsUsed: creditsUsed,
+      itemCacheHits,
+      opportunityMode: "emerging",
+      marketThreshold: minimumChampionSales(),
+    });
+  }
+
   return {
-    ok: true,
-    source: "scrapedo_mercado_livre",
-    strictRealOnly: true,
-    metricsMode: "sales",
-    salesAvailable: true,
-    message: "Dados públicos reais do Mercado Livre coletados pela Scrape.do.",
-    items: completeItems,
-    exactMatches: completeItems.length,
+    ...emptyResult(
+      "scrapedo_incomplete_sales",
+      `A Scrape.do encontrou ${championItems.length} anúncio(s) exato(s) com pelo menos ${minimumChampionSales().toLocaleString("pt-BR")} vendas públicas para "${query}".`,
+    ),
+    exactMatches: championItems.length,
     totalAvailable: totalAvailable || uniqueCandidates.length,
     providerCreditsUsed: creditsUsed,
     itemCacheHits,
-    totals: {
-      demand,
-      revenue,
-      averageTicket: demand ? revenue / demand : 0,
-      actualDemand: demand,
-      isEstimated: false,
-    },
   };
 }
 
@@ -406,7 +414,7 @@ function getCachedMarketItem(candidate, querySpec) {
   return null;
 }
 
-function getCachedChampionItems(querySpec) {
+function getCachedVerifiedItems(querySpec) {
   const rows = db.prepare(`
     SELECT payload, updated_at
     FROM market_item_cache
@@ -427,7 +435,7 @@ function getCachedChampionItems(querySpec) {
       if (
         item.title
         && Number(item.price) > 0
-        && Number(item.soldQuantity) >= minimumChampionSales()
+        && Number(item.soldQuantity) > 0
         && matchesProductQuery(item.title, querySpec).ok
       ) {
         items.push(item);
@@ -438,6 +446,33 @@ function getCachedChampionItems(querySpec) {
   }
 
   return dedupe(items);
+}
+
+function buildSalesResult(items, metadata = {}) {
+  const demand = items.reduce((sum, item) => sum + Number(item.soldQuantity || 0), 0);
+  const revenue = items.reduce((sum, item) => sum + Number(item.revenue || 0), 0);
+  return {
+    ok: true,
+    source: "scrapedo_mercado_livre",
+    strictRealOnly: true,
+    metricsMode: "sales",
+    salesAvailable: true,
+    message: metadata.message || "Dados públicos reais do Mercado Livre coletados pela Scrape.do.",
+    items,
+    exactMatches: metadata.exactMatches ?? items.length,
+    totalAvailable: metadata.totalAvailable ?? items.length,
+    providerCreditsUsed: Number(metadata.providerCreditsUsed || 0),
+    itemCacheHits: Number(metadata.itemCacheHits || 0),
+    ...(metadata.opportunityMode ? { opportunityMode: metadata.opportunityMode } : {}),
+    ...(metadata.marketThreshold ? { marketThreshold: metadata.marketThreshold } : {}),
+    totals: {
+      demand,
+      revenue,
+      averageTicket: demand ? revenue / demand : 0,
+      actualDemand: demand,
+      isEstimated: false,
+    },
+  };
 }
 
 function saveMarketItemCache(candidate, item) {

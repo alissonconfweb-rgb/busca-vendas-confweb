@@ -1,0 +1,41 @@
+import { isChampionItem, minimumChampionSales } from "./champion-policy.mjs";
+
+export function isVerifiedSalesItem(item) {
+  return Boolean(
+    item
+    && Number(item.price) > 0
+    && Number(item.soldQuantity) > 0
+    && Number(item.revenue) > 0
+  );
+}
+
+export function isCompleteChampionResult(result) {
+  return hasCompleteResultShape(result)
+    && result.items.slice(0, 3).every(isChampionItem);
+}
+
+export function isCompleteEmergingOpportunityResult(result) {
+  return Boolean(
+    hasCompleteResultShape(result)
+    && result.opportunityMode === "emerging"
+    && result.items.slice(0, 3).every((item) => (
+      isVerifiedSalesItem(item)
+      && Number(item.soldQuantity) < minimumChampionSales()
+    ))
+  );
+}
+
+export function isCompleteRealSalesResult(result) {
+  return isCompleteChampionResult(result) || isCompleteEmergingOpportunityResult(result);
+}
+
+function hasCompleteResultShape(result) {
+  return Boolean(
+    result?.ok
+    && result?.salesAvailable === true
+    && Array.isArray(result?.items)
+    && result.items.length >= 3
+    && Number(result?.totals?.demand) > 0
+    && Number(result?.totals?.revenue) > 0
+  );
+}

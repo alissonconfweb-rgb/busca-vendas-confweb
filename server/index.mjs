@@ -44,7 +44,8 @@ import {
 import { lookupBrazilianPostalCode } from "./postal-code.mjs";
 import { hashPassword, hashToken, randomToken, verifyPassword } from "./security.mjs";
 import { applyRateLimit, MemoryRateLimiter } from "./rate-limit.mjs";
-import { isChampionItem, minimumChampionSales } from "./champion-policy.mjs";
+import { minimumChampionSales } from "./champion-policy.mjs";
+import { isCompleteRealSalesResult } from "./search-result-policy.mjs";
 
 initDatabase();
 
@@ -359,7 +360,7 @@ async function route(req, res) {
     return json(res, 200, rows
       .map((row) => {
         const result = parseSearchPayload(row.payload);
-        if (!isCompleteChampionResult(result)) {
+        if (!isCompleteRealSalesResult(result)) {
           return null;
         }
 
@@ -389,8 +390,8 @@ async function route(req, res) {
     }
 
     const result = parseSearchPayload(record.payload);
-    if (!isCompleteChampionResult(result)) {
-      return json(res, 410, { error: "Essa pesquisa salva é antiga e não atende mais ao mínimo de vendas do Top 3. Faça uma nova busca para atualizar." });
+    if (!isCompleteRealSalesResult(result)) {
+      return json(res, 410, { error: "Essa pesquisa salva é antiga e não contém três anúncios reais completos. Faça uma nova busca para atualizar." });
     }
 
     return json(res, 200, {
@@ -527,7 +528,7 @@ async function handleSearch(req, res, user, query, options = {}) {
     );
   }
   const responseResult = canUseAdmin(user) ? result : publicSearchResult(result);
-  if (isCompleteChampionResult(result)) {
+  if (isCompleteRealSalesResult(result)) {
     db.prepare(`
       INSERT INTO search_history (user_id, query, source, total_demand, total_revenue, payload)
       VALUES (?, ?, ?, ?, ?, ?)
@@ -549,19 +550,7 @@ async function handleSearch(req, res, user, query, options = {}) {
 }
 
 function isBillableSearchResult(result) {
-  return isCompleteChampionResult(result);
-}
-
-function isCompleteChampionResult(result) {
-  const items = result?.items || [];
-  return Boolean(
-    result?.ok &&
-    result?.salesAvailable === true &&
-    items.length >= 3 &&
-    items.slice(0, 3).every(isChampionItem) &&
-    Number(result?.totals?.demand) > 0 &&
-    Number(result?.totals?.revenue) > 0,
-  );
+  return isCompleteRealSalesResult(result);
 }
 
 function enforceChampionThreshold(query, result) {
@@ -569,7 +558,7 @@ function enforceChampionThreshold(query, result) {
     return result;
   }
 
-  if (!result.ok || isCompleteChampionResult(result)) {
+  if (!result.ok || isCompleteRealSalesResult(result)) {
     return result;
   }
 
@@ -835,12 +824,12 @@ function pruneInvalidChampionCaches() {
   const removeHistory = db.prepare("DELETE FROM search_history WHERE id = ?");
   const prune = db.transaction(() => {
     for (const row of db.prepare("SELECT key, payload FROM market_search_cache").all()) {
-      if (!isCompleteChampionResult(parseSearchPayload(row.payload))) {
+      if (!isCompleteRealSalesResult(parseSearchPayload(row.payload))) {
         removeCache.run(row.key);
       }
     }
     for (const row of db.prepare("SELECT id, payload FROM search_history").all()) {
-      if (!isCompleteChampionResult(parseSearchPayload(row.payload))) {
+      if (!isCompleteRealSalesResult(parseSearchPayload(row.payload))) {
         removeHistory.run(row.id);
       }
     }
