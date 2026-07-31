@@ -248,7 +248,14 @@ async function executeMercadoLivreScrapeDo(query) {
     }
   }
 
-  const completeItems = enriched
+  const currentChampionCount = enriched.filter((item) => (
+    item.price > 0 && item.soldQuantity >= minimumChampionSales()
+  )).length;
+  const cachedChampions = currentChampionCount >= 3 ? [] : getCachedChampionItems(querySpec);
+  itemCacheHits += cachedChampions.length;
+  const enrichedPool = dedupe([...enriched, ...cachedChampions]);
+
+  const completeItems = enrichedPool
     .filter((item) => (
       item.title
       && item.price > 0
@@ -395,6 +402,40 @@ function getCachedMarketItem(candidate, querySpec) {
     return null;
   }
   return null;
+}
+
+function getCachedChampionItems(querySpec) {
+  const rows = db.prepare(`
+    SELECT payload, updated_at
+    FROM market_item_cache
+    ORDER BY updated_at DESC
+    LIMIT 500
+  `).all();
+  const ttlMs = marketItemCacheTtlMs();
+  const now = Date.now();
+  const items = [];
+
+  for (const row of rows) {
+    const updatedAt = Date.parse(`${String(row.updated_at).replace(" ", "T")}Z`);
+    if (!Number.isFinite(updatedAt) || now - updatedAt > ttlMs) {
+      continue;
+    }
+    try {
+      const item = JSON.parse(row.payload || "{}");
+      if (
+        item.title
+        && Number(item.price) > 0
+        && Number(item.soldQuantity) >= minimumChampionSales()
+        && matchesProductQuery(item.title, querySpec).ok
+      ) {
+        items.push(item);
+      }
+    } catch {
+      // An invalid cache entry must not prevent a real search.
+    }
+  }
+
+  return dedupe(items);
 }
 
 function saveMarketItemCache(candidate, item) {
