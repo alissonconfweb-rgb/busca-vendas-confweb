@@ -172,26 +172,37 @@ async function executeMercadoLivreScrapeDo(query) {
   let cookies = "";
   let creditsUsed = 0;
   let itemCacheHits = 0;
+  let lastPageError = null;
 
   for (let page = 1; page <= searchPages(); page += 1) {
-    let pageResponse = await requestPage(parser.searchUrlFor(query, page), {
-      sessionId,
-      cookies,
-      render: false,
-    });
+    let pageResponse;
+    try {
+      pageResponse = await requestPage(parser.searchUrlFor(query, page), {
+        sessionId,
+        cookies,
+        render: false,
+      });
+    } catch (error) {
+      lastPageError = error;
+      continue;
+    }
     cookies = pageResponse.cookies || cookies;
     creditsUsed += pageResponse.cost;
     let pageItems = parser.extractSearchItems(pageResponse.html);
 
     if (!pageItems.length) {
-      pageResponse = await requestPage(parser.searchUrlFor(query, page), {
-        sessionId,
-        cookies,
-        render: true,
-      });
-      cookies = pageResponse.cookies || cookies;
-      creditsUsed += pageResponse.cost;
-      pageItems = parser.extractSearchItems(pageResponse.html);
+      try {
+        pageResponse = await requestPage(parser.searchUrlFor(query, page), {
+          sessionId,
+          cookies,
+          render: true,
+        });
+        cookies = pageResponse.cookies || cookies;
+        creditsUsed += pageResponse.cost;
+        pageItems = parser.extractSearchItems(pageResponse.html);
+      } catch (error) {
+        lastPageError = error;
+      }
     }
 
     totalAvailable = totalAvailable || parser.parseTotalAvailable(pageResponse.html);
@@ -214,6 +225,9 @@ async function executeMercadoLivreScrapeDo(query) {
   }
 
   const uniqueCandidates = dedupe(candidates).slice(0, detailLimit());
+  if (!uniqueCandidates.length && lastPageError) {
+    throw lastPageError;
+  }
   const enriched = [];
   for (let offset = 0; offset < uniqueCandidates.length; offset += 3) {
     const batch = await mapWithConcurrency(uniqueCandidates.slice(offset, offset + 3), 3, async (candidate) => (
@@ -439,12 +453,7 @@ async function requestPage(targetUrl, options = {}) {
   }
 
   const requestUrl = `${scrapeDoEndpoint()}?${params.toString()}`;
-  let response = await fetchScrapeDoPage(requestUrl);
-  if ([502, 503, 504].includes(response.status)) {
-    await response.body?.cancel();
-    await delay(700 + randomInt(100, 500));
-    response = await fetchScrapeDoPage(requestUrl);
-  }
+  const response = await fetchScrapeDoPageWithRetry(requestUrl);
   const html = await response.text();
   if (!response.ok) {
     throw new Error(describeError(response.status, html));
@@ -455,6 +464,38 @@ async function requestPage(targetUrl, options = {}) {
     resolvedUrl: response.headers.get("scrape.do-resolved-url") || targetUrl,
     cost: Number(response.headers.get("scrape.do-request-cost") || 0),
   };
+}
+
+async function fetchScrapeDoPageWithRetry(url) {
+  let lastError;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const response = await fetchScrapeDoPage(url);
+      if (![502, 503, 504].includes(response.status) || attempt === 1) {
+        return response;
+      }
+      await response.body?.cancel();
+    } catch (error) {
+      lastError = error;
+      if (!isTransientFetchError(error) || attempt === 1) {
+        throw error;
+      }
+    }
+    await delay(700 + randomInt(100, 500));
+  }
+  throw lastError || new Error("A fonte de dados não respondeu.");
+}
+
+function isTransientFetchError(error) {
+  const name = String(error?.name || "").toLowerCase();
+  const message = String(error?.message || error || "").toLowerCase();
+  return (
+    name === "aborterror"
+    || name === "timeouterror"
+    || message.includes("timeout")
+    || message.includes("fetch failed")
+    || message.includes("socket")
+  );
 }
 
 function fetchScrapeDoPage(url) {
