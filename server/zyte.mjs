@@ -613,15 +613,24 @@ function parseTotalAvailable(text) {
 }
 
 function productDetailUrls(item) {
-  const urls = [item.href];
+  const href = String(item?.href || "");
+  const itemId = extractItemId(href);
+  const productId = extractProductId(href);
+  const fallbackId = /^MLB\d+$/i.test(String(item?.id || "")) ? String(item.id) : "";
+  const itemPageUrl = mercadoLivreItemPageUrl(itemId || productId || fallbackId);
   const cleanHref = cleanMercadoLivreProductUrl(item.href);
-  if (cleanHref) {
-    urls.push(cleanHref);
-  }
-  const itemPageUrl = mercadoLivreItemPageUrl(extractItemId(item.href) || item.id);
+  const urls = [];
+
   if (itemPageUrl) {
     urls.push(itemPageUrl);
   }
+
+  // Catalog and tracking links have repeatedly returned charged 404 responses
+  // through providers. Use them only when no canonical item URL can be built.
+  if (cleanHref && (!itemPageUrl || /(^|\.)produto\.mercadolivre\.com\.br$/i.test(new URL(cleanHref).hostname))) {
+    urls.push(cleanHref);
+  }
+
   return [...new Set(urls.filter(Boolean))];
 }
 
