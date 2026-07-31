@@ -73,10 +73,12 @@ export async function testScrapeDoConnection() {
   if (data.IsActive === false || data.active === false) {
     throw new Error("A conta Scrape.do está inativa. Verifique o plano no painel da Scrape.do.");
   }
+  const rawRemainingCredits = data.RemainingMonthlyRequest ?? data.remainingCredits;
   return {
     ok: true,
     active: true,
-    remainingCredits: Number(data.RemainingMonthlyRequest ?? data.remainingCredits ?? 0),
+    available: rawRemainingCredits === undefined || Number(rawRemainingCredits) > 0,
+    remainingCredits: rawRemainingCredits === undefined ? null : Number(rawRemainingCredits),
     concurrency: Number(data.ConcurrentRequest ?? data.concurrency ?? 0),
   };
 }
@@ -602,8 +604,11 @@ async function mapWithConcurrency(values, concurrency, worker) {
 function describeError(status, body) {
   const data = parseJson(body);
   const detail = data?.Error || data?.error || data?.message || String(body || "").slice(0, 180);
-  if (status === 401 || status === 403) {
+  if (status === 401) {
     return "Scrape.do recusou o token. Copie o token do painel e salve novamente.";
+  }
+  if (status === 402 || status === 403) {
+    return "A conta Scrape.do está sem créditos disponíveis. As pesquisas salvas continuam funcionando, mas produtos novos exigem créditos na API.";
   }
   if (status === 429) {
     return "Scrape.do atingiu o limite de créditos ou concorrência do plano.";

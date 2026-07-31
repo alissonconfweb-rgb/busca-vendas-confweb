@@ -1070,9 +1070,13 @@ async function handleAdmin(req, res, url, currentUser) {
   if (path === "scrapedo/test" && method === "POST") {
     try {
       const result = await testScrapeDoConnection();
-      setSetting("scrapedo_last_error", "");
+      rememberScrapeDoAccountStatus(result);
+      const message = result.available === false
+        ? "Token válido, mas a conta Scrape.do está sem créditos. Contrate ou renove o plano para liberar pesquisas de produtos novos."
+        : "Scrape.do conectada com sucesso.";
+      setSetting("scrapedo_last_error", result.available === false ? message : "");
       setSetting("scrapedo_verified", "true");
-      return json(res, 200, { ...result, message: "Scrape.do conectada com sucesso." });
+      return json(res, 200, { ...result, message });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Falha ao testar Scrape.do.";
       setSetting("scrapedo_last_error", message);
@@ -1112,13 +1116,17 @@ async function handleAdmin(req, res, url, currentUser) {
 
     try {
       const result = await testScrapeDoConnection();
-      setSetting("scrapedo_last_error", "");
+      rememberScrapeDoAccountStatus(result);
+      const message = result.available === false
+        ? "Token salvo, mas a conta Scrape.do está sem créditos. Contrate ou renove o plano para liberar pesquisas de produtos novos."
+        : "Token salvo e Scrape.do validada com sucesso.";
+      setSetting("scrapedo_last_error", result.available === false ? message : "");
       setSetting("scrapedo_verified", "true");
       return json(res, 200, {
         ...result,
         saved: true,
         configured: true,
-        message: "Token salvo e Scrape.do validada com sucesso.",
+        message,
       });
     } catch (error) {
       const detail = error instanceof Error ? error.message : "Falha ao validar Scrape.do.";
@@ -1655,6 +1663,14 @@ async function handleAdmin(req, res, url, currentUser) {
   return json(res, 404, { error: "Rota admin não encontrada." });
 }
 
+function rememberScrapeDoAccountStatus(result) {
+  const remainingCredits = result?.remainingCredits;
+  if (remainingCredits !== null && remainingCredits !== undefined && Number.isFinite(Number(remainingCredits))) {
+    setSetting("scrapedo_provider_remaining_credits", String(Math.max(0, Number(remainingCredits))));
+  }
+  setSetting("scrapedo_provider_checked_at", new Date().toISOString());
+}
+
 function safeSettings(user) {
   const settings = settingsObject();
   if (!canUseAdmin(user)) {
@@ -1690,6 +1706,10 @@ function safeSettings(user) {
     settings.scrapedo_timeout_ms = settings.scrapedo_timeout_ms || process.env.SCRAPEDO_TIMEOUT_MS || "45000";
     settings.scrapedo_api_token_configured = settings.scrapedo_api_token || process.env.SCRAPEDO_API_TOKEN ? "true" : "";
     settings.scrapedo_connected = isScrapeDoConfigured() && settings.scrapedo_verified === "true" ? "true" : "";
+    settings.scrapedo_available = settings.scrapedo_connected
+      && settings.scrapedo_provider_remaining_credits !== "0"
+      ? "true"
+      : "";
     settings.scrapedo_api_token = "";
     settings.proxy_enabled = settings.proxy_enabled || process.env.PROXY_ENABLED || "false";
     settings.proxy_url = settings.proxy_url || process.env.PROXY_URL || "";

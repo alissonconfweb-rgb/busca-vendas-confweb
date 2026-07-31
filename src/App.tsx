@@ -4471,7 +4471,12 @@ function AdminSettings({ settings, afterSave }: { settings: SettingsMap; afterSa
     setConnectError("");
     setBusy(true);
     try {
-      const data = await api<{ message?: string; remainingCredits?: number }>("/api/admin/scrapedo/test", { method: "POST" });
+      const data = await api<{ available?: boolean; message?: string; remainingCredits?: number | null }>("/api/admin/scrapedo/test", { method: "POST" });
+      if (data.available === false) {
+        setConnectError(data.message || "A conta Scrape.do está sem créditos.");
+        afterSave(data.message || "A conta Scrape.do está sem créditos.");
+        return;
+      }
       const credits = Number(data.remainingCredits || 0);
       afterSave(credits > 0 ? `Scrape.do conectada. ${number.format(credits)} créditos disponíveis.` : data.message || "Scrape.do conectada com sucesso.");
     } catch (error) {
@@ -4954,10 +4959,11 @@ function AdminSettingsSimple({ settings, afterSave }: { settings: SettingsMap; a
     setBusy("scrapedo-save");
     try {
       const data = await api<{
+        available?: boolean;
         ok?: boolean;
         error?: string;
         message?: string;
-        remainingCredits?: number;
+        remainingCredits?: number | null;
       }>("/api/admin/scrapedo/configure", {
         method: "POST",
         body: JSON.stringify({
@@ -4969,6 +4975,11 @@ function AdminSettingsSimple({ settings, afterSave }: { settings: SettingsMap; a
       if (data.ok === false) {
         setScrapeDoError(data.error || "O token foi salvo, mas a API não respondeu corretamente.");
         afterSave("Token da Scrape.do salvo. O teste de conexão precisa ser revisado.");
+        return;
+      }
+      if (data.available === false) {
+        setScrapeDoError(data.message || "Token válido, mas a conta Scrape.do está sem créditos.");
+        afterSave(data.message || "Token válido, mas a conta Scrape.do está sem créditos.");
         return;
       }
       const credits = Number(data.remainingCredits || 0);
@@ -4988,7 +4999,12 @@ function AdminSettingsSimple({ settings, afterSave }: { settings: SettingsMap; a
     setScrapeDoError("");
     setBusy("scrapedo-test");
     try {
-      const data = await api<{ message?: string; remainingCredits?: number }>("/api/admin/scrapedo/test", { method: "POST" });
+      const data = await api<{ available?: boolean; message?: string; remainingCredits?: number | null }>("/api/admin/scrapedo/test", { method: "POST" });
+      if (data.available === false) {
+        setScrapeDoError(data.message || "A conta Scrape.do está sem créditos.");
+        afterSave(data.message || "A conta Scrape.do está sem créditos.");
+        return;
+      }
       const credits = Number(data.remainingCredits || 0);
       afterSave(
         credits > 0
@@ -5016,6 +5032,15 @@ function AdminSettingsSimple({ settings, afterSave }: { settings: SettingsMap; a
           <div className="credential-status">
             <b>Token: {settings.scrapedo_api_token_configured ? "salvo" : "pendente"}</b>
             <b>Conexão: {settings.scrapedo_connected ? "validada" : "não validada"}</b>
+            <b>
+              Créditos da API: {
+                settings.scrapedo_provider_remaining_credits === "0"
+                  ? "esgotados"
+                  : settings.scrapedo_provider_remaining_credits
+                    ? number.format(Number(settings.scrapedo_provider_remaining_credits))
+                    : "teste pendente"
+              }
+            </b>
           </div>
         </div>
 
@@ -5057,11 +5082,19 @@ function AdminSettingsSimple({ settings, afterSave }: { settings: SettingsMap; a
             <strong>A cada {settings.market_cache_ttl_days || "7"} dias</strong>
           </div>
           <div>
-            <span>Créditos usados no mês</span>
+            <span>Créditos registrados no mês</span>
             <strong>
               {number.format(Number(settings.scrapedo_monthly_credits_used || 0))}
               {" / "}
               {number.format(Number(settings.scrapedo_monthly_credit_budget || 0))}
+            </strong>
+          </div>
+          <div>
+            <span>Saldo atual na Scrape.do</span>
+            <strong>
+              {settings.scrapedo_provider_remaining_credits
+                ? number.format(Number(settings.scrapedo_provider_remaining_credits))
+                : "Teste a conexão"}
             </strong>
           </div>
           <div>
