@@ -56,8 +56,11 @@ const COOKIE = "bv_session";
 const CREATOR_EMAIL = (process.env.CREATOR_EMAIL || process.env.ADMIN_EMAIL || "").trim().toLowerCase();
 const DIST_DIR = resolve(process.cwd(), "dist");
 const MELI_OAUTH_STATE_TTL_MS = 15 * 60 * 1000;
-const SEARCH_RESPONSE_TIMEOUT_MS = Number(process.env.SEARCH_RESPONSE_TIMEOUT_MS || 85_000);
+const SEARCH_RESPONSE_TIMEOUT_MS = Number(process.env.SEARCH_RESPONSE_TIMEOUT_MS || 120_000);
+const MARKET_CACHE_REFRESH_INTERVAL_MS = Number(process.env.MARKET_CACHE_REFRESH_INTERVAL_MS || 6 * 60 * 60_000);
 const marketRefreshFlights = new Map();
+const marketBackgroundRefreshAttempts = new Map();
+let marketCacheRefreshTimer = null;
 const rateLimiter = new MemoryRateLimiter();
 const PUBLIC_SETTING_KEYS = new Set([
   "app_name",
@@ -102,12 +105,13 @@ const server = createServer(async (req, res) => {
     });
   }
 });
-server.requestTimeout = 95_000;
+server.requestTimeout = Math.max(135_000, SEARCH_RESPONSE_TIMEOUT_MS + 15_000);
 server.headersTimeout = 15_000;
 server.keepAliveTimeout = 5_000;
 
 server.listen(PORT, HOST, () => {
   console.log(`Busca Vendas rodando em http://${HOST}:${PORT}`);
+  startMarketCacheRefreshWorker();
 });
 
 let shuttingDown = false;
@@ -116,6 +120,9 @@ function shutdown(signal) {
     return;
   }
   shuttingDown = true;
+  if (marketCacheRefreshTimer) {
+    clearTimeout(marketCacheRefreshTimer);
+  }
   console.log(`${signal} recebido. Encerrando o Busca Vendas...`);
   server.close((error) => {
     if (error) {
@@ -389,16 +396,29 @@ async function route(req, res) {
       return json(res, 404, { error: "Pesquisa não encontrada." });
     }
 
-    const result = parseSearchPayload(record.payload);
+    const result = await resolveMarketSearch(record.query);
     if (!isCompleteRealSalesResult(result)) {
       return json(res, 410, { error: "Essa pesquisa salva é antiga e não contém três anúncios reais completos. Faça uma nova busca para atualizar." });
     }
+
+    db.prepare(`
+      UPDATE search_history
+      SET source = ?, total_demand = ?, total_revenue = ?, payload = ?
+      WHERE id = ? AND user_id = ?
+    `).run(
+      result.source,
+      result.totals.demand,
+      result.totals.revenue,
+      JSON.stringify(result),
+      record.id,
+      user.id,
+    );
 
     return json(res, 200, {
       id: record.id,
       query: record.query,
       created_at: record.created_at,
-      result,
+      result: canUseAdmin(user) ? result : publicSearchResult(result),
     });
   }
 
@@ -507,20 +527,7 @@ async function handleSearch(req, res, user, query, options = {}) {
     return json(res, 402, { error: "Limite de pesquisas atingido. Faça upgrade para continuar." });
   }
 
-  let result = options.fresh ? null : getFreshCachedSearchResult(cleanQuery);
-  if (!result && !options.fresh) {
-    result = getStaleCachedSearchResult(cleanQuery);
-    if (result) {
-      scheduleMarketSearchRefresh(cleanQuery);
-    }
-  }
-  if (!result) {
-    result = await searchWithResponseGuard(cleanQuery);
-    if (isBillableSearchResult(result)) {
-      saveMarketSearchCache(cleanQuery, result);
-    }
-  }
-  result = enforceChampionThreshold(cleanQuery, result);
+  let result = await resolveMarketSearch(cleanQuery, { fresh: options.fresh });
   if (shouldUseMarketEstimate(result)) {
     result = strictRealSearchUnavailable(
       cleanQuery,
@@ -547,6 +554,28 @@ async function handleSearch(req, res, user, query, options = {}) {
   }
 
   return json(res, 200, responseResult);
+}
+
+async function resolveMarketSearch(query, options = {}) {
+  const cleanQuery = String(query || "").trim();
+  let result = options.fresh ? null : getFreshCachedSearchResult(cleanQuery);
+
+  if (!result && !options.fresh) {
+    const staleResult = getStaleCachedSearchResult(cleanQuery);
+    if (staleResult) {
+      const refreshed = enforceChampionThreshold(cleanQuery, await scheduleMarketSearchRefresh(cleanQuery));
+      result = isBillableSearchResult(refreshed) ? refreshed : staleResult;
+    }
+  }
+
+  if (!result) {
+    result = enforceChampionThreshold(cleanQuery, await searchWithResponseGuard(cleanQuery));
+    if (isBillableSearchResult(result)) {
+      saveMarketSearchCache(cleanQuery, result);
+    }
+  }
+
+  return result;
 }
 
 function isBillableSearchResult(result) {
@@ -889,6 +918,10 @@ async function searchWithResponseGuard(query) {
   const realSearch = searchMercadoLivre(query)
     .then((result) => {
       settled = true;
+      const validated = enforceChampionThreshold(query, result);
+      if (isBillableSearchResult(validated)) {
+        saveMarketSearchCache(query, validated);
+      }
       return result;
     })
     .catch((error) => {
@@ -910,6 +943,72 @@ async function searchWithResponseGuard(query) {
     clearTimeout(timeoutId);
   }
   return result;
+}
+
+function startMarketCacheRefreshWorker() {
+  if (!Number.isFinite(MARKET_CACHE_REFRESH_INTERVAL_MS) || MARKET_CACHE_REFRESH_INTERVAL_MS <= 0) {
+    return;
+  }
+
+  const scheduleNext = (delay) => {
+    marketCacheRefreshTimer = setTimeout(async () => {
+      try {
+        await refreshOneRecentlyUsedMarketCache();
+      } catch (error) {
+        console.error("Falha na atualização automática da base de pesquisas:", error);
+      } finally {
+        if (!shuttingDown) {
+          scheduleNext(MARKET_CACHE_REFRESH_INTERVAL_MS);
+        }
+      }
+    }, delay);
+    marketCacheRefreshTimer.unref();
+  };
+
+  scheduleNext(Math.min(60_000, MARKET_CACHE_REFRESH_INTERVAL_MS));
+}
+
+async function refreshOneRecentlyUsedMarketCache() {
+  const usage = scrapeDoUsageSummary();
+  if (usage.active > 0 || usage.queued > 0 || usage.remaining === 0) {
+    return;
+  }
+
+  const recentQueries = db.prepare(`
+    SELECT query, COUNT(*) AS uses
+    FROM search_history
+    WHERE created_at >= datetime('now', '-30 days')
+    GROUP BY lower(trim(query))
+    ORDER BY uses DESC, MAX(created_at) DESC
+    LIMIT 250
+  `).all();
+  const useByKey = new Map(recentQueries.map((row) => [marketCacheKey(row.query), Number(row.uses || 0)]));
+  const now = Date.now();
+  const retryAfterMs = Math.max(MARKET_CACHE_REFRESH_INTERVAL_MS, 60 * 60_000);
+  const candidate = db.prepare(`
+    SELECT key, query, updated_at
+    FROM market_search_cache
+    ORDER BY updated_at ASC
+    LIMIT 250
+  `).all().find((row) => {
+    const updatedAt = Date.parse(`${String(row.updated_at).replace(" ", "T")}Z`);
+    const lastAttempt = marketBackgroundRefreshAttempts.get(row.key) || 0;
+    return useByKey.has(row.key)
+      && Number.isFinite(updatedAt)
+      && now - updatedAt > marketCacheTtlMs()
+      && now - lastAttempt >= retryAfterMs;
+  });
+
+  if (!candidate) {
+    return;
+  }
+
+  marketBackgroundRefreshAttempts.set(candidate.key, now);
+  const refreshed = enforceChampionThreshold(candidate.query, await scheduleMarketSearchRefresh(candidate.query));
+  if (isBillableSearchResult(refreshed)) {
+    marketBackgroundRefreshAttempts.delete(candidate.key);
+    console.log(`Base interna atualizada automaticamente: "${candidate.query}".`);
+  }
 }
 
 function strictRealSearchUnavailable(query, message) {

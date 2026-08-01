@@ -7,7 +7,7 @@ import { isProxyConfigured, isProxyEnabled, proxyPlaywrightConfig } from "./prox
 import { isScrapeDoEnabled, searchMercadoLivreScrapeDo } from "./scrapedo.mjs";
 import { isZyteConfigured, isZyteSearchEnabled, searchMercadoLivreZyte } from "./zyte.mjs";
 import { buildProductQuerySpec, matchesProductQuery, normalizeProductSearchQuery } from "./product-match.mjs";
-import { isChampionItem } from "./champion-policy.mjs";
+import { isCompleteRealSalesResult } from "./search-result-policy.mjs";
 
 const currencyFormatter = new Intl.NumberFormat("pt-BR", {
   currency: "BRL",
@@ -320,13 +320,7 @@ function sanitizeSearchError(message) {
 }
 
 function hasCompleteSalesTop3(result) {
-  const items = result?.items || [];
-  return Boolean(
-    result?.ok &&
-    result?.salesAvailable !== false &&
-    items.length >= 3 &&
-    items.slice(0, 3).every(isChampionItem),
-  );
+  return isCompleteRealSalesResult(result);
 }
 
 function searchWithToken(siteId, params, accessToken) {

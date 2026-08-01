@@ -103,7 +103,7 @@ type SearchResult = {
   source: string;
   metricsMode?: "sales" | "market_signal";
   salesAvailable?: boolean;
-  opportunityMode?: "emerging";
+  opportunityMode?: "emerging" | "developing";
   marketThreshold?: number;
   message: string;
   items: MarketplaceItem[];
@@ -744,7 +744,7 @@ function ProductApp({ user, onUserChange }: { user: User | null; onUserChange: (
       return;
     }
 
-    const savedResult = record.result ?? (await api<{ result: SearchResult }>(`/api/search-history/${record.id}`)).result;
+    const savedResult = (await api<{ result: SearchResult }>(`/api/search-history/${record.id}`)).result;
     setRestoredSearch({
       id: record.id,
       query: record.query,
@@ -1518,9 +1518,10 @@ function ResultsPanel({
   const marketplaceModeResult = result?.source === "mercado_livre";
   const estimateMode = result?.source === "market_estimate";
   const emergingMode = result?.opportunityMode === "emerging";
+  const developingMode = result?.opportunityMode === "developing";
   const marketThreshold = result?.marketThreshold || 1000;
   const salesPotential = result?.totals.revenue || 0;
-  const commercialHref = whatsappHref(contacts, query, salesPotential, emergingMode);
+  const commercialHref = whatsappHref(contacts, query, salesPotential, emergingMode || developingMode);
   const sourceText = estimateMode
     ? "Fonte: raio-x estratégico Confweb - sem API"
     : result
@@ -1570,7 +1571,7 @@ function ResultsPanel({
     <section className="market-panel">
       <div className="panel-head">
         <div>
-          <h2>{estimateMode ? "Raio-x de oportunidade" : emergingMode ? "3 líderes deste mercado" : "Top 3 anúncios campeões"}</h2>
+          <h2>{estimateMode ? "Raio-x de oportunidade" : emergingMode || developingMode ? "3 líderes deste mercado" : "Top 3 anúncios campeões"}</h2>
           <p>{sourceText}</p>
         </div>
         <a href={marketUrl} target="_blank" rel="noreferrer">
@@ -2079,26 +2080,29 @@ function DemandCard({
   const championCount = result?.items?.length || 0;
   const estimateMode = result?.source === "market_estimate";
   const emergingMode = result?.opportunityMode === "emerging";
+  const developingMode = result?.opportunityMode === "developing";
   const marketThreshold = result?.marketThreshold || 1000;
   const totalRevenue = result?.totals.revenue || 0;
 
   return (
-    <section className={`demand-card opportunity-card ${emergingMode ? "emerging-opportunity" : ""} ${locked ? "opportunity-locked" : ""}`}>
+    <section className={`demand-card opportunity-card ${emergingMode ? "emerging-opportunity" : ""} ${developingMode ? "developing-opportunity" : ""} ${locked ? "opportunity-locked" : ""}`}>
       <div className="opportunity-heading">
         <span className="opportunity-icon"><TrendingUp size={27} /></span>
         <div>
-          <span className="opportunity-kicker">{emergingMode ? "Mercado ainda pouco explorado" : "O mercado já está acontecendo"}</span>
-          <h2>{emergingMode ? "Há espaço para construir uma posição forte" : "Olha o tamanho dessa oportunidade"}</h2>
+          <span className="opportunity-kicker">{emergingMode ? "Mercado ainda pouco explorado" : developingMode ? "Mercado em crescimento" : "O mercado já está acontecendo"}</span>
+          <h2>{emergingMode ? "Há espaço para construir uma posição forte" : developingMode ? "Já existem compradores e espaço para crescer" : "Olha o tamanho dessa oportunidade"}</h2>
           <p>
             {emergingMode
               ? `Entre os anúncios reais analisados, nenhum passou de ${number.format(marketThreshold)} vendas. Isso pode indicar uma categoria menos consolidada e espaço para uma oferta bem posicionada.`
+              : developingMode
+                ? "Encontramos vendas reais em diferentes estágios. Uma oferta bem posicionada pode disputar espaço com quem já vende neste mercado."
               : "Somando apenas os 3 anúncios campeões encontrados."}
           </p>
         </div>
       </div>
       <dl className="opportunity-metrics">
         <div className="opportunity-metric sales">
-          <dt>{estimateMode ? "Vendas projetadas" : emergingMode ? "Vendas dos líderes" : "Vendas dos campeões"}</dt>
+          <dt>{estimateMode ? "Vendas projetadas" : emergingMode || developingMode ? "Vendas dos líderes" : "Vendas dos campeões"}</dt>
           <dd>{number.format(result?.totals.demand || 0)}</dd>
           <small>pessoas já compraram</small>
         </div>
@@ -2113,9 +2117,9 @@ function DemandCard({
           <small>referência para sua oferta</small>
         </div>
         <div className="opportunity-metric champions">
-          <dt>{estimateMode ? "Cenários analisados" : emergingMode ? "Líderes analisados" : "Anúncios campeões"}</dt>
+          <dt>{estimateMode ? "Cenários analisados" : emergingMode || developingMode ? "Líderes analisados" : "Anúncios campeões"}</dt>
           <dd>{number.format(championCount)}</dd>
-          <small>{emergingMode ? "com vendas públicas reais" : "com vendas comprovadas"}</small>
+          <small>{emergingMode || developingMode ? "com vendas públicas reais" : "com vendas comprovadas"}</small>
         </div>
       </dl>
       {locked && (

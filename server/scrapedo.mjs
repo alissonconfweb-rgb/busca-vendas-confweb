@@ -169,6 +169,7 @@ async function executeMercadoLivreScrapeDo(query) {
   }
 
   const querySpec = buildProductQuerySpec(query);
+  const searchQuery = normalizeProductSearchQuery(query);
   const sessionId = createSessionId();
   const candidates = [];
   let totalAvailable = 0;
@@ -180,7 +181,7 @@ async function executeMercadoLivreScrapeDo(query) {
   for (let page = 1; page <= searchPages(); page += 1) {
     let pageResponse;
     try {
-      pageResponse = await requestPage(parser.searchUrlFor(query, page), {
+      pageResponse = await requestPage(parser.searchUrlFor(searchQuery, page), {
         sessionId,
         cookies,
         render: false,
@@ -195,7 +196,7 @@ async function executeMercadoLivreScrapeDo(query) {
 
     if (!pageItems.length) {
       try {
-        pageResponse = await requestPage(parser.searchUrlFor(query, page), {
+        pageResponse = await requestPage(parser.searchUrlFor(searchQuery, page), {
           sessionId,
           cookies,
           render: true,
@@ -253,7 +254,7 @@ async function executeMercadoLivreScrapeDo(query) {
     const inspectedCount = Math.min(offset + 3, uniqueCandidates.length);
     const verifiedCount = enriched.filter((item) => item.price > 0 && item.soldQuantity > 0).length;
     const emergingSampleTarget = Math.min(EMERGING_MARKET_SAMPLE_SIZE, uniqueCandidates.length);
-    if (championCount === 0 && verifiedCount >= 3 && inspectedCount >= emergingSampleTarget) {
+    if (verifiedCount >= 3 && inspectedCount >= emergingSampleTarget) {
       break;
     }
   }
@@ -297,7 +298,7 @@ async function executeMercadoLivreScrapeDo(query) {
     .slice(0, 3)
     .map(mapItem);
 
-  if (championItems.length === 0 && emergingItems.length >= 3 && !lastPageError) {
+  if (championItems.length === 0 && emergingItems.length >= 3) {
     return buildSalesResult(emergingItems, {
       message: `Na amostra analisada, nenhum anúncio passou de ${minimumChampionSales().toLocaleString("pt-BR")} vendas públicas.`,
       exactMatches: emergingItems.length,
@@ -305,6 +306,19 @@ async function executeMercadoLivreScrapeDo(query) {
       providerCreditsUsed: creditsUsed,
       itemCacheHits,
       opportunityMode: "emerging",
+      marketThreshold: minimumChampionSales(),
+    });
+  }
+
+  const leadingItems = verifiedSalesItems.slice(0, 3).map(mapItem);
+  if (leadingItems.length >= 3) {
+    return buildSalesResult(leadingItems, {
+      message: "Encontramos os 3 anúncios líderes com vendas públicas reais deste mercado.",
+      exactMatches: leadingItems.length,
+      totalAvailable: totalAvailable || uniqueCandidates.length,
+      providerCreditsUsed: creditsUsed,
+      itemCacheHits,
+      opportunityMode: "developing",
       marketThreshold: minimumChampionSales(),
     });
   }

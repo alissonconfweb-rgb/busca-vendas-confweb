@@ -153,13 +153,22 @@
 }
 
 html {
+  min-height: 100%;
   scroll-behavior: smooth;
+  overscroll-behavior-y: none;
 }
 
 body {
   margin: 0;
   min-width: 320px;
+  min-height: 100%;
+  overflow-x: clip;
+  overscroll-behavior-y: none;
   background: var(--bg);
+}
+
+#root {
+  min-height: 100%;
 }
 
 button,
@@ -229,6 +238,7 @@ textarea:focus {
 
 .bv-shell {
   min-height: 100vh;
+  min-height: 100svh;
   display: grid;
   grid-template-columns: 148px minmax(0, 1fr);
   background: var(--bg);
@@ -1619,6 +1629,19 @@ textarea:focus {
 .opportunity-card.emerging-opportunity {
   border-color: rgba(22, 118, 79, 0.3);
   background: #f7fcf9;
+}
+
+.opportunity-card.developing-opportunity {
+  border-color: rgba(50, 109, 168, 0.3);
+  background: #f5f9fd;
+}
+
+.opportunity-card.developing-opportunity::before {
+  background: linear-gradient(180deg, var(--blue), var(--orange));
+}
+
+.developing-opportunity .opportunity-kicker {
+  color: var(--blue);
 }
 
 .opportunity-card.emerging-opportunity::before {
@@ -4522,6 +4545,7 @@ article.finance-row {
 
   .bv-shell {
     display: block;
+    min-height: 100svh;
   }
 
   .bv-sidebar {
@@ -5223,7 +5247,7 @@ article.finance-row {
     position: fixed;
     left: 10px;
     right: 10px;
-    bottom: 10px;
+    bottom: max(10px, env(safe-area-inset-bottom));
     z-index: 13;
     display: flex;
     gap: 5px;
@@ -5278,8 +5302,13 @@ article.finance-row {
 
   .bv-main {
     padding-top: 64px;
-    padding-bottom: 86px;
+    min-height: 100svh;
+    padding-bottom: calc(86px + env(safe-area-inset-bottom));
     background-size: 34px 34px, 34px 34px, auto;
+  }
+
+  .legal-footer {
+    margin-bottom: 0;
   }
 
   .bv-page,
@@ -5603,7 +5632,7 @@ article.finance-row {
     position: fixed;
     left: 8px;
     right: 8px;
-    bottom: 10px;
+    bottom: max(10px, env(safe-area-inset-bottom));
     z-index: 13;
     display: flex;
     width: auto;
@@ -5667,6 +5696,15 @@ article.finance-row {
   .bv-sidebar.expanded > .help-card,
   .bv-sidebar.collapsed > .help-card {
     display: none;
+  }
+}
+
+@supports (min-height: 100dvh) {
+  @media (max-width: 620px) {
+    .bv-shell,
+    .bv-main {
+      min-height: 100dvh;
+    }
   }
 }
 

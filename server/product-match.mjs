@@ -26,6 +26,8 @@ const TOKEN_CORRECTIONS = new Map([
   ["bluetoot", "bluetooth"],
   ["blutooht", "bluetooth"],
   ["blutooth", "bluetooth"],
+  ["langerie", "lingerie"],
+  ["rpk", "npk"],
 ]);
 const SUPPLEMENT_EXTRA_TERMS = [
   "albumina",

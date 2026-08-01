@@ -10,6 +10,7 @@ process.env.DB_PATH = join(tempDir, "result-policy.sqlite");
 const { db, initDatabase, setSetting } = await import("../server/db.mjs");
 const {
   isCompleteChampionResult,
+  isCompleteDevelopingOpportunityResult,
   isCompleteEmergingOpportunityResult,
   isCompleteRealSalesResult,
 } = await import("../server/search-result-policy.mjs");
@@ -71,4 +72,11 @@ test("rejeita oportunidade sem tres anuncios com metricas completas", () => {
 
   assert.equal(isCompleteEmergingOpportunityResult(result), false);
   assert.equal(isCompleteRealSalesResult(result), false);
+});
+
+test("aceita tres lideres reais quando o mercado mistura anuncios acima e abaixo de mil", () => {
+  const result = resultWithSales([5_000, 1_000, 450], "developing");
+
+  assert.equal(isCompleteDevelopingOpportunityResult(result), true);
+  assert.equal(isCompleteRealSalesResult(result), true);
 });
