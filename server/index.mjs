@@ -1071,8 +1071,8 @@ async function handleAdmin(req, res, url, currentUser) {
   const path = url.pathname.replace("/api/admin/", "");
 
   if (path === "search-provider/configure" && method === "POST") {
-    if (!isCreator(currentUser)) {
-      return json(res, 403, { error: "Somente o criador pode escolher o motor de busca." });
+    if (!canManageIntegrations(currentUser)) {
+      return json(res, 403, { error: "Somente administradores autorizados podem escolher o motor de busca." });
     }
 
     const body = await readJson(req);
@@ -1090,8 +1090,8 @@ async function handleAdmin(req, res, url, currentUser) {
   }
 
   if (path === "meli/configure" && method === "POST") {
-    if (!isCreator(currentUser)) {
-      return json(res, 403, { error: "Somente o criador pode configurar o Mercado Livre." });
+    if (!canManageIntegrations(currentUser)) {
+      return json(res, 403, { error: "Somente administradores autorizados podem configurar o Mercado Livre." });
     }
 
     const body = await readJson(req);
@@ -1133,8 +1133,8 @@ async function handleAdmin(req, res, url, currentUser) {
   }
 
   if (path === "meli/connect" && method === "GET") {
-    if (!isCreator(currentUser)) {
-      return json(res, 403, { error: "Somente o criador pode conectar o Mercado Livre." });
+    if (!canManageIntegrations(currentUser)) {
+      return json(res, 403, { error: "Somente administradores autorizados podem conectar o Mercado Livre." });
     }
 
     const clientId = getSetting("meli_client_id") || process.env.MELI_CLIENT_ID;
@@ -1163,8 +1163,8 @@ async function handleAdmin(req, res, url, currentUser) {
   }
 
   if (path === "meli/disconnect" && method === "POST") {
-    if (!isCreator(currentUser)) {
-      return json(res, 403, { error: "Somente o criador pode desconectar o Mercado Livre." });
+    if (!canManageIntegrations(currentUser)) {
+      return json(res, 403, { error: "Somente administradores autorizados podem desconectar o Mercado Livre." });
     }
 
     disconnectMeliOAuth();
@@ -1172,8 +1172,8 @@ async function handleAdmin(req, res, url, currentUser) {
   }
 
   if (path === "meli/catalog-test" && method === "POST") {
-    if (!isCreator(currentUser)) {
-      return json(res, 403, { error: "Somente o criador pode testar o catálogo oficial." });
+    if (!canManageIntegrations(currentUser)) {
+      return json(res, 403, { error: "Somente administradores autorizados podem testar o catálogo oficial." });
     }
     try {
       const result = await testMercadoLivreCatalog("creatina 1kg");
@@ -1195,8 +1195,8 @@ async function handleAdmin(req, res, url, currentUser) {
   }
 
   if (path === "meli/test" && method === "POST") {
-    if (!isCreator(currentUser)) {
-      return json(res, 403, { error: "Somente o criador pode validar o Mercado Livre." });
+    if (!canManageIntegrations(currentUser)) {
+      return json(res, 403, { error: "Somente administradores autorizados podem validar o Mercado Livre." });
     }
     try {
       const result = await testMercadoLivreConnection();
@@ -2015,7 +2015,7 @@ async function handleMeliCallback(req, res, url) {
   const user = userFromSession(readCookie(req, COOKIE));
   const frontendUrl = new URL(process.env.FRONTEND_ORIGIN || getSetting("frontend_origin") || url.origin);
 
-  if (!user || !isCreator(user)) {
+  if (!user || !canManageIntegrations(user)) {
     frontendUrl.searchParams.set("meli", "unauthorized");
     return redirect(res, frontendUrl.toString());
   }
@@ -2129,6 +2129,10 @@ function publicUserWithPermissions(user) {
 
 function canUseAdmin(user) {
   return Boolean(user && (user.role === "admin" || isCreator(user)));
+}
+
+function canManageIntegrations(user) {
+  return canUseAdmin(user);
 }
 
 function isCreator(user) {

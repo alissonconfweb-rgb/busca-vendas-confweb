@@ -3701,7 +3701,7 @@ function AdminPanel({ user, onSettingsChange }: { user: User; onSettingsChange: 
       connected: "Mercado Livre conectado com sucesso.",
       error: "Erro ao conectar o Mercado Livre. Verifique App ID, Secret e Redirect URI.",
       invalid_state: "Sessão OAuth expirou. Tente conectar novamente.",
-      unauthorized: "Somente o criador pode conectar o Mercado Livre.",
+      unauthorized: "Somente administradores autorizados podem conectar o Mercado Livre.",
     };
 
     if (messages[meli]) {
