@@ -288,6 +288,41 @@ export async function testMercadoLivreCatalog(query = "creatina 1kg") {
   return searchMercadoLivreCatalog({ query, accessToken, siteId });
 }
 
+export async function testMercadoLivreConnection() {
+  const accessToken = await getValidMeliAccessToken();
+  if (!accessToken) {
+    throw new Error("Autorize a conta do Mercado Livre antes de validar a conexão.");
+  }
+
+  const response = await fetch("https://api.mercadolibre.com/users/me", {
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${accessToken}`,
+      "User-Agent": "BuscaVendasConfweb/1.0",
+    },
+  });
+  const text = await response.text();
+  let data = {};
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    data = {};
+  }
+
+  if (!response.ok) {
+    const detail = data.message || data.error || text || "sem detalhe";
+    throw new Error(`Mercado Livre respondeu ${response.status}: ${String(detail).slice(0, 180)}`);
+  }
+
+  setSetting("meli_user_id", data.id || getSetting("meli_user_id") || "");
+  setSetting("meli_last_error", "");
+  return {
+    ok: true,
+    userId: data.id || null,
+    nickname: data.nickname || "",
+  };
+}
+
 function makeStrictFailure(query, message, source = "market_data_pending") {
   const safeMessage = sanitizeSearchError(message);
   return {
@@ -419,11 +454,6 @@ export async function refreshMeliAccessToken() {
 }
 
 export async function getValidMeliAccessToken() {
-  const envToken = process.env.MELI_ACCESS_TOKEN;
-  if (envToken) {
-    return envToken;
-  }
-
   const accessToken = getSetting("meli_access_token");
   const expiresAt = Number(getSetting("meli_token_expires_at") || 0);
 
@@ -431,7 +461,8 @@ export async function getValidMeliAccessToken() {
     return accessToken;
   }
 
-  return (await refreshMeliAccessToken()) || accessToken;
+  const managedInPanel = getSetting("meli_credentials_managed_in_panel") === "true";
+  return (await refreshMeliAccessToken()) || accessToken || (!managedInPanel ? process.env.MELI_ACCESS_TOKEN : null) || null;
 }
 
 export function getMeliRedirectUri() {
@@ -522,13 +553,13 @@ function persistTokenData(data) {
 }
 
 function getMeliClientId() {
-  return (process.env.MELI_CLIENT_ID || getSetting("meli_client_id") || "").trim();
+  return (getSetting("meli_client_id") || process.env.MELI_CLIENT_ID || "").trim();
 }
 
 function getMeliClientSecret() {
-  return (process.env.MELI_CLIENT_SECRET || getSetting("meli_client_secret") || "").trim();
+  return (getSetting("meli_client_secret") || process.env.MELI_CLIENT_SECRET || "").trim();
 }
 
 function getMeliRefreshToken() {
-  return (process.env.MELI_REFRESH_TOKEN || getSetting("meli_refresh_token") || "").trim();
+  return (getSetting("meli_refresh_token") || process.env.MELI_REFRESH_TOKEN || "").trim();
 }

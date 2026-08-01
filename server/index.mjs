@@ -14,7 +14,7 @@ import {
   settingsObject,
   userFromSession,
 } from "./db.mjs";
-import { buildMeliAuthorizationUrl, createMeliPkcePair, disconnectMeliOAuth, exchangeMeliAuthorizationCode, getMeliRedirectUri, searchMercadoLivre, testMercadoLivreCatalog } from "./meli.mjs";
+import { buildMeliAuthorizationUrl, createMeliPkcePair, disconnectMeliOAuth, exchangeMeliAuthorizationCode, getMeliRedirectUri, searchMercadoLivre, testMercadoLivreCatalog, testMercadoLivreConnection } from "./meli.mjs";
 import { shouldUseMarketEstimate } from "./market-estimate.mjs";
 import { bootstrapAdminFromEnv } from "./bootstrap-admin.mjs";
 import { syncMeliSettingsFromEnv, validateMeliSettingsInput, isValidMeliClientId, resolveMeliRedirectUri } from "./meli-config.mjs";
@@ -1069,13 +1069,56 @@ async function handleAdmin(req, res, url, currentUser) {
   const method = req.method || "GET";
   const path = url.pathname.replace("/api/admin/", "");
 
+  if (path === "meli/configure" && method === "POST") {
+    if (!isCreator(currentUser)) {
+      return json(res, 403, { error: "Somente o criador pode configurar o Mercado Livre." });
+    }
+
+    const body = await readJson(req);
+    const clientId = String(body.clientId || "").trim();
+    const suppliedSecret = String(body.clientSecret || "").trim();
+    const currentClientId = getSetting("meli_client_id");
+    const currentSecret = getSetting("meli_client_secret") || process.env.MELI_CLIENT_SECRET || "";
+
+    if (!isValidMeliClientId(clientId)) {
+      return json(res, 400, { error: "Informe o Client ID numérico exibido no DevCenter do Mercado Livre." });
+    }
+    if (clientId !== currentClientId && !suppliedSecret) {
+      return json(res, 400, { error: "Informe também a Secret Key da nova aplicação." });
+    }
+
+    const clientSecret = suppliedSecret || currentSecret;
+    if (!clientSecret) {
+      return json(res, 400, { error: "Informe a Secret Key exibida no DevCenter do Mercado Livre." });
+    }
+
+    const credentialsChanged = clientId !== currentClientId || (suppliedSecret && suppliedSecret !== currentSecret);
+    if (credentialsChanged) {
+      disconnectMeliOAuth();
+    }
+
+    const redirectUri = resolveMeliRedirectUri();
+    setSetting("meli_client_id", clientId);
+    setSetting("meli_client_secret", clientSecret);
+    setSetting("meli_credentials_managed_in_panel", "true");
+    setSetting("meli_site_id", "MLB");
+    setSetting("meli_redirect_uri", redirectUri);
+    setSetting("meli_last_error", "");
+
+    return json(res, 200, {
+      ok: true,
+      redirectUri,
+      message: "Credenciais salvas. Autorize agora a conta principal do Mercado Livre.",
+    });
+  }
+
   if (path === "meli/connect" && method === "GET") {
     if (!isCreator(currentUser)) {
       return json(res, 403, { error: "Somente o criador pode conectar o Mercado Livre." });
     }
 
-    const clientId = process.env.MELI_CLIENT_ID || getSetting("meli_client_id");
-    if (!clientId || !isValidMeliClientId(clientId) || !(process.env.MELI_CLIENT_SECRET || getSetting("meli_client_secret"))) {
+    const clientId = getSetting("meli_client_id") || process.env.MELI_CLIENT_ID;
+    if (!clientId || !isValidMeliClientId(clientId) || !(getSetting("meli_client_secret") || process.env.MELI_CLIENT_SECRET)) {
       return json(res, 400, { error: "Configure o App ID numérico e a Secret Key do Mercado Livre antes de conectar." });
     }
 
@@ -1126,6 +1169,25 @@ async function handleAdmin(req, res, url, currentUser) {
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Falha ao testar o catálogo oficial.";
+      setSetting("meli_last_error", message);
+      return json(res, 400, { ok: false, error: message });
+    }
+  }
+
+  if (path === "meli/test" && method === "POST") {
+    if (!isCreator(currentUser)) {
+      return json(res, 403, { error: "Somente o criador pode validar o Mercado Livre." });
+    }
+    try {
+      const result = await testMercadoLivreConnection();
+      return json(res, 200, {
+        ...result,
+        message: result.nickname
+          ? `Mercado Livre conectado à conta ${result.nickname}.`
+          : "Mercado Livre conectado e token validado.",
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Falha ao validar o Mercado Livre.";
       setSetting("meli_last_error", message);
       return json(res, 400, { ok: false, error: message });
     }
@@ -1835,9 +1897,10 @@ function safeSettings(user) {
     settings.oxylabs_password_configured = settings.oxylabs_password || process.env.OXYLABS_PASSWORD ? "true" : "";
     settings.oxylabs_connected = settings.oxylabs_enabled === "true" && settings.oxylabs_username && settings.oxylabs_password_configured ? "true" : "";
     settings.oxylabs_password = "";
-    settings.meli_access_token_configured = settings.meli_access_token || process.env.MELI_ACCESS_TOKEN ? "true" : settings.meli_access_token_configured || "";
-    settings.meli_refresh_token_configured = settings.meli_refresh_token || process.env.MELI_REFRESH_TOKEN ? "true" : "";
-    settings.meli_client_secret_configured = settings.meli_client_secret || process.env.MELI_CLIENT_SECRET ? "true" : "";
+    const meliManagedInPanel = settings.meli_credentials_managed_in_panel === "true";
+    settings.meli_access_token_configured = settings.meli_access_token || (!meliManagedInPanel && process.env.MELI_ACCESS_TOKEN) ? "true" : "";
+    settings.meli_refresh_token_configured = settings.meli_refresh_token || (!meliManagedInPanel && process.env.MELI_REFRESH_TOKEN) ? "true" : "";
+    settings.meli_client_secret_configured = settings.meli_client_secret || (!meliManagedInPanel && process.env.MELI_CLIENT_SECRET) ? "true" : "";
     settings.meli_oauth_connected = settings.meli_access_token_configured || settings.meli_refresh_token_configured ? "true" : "";
     settings.meli_scraper_enabled = settings.meli_scraper_enabled || process.env.MELI_SCRAPER_ENABLED || (isZyteConfigured() ? "false" : "true");
     settings.meli_redirect_uri = settings.meli_redirect_uri || resolveMeliRedirectUri();

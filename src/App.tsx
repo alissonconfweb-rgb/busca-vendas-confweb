@@ -3,6 +3,7 @@ import {
   BookOpen,
   ChevronRight,
   CircleCheck,
+  ClipboardCopy,
   CreditCard,
   Crown,
   Database,
@@ -4936,9 +4937,67 @@ function AdminSettings({ settings, afterSave }: { settings: SettingsMap; afterSa
 }
 
 function AdminSettingsSimple({ settings, afterSave }: { settings: SettingsMap; afterSave: (text?: string) => void }) {
-  const [busy, setBusy] = useState<"asaas-save" | "asaas-test" | "scrapedo-save" | "scrapedo-test" | "">("");
+  const [busy, setBusy] = useState<"meli-save" | "meli-test" | "meli-disconnect" | "asaas-save" | "asaas-test" | "scrapedo-save" | "scrapedo-test" | "">("");
+  const [meliError, setMeliError] = useState("");
+  const [redirectCopied, setRedirectCopied] = useState(false);
   const [asaasError, setAsaasError] = useState("");
   const [scrapeDoError, setScrapeDoError] = useState("");
+
+  const saveAndConnectMeli = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const payload = formJson(event.currentTarget);
+    setMeliError("");
+    setBusy("meli-save");
+    try {
+      await api("/api/admin/meli/configure", {
+        method: "POST",
+        body: JSON.stringify({
+          clientId: payload.meli_client_id || "",
+          clientSecret: payload.meli_client_secret || "",
+        }),
+      });
+      window.location.assign("/api/admin/meli/connect");
+    } catch (error) {
+      setMeliError(error instanceof Error ? error.message : "Não foi possível salvar a integração do Mercado Livre.");
+      setBusy("");
+    }
+  };
+
+  const testMeli = async () => {
+    setMeliError("");
+    setBusy("meli-test");
+    try {
+      const data = await api<{ message?: string }>("/api/admin/meli/test", { method: "POST" });
+      afterSave(data.message || "Mercado Livre conectado e token validado.");
+    } catch (error) {
+      setMeliError(error instanceof Error ? error.message : "Não foi possível validar o Mercado Livre.");
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const disconnectMeli = async () => {
+    setMeliError("");
+    setBusy("meli-disconnect");
+    try {
+      await api("/api/admin/meli/disconnect", { method: "POST" });
+      afterSave("Mercado Livre desconectado. O Client ID e a Secret Key foram mantidos.");
+    } catch (error) {
+      setMeliError(error instanceof Error ? error.message : "Não foi possível desconectar o Mercado Livre.");
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const copyMeliRedirectUri = async () => {
+    try {
+      await navigator.clipboard.writeText(settings.meli_redirect_uri || "");
+      setRedirectCopied(true);
+      window.setTimeout(() => setRedirectCopied(false), 2200);
+    } catch {
+      setMeliError("Não consegui copiar automaticamente. Selecione a URL e copie manualmente.");
+    }
+  };
 
   const saveAsaas = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -5045,6 +5104,101 @@ function AdminSettingsSimple({ settings, afterSave }: { settings: SettingsMap; a
 
   return (
     <div className="admin-section settings-simple">
+      <form className="settings-card" onSubmit={saveAndConnectMeli}>
+        <div className="settings-card-heading">
+          <div className="settings-card-title">
+            <span>Fonte oficial</span>
+            <h3>Mercado Livre</h3>
+            <p>Cole o Client ID e a Secret Key da nova aplicação. O Busca Vendas salva as credenciais, abre a autorização e renova o token automaticamente.</p>
+          </div>
+          <div className="credential-status">
+            <b>Client ID: {settings.meli_client_id ? "salvo" : "pendente"}</b>
+            <b>Secret Key: {settings.meli_client_secret_configured ? "salva" : "pendente"}</b>
+            <b>OAuth: {settings.meli_oauth_connected ? "conectado" : "pendente"}</b>
+          </div>
+        </div>
+
+        <div className="integration-setup-guide">
+          <div>
+            <span>1</span>
+            <p><b>Cadastre a URL de retorno</b> abaixo na aplicação do Mercado Livre.</p>
+          </div>
+          <div>
+            <span>2</span>
+            <p><b>Cole o Client ID e a Secret Key</b> exibidos no DevCenter.</p>
+          </div>
+          <div>
+            <span>3</span>
+            <p><b>Clique em salvar e conectar</b> e autorize a conta principal uma única vez.</p>
+          </div>
+        </div>
+
+        <div className="settings-grid">
+          <label>
+            Client ID
+            <input
+              name="meli_client_id"
+              defaultValue={settings.meli_client_id || ""}
+              inputMode="numeric"
+              pattern="[0-9]+"
+              placeholder="Ex.: 1234567890123456"
+              required
+            />
+            <small className="field-hint">Use o número da aplicação, não o e-mail da conta.</small>
+          </label>
+          <label>
+            Secret Key
+            <input
+              name="meli_client_secret"
+              type="password"
+              autoComplete="off"
+              placeholder={settings.meli_client_secret_configured ? "Secret Key já salva; deixe em branco para manter" : "Cole a Secret Key"}
+            />
+            <small className="field-hint">A chave fica protegida no servidor e nunca aparece para os compradores.</small>
+          </label>
+          <label className="wide">
+            URL de retorno para cadastrar no Mercado Livre
+            <div className="copy-field">
+              <input readOnly value={settings.meli_redirect_uri || ""} />
+              <button type="button" onClick={copyMeliRedirectUri} disabled={!settings.meli_redirect_uri} title="Copiar URL de retorno">
+                {redirectCopied ? <CircleCheck size={18} /> : <ClipboardCopy size={18} />}
+                {redirectCopied ? "Copiada" : "Copiar"}
+              </button>
+            </div>
+            <small className="field-hint">Cole exatamente esta URL em URIs de redirect no DevCenter.</small>
+          </label>
+        </div>
+
+        {(meliError || settings.meli_last_error) && (
+          <strong className="oauth-error">{meliError || settings.meli_last_error}</strong>
+        )}
+
+        <p className="integration-note">
+          Depois da autorização, todos os usuários pesquisam pela integração central. Eles não veem nem preenchem estas credenciais. A Scrape.do continua disponível como apoio quando a API oficial não liberar um dado público.
+        </p>
+
+        <div className="settings-card-actions">
+          <button className="primary-action" type="submit" disabled={isBusy}>
+            <LogIn size={18} />
+            {busy === "meli-save"
+              ? "Salvando..."
+              : settings.meli_oauth_connected
+                ? "Salvar e reconectar"
+                : "Salvar e conectar"}
+          </button>
+          {settings.meli_oauth_connected && (
+            <>
+              <button className="secondary-action" type="button" onClick={testMeli} disabled={isBusy}>
+                {busy === "meli-test" ? "Validando..." : "Validar conexão"}
+              </button>
+              <button className="secondary-action danger-action" type="button" onClick={disconnectMeli} disabled={isBusy}>
+                {busy === "meli-disconnect" ? "Desconectando..." : "Desconectar"}
+              </button>
+            </>
+          )}
+        </div>
+      </form>
+
       <form className="settings-card" onSubmit={saveAndTestScrapeDo}>
         <div className="settings-card-heading">
           <div className="settings-card-title">

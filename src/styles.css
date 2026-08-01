@@ -3808,12 +3808,19 @@ button.learn-card span {
   background: #fff;
 }
 
+.settings-card-actions .danger-action {
+  color: #a72a1e;
+  border-color: #efc1bc;
+  background: #fff8f7;
+}
+
 .settings-card-actions button:disabled {
   cursor: wait;
   opacity: 0.65;
 }
 
-.asaas-test-guide {
+.asaas-test-guide,
+.integration-setup-guide {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
@@ -3823,14 +3830,16 @@ button.learn-card span {
   padding: 12px;
 }
 
-.asaas-test-guide div {
+.asaas-test-guide div,
+.integration-setup-guide div {
   display: grid;
   grid-template-columns: 28px minmax(0, 1fr);
   align-items: start;
   gap: 8px;
 }
 
-.asaas-test-guide div > span {
+.asaas-test-guide div > span,
+.integration-setup-guide div > span {
   display: grid;
   width: 28px;
   height: 28px;
@@ -3842,7 +3851,8 @@ button.learn-card span {
   font-weight: 900;
 }
 
-.asaas-test-guide p {
+.asaas-test-guide p,
+.integration-setup-guide p {
   margin: 1px 0 0;
   color: var(--muted);
   font-size: 13px;
@@ -3855,6 +3865,36 @@ button.learn-card span {
   padding-top: 9px;
   color: #086b42;
   font-weight: 800;
+}
+
+.copy-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.copy-field button {
+  min-width: 112px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--blue-dark);
+  background: #fff;
+  padding: 0 14px;
+  font-weight: 900;
+}
+
+.integration-note {
+  margin: 0;
+  border-left: 3px solid var(--blue);
+  color: var(--muted);
+  background: #f6f9fd;
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1.45;
 }
 
 .settings-card-title {
@@ -4331,8 +4371,18 @@ article.finance-row {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .asaas-test-guide {
+  .asaas-test-guide,
+  .integration-setup-guide {
     grid-template-columns: 1fr;
+  }
+
+  .copy-field {
+    grid-template-columns: 1fr;
+  }
+
+  .copy-field button {
+    width: 100%;
+    min-height: 44px;
   }
 
   .settings-save-bar {

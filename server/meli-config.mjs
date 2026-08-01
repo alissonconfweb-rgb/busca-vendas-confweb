@@ -36,19 +36,20 @@ export function resolveMeliRedirectUri() {
 }
 
 export function syncMeliSettingsFromEnv() {
-  if (process.env.MELI_CLIENT_ID?.trim()) {
+  const managedInPanel = getSetting("meli_credentials_managed_in_panel") === "true";
+  if (!getSetting("meli_client_id") && process.env.MELI_CLIENT_ID?.trim()) {
     setSetting("meli_client_id", process.env.MELI_CLIENT_ID.trim());
   }
-  if (process.env.MELI_CLIENT_SECRET?.trim()) {
+  if (!getSetting("meli_client_secret") && process.env.MELI_CLIENT_SECRET?.trim()) {
     setSetting("meli_client_secret", process.env.MELI_CLIENT_SECRET.trim());
   }
-  if (process.env.MELI_SITE_ID?.trim()) {
+  if (!getSetting("meli_site_id") && process.env.MELI_SITE_ID?.trim()) {
     setSetting("meli_site_id", process.env.MELI_SITE_ID.trim());
   }
-  if (process.env.MELI_ACCESS_TOKEN?.trim()) {
+  if (!managedInPanel && !getSetting("meli_access_token") && process.env.MELI_ACCESS_TOKEN?.trim()) {
     setSetting("meli_access_token", process.env.MELI_ACCESS_TOKEN.trim());
   }
-  if (process.env.MELI_REFRESH_TOKEN?.trim()) {
+  if (!managedInPanel && !getSetting("meli_refresh_token") && process.env.MELI_REFRESH_TOKEN?.trim()) {
     setSetting("meli_refresh_token", process.env.MELI_REFRESH_TOKEN.trim());
   }
 
