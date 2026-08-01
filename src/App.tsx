@@ -4938,7 +4938,8 @@ function AdminSettingsSimple({ settings, afterSave }: { settings: SettingsMap; a
 
   const saveAsaas = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const payload = formJson(event.currentTarget);
+    const form = event.currentTarget;
+    const payload = formJson(form);
 
     setAsaasError("");
     setBusy("asaas-save");
@@ -4947,7 +4948,7 @@ function AdminSettingsSimple({ settings, afterSave }: { settings: SettingsMap; a
         method: "POST",
         body: JSON.stringify({ apiKey: payload.asaas_api_key || "" }),
       });
-      event.currentTarget.reset();
+      form.reset();
       afterSave(setup.message || "Asaas salvo, validado e pronto para testar.");
     } catch (error) {
       setAsaasError(error instanceof Error ? error.message : "Não foi possível salvar o Asaas.");
