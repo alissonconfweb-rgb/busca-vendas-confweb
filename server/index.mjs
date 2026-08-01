@@ -46,6 +46,7 @@ import { hashPassword, hashToken, randomToken, verifyPassword } from "./security
 import { applyRateLimit, MemoryRateLimiter } from "./rate-limit.mjs";
 import { minimumChampionSales } from "./champion-policy.mjs";
 import { isCompleteRealSalesResult } from "./search-result-policy.mjs";
+import { normalizeSearchProviderMode } from "./search-provider.mjs";
 
 initDatabase();
 
@@ -1069,6 +1070,25 @@ async function handleAdmin(req, res, url, currentUser) {
   const method = req.method || "GET";
   const path = url.pathname.replace("/api/admin/", "");
 
+  if (path === "search-provider/configure" && method === "POST") {
+    if (!isCreator(currentUser)) {
+      return json(res, 403, { error: "Somente o criador pode escolher o motor de busca." });
+    }
+
+    const body = await readJson(req);
+    const mode = normalizeSearchProviderMode(body.mode);
+    setSetting("market_search_provider", mode);
+    return json(res, 200, {
+      ok: true,
+      mode,
+      message: mode === "meli_only"
+        ? "Motor salvo: somente Mercado Livre. A Scrape.do não será consumida."
+        : mode === "scrapedo_only"
+          ? "Motor salvo: somente Scrape.do."
+          : "Motor automático salvo: Mercado Livre primeiro e Scrape.do apenas em emergência.",
+    });
+  }
+
   if (path === "meli/configure" && method === "POST") {
     if (!isCreator(currentUser)) {
       return json(res, 403, { error: "Somente o criador pode configurar o Mercado Livre." });
@@ -1870,6 +1890,9 @@ function safeSettings(user) {
     settings.market_cache_ttl_days = settings.market_cache_ttl_days || process.env.MARKET_CACHE_TTL_DAYS || "7";
     settings.market_cache_stale_days = settings.market_cache_stale_days || process.env.MARKET_CACHE_STALE_DAYS || "30";
     settings.market_item_cache_ttl_days = settings.market_cache_ttl_days;
+    settings.market_search_provider = normalizeSearchProviderMode(
+      settings.market_search_provider || process.env.MARKET_SEARCH_PROVIDER || "auto",
+    );
     settings.market_cache_entries = String(db.prepare("SELECT COUNT(*) AS total FROM market_search_cache").get().total || 0);
     settings.market_item_cache_entries = String(db.prepare("SELECT COUNT(*) AS total FROM market_item_cache").get().total || 0);
     const scrapeDoUsage = scrapeDoUsageSummary();

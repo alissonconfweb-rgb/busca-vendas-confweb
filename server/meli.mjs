@@ -8,6 +8,8 @@ import { isScrapeDoEnabled, searchMercadoLivreScrapeDo } from "./scrapedo.mjs";
 import { isZyteConfigured, isZyteSearchEnabled, searchMercadoLivreZyte } from "./zyte.mjs";
 import { buildProductQuerySpec, matchesProductQuery, normalizeProductSearchQuery } from "./product-match.mjs";
 import { isCompleteRealSalesResult } from "./search-result-policy.mjs";
+import { minimumChampionSales } from "./champion-policy.mjs";
+import { searchProviderPlan } from "./search-provider.mjs";
 
 const currencyFormatter = new Intl.NumberFormat("pt-BR", {
   currency: "BRL",
@@ -39,6 +41,190 @@ function mapItem(item) {
 }
 
 export async function searchMercadoLivre(query) {
+  const provider = searchProviderPlan(
+    getSetting("market_search_provider") || process.env.MARKET_SEARCH_PROVIDER || "auto",
+  );
+  const siteId = process.env.MELI_SITE_ID || getSetting("meli_site_id") || "MLB";
+  let strictFailure = null;
+
+  if (provider.useMercadoLivre) {
+    let accessToken = await getValidMeliAccessToken();
+    if (!accessToken) {
+      strictFailure = makeStrictFailure(
+        query,
+        "A API oficial do Mercado Livre ainda não está conectada.",
+        "mercado_livre_not_connected",
+      );
+    } else {
+      try {
+        const catalog = addOpportunityMode(
+          await searchMercadoLivreCatalog({ query, accessToken, siteId }),
+        );
+        if (hasCompleteSalesTop3(catalog)) {
+          setSetting("meli_last_error", "");
+          return catalog;
+        }
+        strictFailure = catalog;
+        setSetting("meli_last_error", catalog.message || "O catálogo oficial não completou o Top 3 com vendas.");
+      } catch (error) {
+        const message = sanitizeSearchError(
+          error instanceof Error ? error.message : "Falha ao consultar o catálogo oficial.",
+        );
+        strictFailure = makeStrictFailure(query, message, "mercado_livre_catalog_error");
+        setSetting("meli_last_error", message);
+      }
+
+      const officialSearch = await searchMercadoLivreOfficialSearch(query, accessToken, siteId);
+      accessToken = officialSearch.accessToken || accessToken;
+      if (hasCompleteSalesTop3(officialSearch.result)) {
+        setSetting("meli_last_error", "");
+        return officialSearch.result;
+      }
+      strictFailure = officialSearch.result || strictFailure;
+      setSetting(
+        "meli_last_error",
+        officialSearch.result?.message || "A API oficial não completou o Top 3 com vendas.",
+      );
+    }
+  }
+
+  if (provider.useScrapeDo) {
+    if (isScrapeDoEnabled()) {
+      try {
+        const scrapeDo = await searchMercadoLivreScrapeDo(query);
+        if (hasCompleteSalesTop3(scrapeDo)) {
+          setSetting("scrapedo_last_error", "");
+          return scrapeDo;
+        }
+        strictFailure = scrapeDo;
+        setSetting("scrapedo_last_error", scrapeDo.message || "Scrape.do não completou o Top 3 com vendas públicas.");
+      } catch (error) {
+        const message = sanitizeSearchError(error instanceof Error ? error.message : "Falha ao consultar Scrape.do.");
+        strictFailure = makeStrictFailure(query, message, "scrapedo_error");
+        setSetting("scrapedo_last_error", message);
+      }
+    } else if (provider.mode === "scrapedo_only") {
+      strictFailure = makeStrictFailure(
+        query,
+        "A Scrape.do foi selecionada, mas o token não está configurado ou ativo.",
+        "scrapedo_not_configured",
+      );
+    }
+  }
+
+  if (strictFailure) {
+    return strictFailure;
+  }
+
+  return makeStrictFailure(
+    query,
+    "Nenhuma fonte de pesquisa está configurada no painel admin.",
+    "market_source_not_configured",
+  );
+}
+
+async function searchMercadoLivreOfficialSearch(query, initialAccessToken, siteId) {
+  let accessToken = initialAccessToken;
+  const params = new URLSearchParams({
+    q: normalizeProductSearchQuery(query),
+    limit: "50",
+    sort: "sold_quantity_desc",
+  });
+
+  let response;
+  try {
+    response = await searchWithToken(siteId, params, accessToken);
+    if ([401, 403].includes(response.status) && getMeliRefreshToken()) {
+      accessToken = await refreshMeliAccessToken();
+      if (accessToken) {
+        response = await searchWithToken(siteId, params, accessToken);
+      }
+    }
+  } catch (error) {
+    const message = sanitizeSearchError(
+      error instanceof Error ? error.message : "Falha ao consultar a API oficial do Mercado Livre.",
+    );
+    return {
+      accessToken,
+      result: makeStrictFailure(query, message, "mercado_livre_search_error"),
+    };
+  }
+
+  if (!response?.ok) {
+    const body = response ? await response.text() : "";
+    const message = response?.status === 403
+      ? "O OAuth está conectado, mas o Mercado Livre não liberou a API oficial de busca para esta aplicação."
+      : `Mercado Livre respondeu ${response?.status || "sem status"}: ${body.slice(0, 180)}`;
+    return {
+      accessToken,
+      result: makeStrictFailure(
+        query,
+        message,
+        response?.status === 403 ? "meli_forbidden" : "meli_error",
+      ),
+    };
+  }
+
+  const data = await response.json();
+  const querySpec = buildProductQuerySpec(query);
+  const items = (data.results || [])
+    .map(mapItem)
+    .filter((item) => (
+      item.id
+      && item.title
+      && item.price > 0
+      && item.soldQuantity > 0
+      && matchesProductQuery(item.title, querySpec).ok
+    ))
+    .sort((a, b) => b.soldQuantity - a.soldQuantity)
+    .slice(0, 3);
+  const demand = items.reduce((sum, item) => sum + item.soldQuantity, 0);
+  const revenue = items.reduce((sum, item) => sum + item.revenue, 0);
+  const result = addOpportunityMode({
+    ok: items.length >= 3,
+    source: "mercado_livre",
+    metricsMode: "sales",
+    salesAvailable: items.length >= 3,
+    strictRealOnly: true,
+    message: items.length >= 3
+      ? `Dados reais retornados pelo Mercado Livre. Receita estimada: ${currencyFormatter.format(revenue)}.`
+      : "Mercado Livre respondeu, mas não trouxe 3 anúncios completos com vendas.",
+    items,
+    exactMatches: items.length,
+    totalAvailable: data.paging?.total ?? items.length,
+    totals: {
+      demand,
+      revenue,
+      averageTicket: demand ? revenue / demand : 0,
+      actualDemand: demand,
+      isEstimated: false,
+    },
+  });
+
+  return {
+    accessToken,
+    result: hasCompleteSalesTop3(result)
+      ? result
+      : makeStrictFailure(query, result.message, "mercado_livre_incomplete_sales"),
+  };
+}
+
+function addOpportunityMode(result) {
+  if (!result?.ok || !Array.isArray(result.items) || result.items.length < 3) {
+    return result;
+  }
+  const threshold = minimumChampionSales();
+  const sales = result.items.slice(0, 3).map((item) => Number(item.soldQuantity || 0));
+  if (sales.every((quantity) => quantity > 0 && quantity < threshold)) {
+    return { ...result, opportunityMode: "emerging" };
+  }
+  if (sales.some((quantity) => quantity > 0 && quantity < threshold)) {
+    return { ...result, opportunityMode: "developing" };
+  }
+  return result;
+}
+
+async function searchMercadoLivreLegacy(query) {
   const siteId = process.env.MELI_SITE_ID || getSetting("meli_site_id") || "MLB";
   let accessToken = await getValidMeliAccessToken();
   const strictRealData = true;

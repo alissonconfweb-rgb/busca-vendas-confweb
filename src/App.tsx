@@ -4937,11 +4937,33 @@ function AdminSettings({ settings, afterSave }: { settings: SettingsMap; afterSa
 }
 
 function AdminSettingsSimple({ settings, afterSave }: { settings: SettingsMap; afterSave: (text?: string) => void }) {
-  const [busy, setBusy] = useState<"meli-save" | "meli-test" | "meli-disconnect" | "asaas-save" | "asaas-test" | "scrapedo-save" | "scrapedo-test" | "">("");
+  const [busy, setBusy] = useState<"provider-save" | "meli-save" | "meli-test" | "meli-disconnect" | "asaas-save" | "asaas-test" | "scrapedo-save" | "scrapedo-test" | "">("");
+  const [providerMode, setProviderMode] = useState(settings.market_search_provider || "auto");
+  const [providerError, setProviderError] = useState("");
   const [meliError, setMeliError] = useState("");
   const [redirectCopied, setRedirectCopied] = useState(false);
   const [asaasError, setAsaasError] = useState("");
   const [scrapeDoError, setScrapeDoError] = useState("");
+
+  const saveSearchProvider = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setProviderError("");
+    setBusy("provider-save");
+    try {
+      const data = await api<{ message?: string; mode?: string }>("/api/admin/search-provider/configure", {
+        method: "POST",
+        body: JSON.stringify({ mode: providerMode }),
+      });
+      if (data.mode) {
+        setProviderMode(data.mode);
+      }
+      await afterSave(data.message || "Motor de busca atualizado.");
+    } catch (error) {
+      setProviderError(error instanceof Error ? error.message : "Não foi possível salvar o motor de busca.");
+    } finally {
+      setBusy("");
+    }
+  };
 
   const saveAndConnectMeli = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -5104,6 +5126,55 @@ function AdminSettingsSimple({ settings, afterSave }: { settings: SettingsMap; a
 
   return (
     <div className="admin-section settings-simple">
+      <form className="settings-card provider-mode-card" onSubmit={saveSearchProvider}>
+        <div className="settings-card-heading">
+          <div className="settings-card-title">
+            <span>Motor de busca</span>
+            <h3>Fonte das pesquisas</h3>
+            <p>Escolha a fonte externa. A base interna é consultada antes de qualquer API para economizar requisições.</p>
+          </div>
+          <div className="credential-status">
+            <b>Mercado Livre: {settings.meli_oauth_connected ? "conectado" : "pendente"}</b>
+            <b>Scrape.do: {settings.scrapedo_connected ? "pronta" : "pendente"}</b>
+          </div>
+        </div>
+
+        <div className="settings-grid settings-grid-compact">
+          <label className="wide">
+            Motor usado quando não houver resultado salvo
+            <select
+              name="market_search_provider"
+              value={providerMode}
+              onChange={(event) => setProviderMode(event.target.value)}
+            >
+              <option value="auto">Automático: Mercado Livre primeiro</option>
+              <option value="meli_only">Somente Mercado Livre</option>
+              <option value="scrapedo_only">Somente Scrape.do</option>
+            </select>
+            <small className="field-hint">
+              {providerMode === "meli_only"
+                ? "Não usa créditos da Scrape.do, mesmo se a API oficial não completar o resultado."
+                : providerMode === "scrapedo_only"
+                  ? "Ignora a API oficial e usa a Scrape.do para produtos que não estiverem na base interna."
+                  : "Tenta todas as rotas oficiais do Mercado Livre. A Scrape.do só entra se elas não completarem o resultado."}
+            </small>
+          </label>
+        </div>
+
+        <p className="integration-note provider-priority-note">
+          Prioridade real: base interna, Mercado Livre oficial e, somente no modo automático, Scrape.do como emergência.
+        </p>
+
+        {providerError && <strong className="oauth-error">{providerError}</strong>}
+
+        <div className="settings-card-actions">
+          <button className="primary-action" type="submit" disabled={isBusy}>
+            <Database size={18} />
+            {busy === "provider-save" ? "Salvando..." : "Salvar motor de busca"}
+          </button>
+        </div>
+      </form>
+
       <form className="settings-card" onSubmit={saveAndConnectMeli}>
         <div className="settings-card-heading">
           <div className="settings-card-title">
@@ -5202,9 +5273,9 @@ function AdminSettingsSimple({ settings, afterSave }: { settings: SettingsMap; a
       <form className="settings-card" onSubmit={saveAndTestScrapeDo}>
         <div className="settings-card-heading">
           <div className="settings-card-title">
-            <span>Fonte de dados ativa</span>
+            <span>Fonte de emergência</span>
             <h3>Scrape.do</h3>
-            <p>É a API usada pelo Busca Vendas para consultar os anúncios. Basta colar o token; o restante é automático.</p>
+            <p>No modo automático, só é usada quando o Mercado Livre oficial não completa a pesquisa. Também pode ser selecionada manualmente para testes.</p>
           </div>
           <div className="credential-status">
             <b>Token: {settings.scrapedo_api_token_configured ? "salvo" : "pendente"}</b>

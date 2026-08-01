@@ -3897,6 +3897,13 @@ button.learn-card span {
   line-height: 1.45;
 }
 
+.provider-priority-note {
+  border-left-color: #087a48;
+  color: #086b42;
+  background: #f4fbf7;
+  font-weight: 800;
+}
+
 .settings-card-title {
   display: grid;
   gap: 5px;
