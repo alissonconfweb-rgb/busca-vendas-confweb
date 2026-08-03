@@ -40,7 +40,7 @@ function mapItem(item) {
   };
 }
 
-export async function searchMercadoLivre(query) {
+export async function searchMercadoLivre(query, options = {}) {
   const provider = searchProviderPlan(
     getSetting("market_search_provider") || process.env.MARKET_SEARCH_PROVIDER || "auto",
   );
@@ -91,7 +91,7 @@ export async function searchMercadoLivre(query) {
   if (provider.useScrapeDo) {
     if (isScrapeDoEnabled()) {
       try {
-        const scrapeDo = await searchMercadoLivreScrapeDo(query);
+        const scrapeDo = await searchMercadoLivreScrapeDo(query, options);
         if (hasCompleteSalesTop3(scrapeDo)) {
           setSetting("scrapedo_last_error", "");
           return scrapeDo;

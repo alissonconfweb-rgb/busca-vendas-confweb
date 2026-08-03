@@ -8,7 +8,11 @@ const tempDir = mkdtempSync(join(tmpdir(), "busca-vendas-scrapedo-depth-"));
 process.env.DB_PATH = join(tempDir, "scrapedo-depth.sqlite");
 
 const { db, initDatabase, setSetting } = await import("../server/db.mjs");
-const { ensureScrapeDoSearchDepth, scrapeDoSearchPolicy } = await import("../server/scrapedo.mjs");
+const {
+  ensureScrapeDoSearchDepth,
+  scrapeDoSearchPolicy,
+  shouldUseScrapeDoItemCache,
+} = await import("../server/scrapedo.mjs");
 
 initDatabase();
 
@@ -39,4 +43,10 @@ test("preserva uma profundidade maior configurada para a fonte", () => {
     pages: 4,
     detailLimit: 48,
   });
+});
+
+test("ignora o cache individual de anuncios em uma atualizacao forcada", () => {
+  assert.equal(shouldUseScrapeDoItemCache(), true);
+  assert.equal(shouldUseScrapeDoItemCache({ forceRefresh: false }), true);
+  assert.equal(shouldUseScrapeDoItemCache({ forceRefresh: true }), false);
 });

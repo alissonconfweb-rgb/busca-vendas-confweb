@@ -570,7 +570,10 @@ async function resolveMarketSearch(query, options = {}) {
   }
 
   if (!result) {
-    result = enforceChampionThreshold(cleanQuery, await searchWithResponseGuard(cleanQuery));
+    result = enforceChampionThreshold(
+      cleanQuery,
+      await searchWithResponseGuard(cleanQuery, { forceRefresh: options.fresh === true }),
+    );
     if (isBillableSearchResult(result)) {
       saveMarketSearchCache(cleanQuery, result);
     }
@@ -748,7 +751,7 @@ function scheduleMarketSearchRefresh(query) {
     return marketRefreshFlights.get(key);
   }
 
-  const refresh = searchWithResponseGuard(query)
+  const refresh = searchWithResponseGuard(query, { forceRefresh: true })
     .then((result) => {
       if (isBillableSearchResult(result)) {
         saveMarketSearchCache(query, result);
@@ -913,10 +916,10 @@ function parseSearchPayload(payload) {
   }
 }
 
-async function searchWithResponseGuard(query) {
+async function searchWithResponseGuard(query, options = {}) {
   let settled = false;
   let timeoutId;
-  const realSearch = searchMercadoLivre(query)
+  const realSearch = searchMercadoLivre(query, options)
     .then((result) => {
       settled = true;
       const validated = enforceChampionThreshold(query, result);
@@ -1477,7 +1480,10 @@ async function handleAdmin(req, res, url, currentUser) {
       return json(res, 404, { error: "Pesquisa não encontrada na base interna." });
     }
 
-    const refreshed = enforceChampionThreshold(row.query, await searchWithResponseGuard(row.query));
+    const refreshed = enforceChampionThreshold(
+      row.query,
+      await searchWithResponseGuard(row.query, { forceRefresh: true }),
+    );
     if (!isBillableSearchResult(refreshed)) {
       return json(res, 422, {
         error: refreshed?.message || "A fonte não retornou três anúncios completos. O resultado anterior foi preservado.",

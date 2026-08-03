@@ -42,3 +42,17 @@ test("preserva uma URL direta de anuncio sem criar chamadas duplicadas", () => {
     ["https://produto.mercadolivre.com.br/MLB-987654321-_JM"],
   );
 });
+
+test("prioriza o preco promocional atual em vez do valor anterior", () => {
+  const html = `
+    <s aria-label="Antes: 65 reais com 90 centavos">R$ 65,90</s>
+    <div class="poly-price__current">
+      <span class="andes-money-amount" aria-label="Agora: 44 reais com 90 centavos">
+        <span class="andes-money-amount__fraction">44</span>
+        <span class="andes-money-amount__cents">90</span>
+      </span>
+    </div>
+  `;
+
+  assert.equal(parser.parsePrice(html), 44.9);
+});

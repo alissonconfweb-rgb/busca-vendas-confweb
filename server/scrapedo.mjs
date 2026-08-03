@@ -84,8 +84,9 @@ export async function testScrapeDoConnection() {
   };
 }
 
-export function searchMercadoLivreScrapeDo(query) {
-  const key = normalizedProductKey(normalizeProductSearchQuery(query));
+export function searchMercadoLivreScrapeDo(query, options = {}) {
+  const queryKey = normalizedProductKey(normalizeProductSearchQuery(query));
+  const key = `${queryKey}:${options.forceRefresh === true ? "fresh" : "cached"}`;
   const active = activeSearches.get(key);
   if (active) {
     return active;
@@ -101,13 +102,13 @@ export function searchMercadoLivreScrapeDo(query) {
     );
   }
 
-  const search = withProviderSlot(() => executeMercadoLivreScrapeDo(query))
+  const search = withProviderSlot(() => executeMercadoLivreScrapeDo(query, options))
     .then((result) => {
-      recordProviderUsage(key, Number(result?.providerCreditsUsed || 0), result?.ok ? "completed" : "incomplete");
+      recordProviderUsage(queryKey, Number(result?.providerCreditsUsed || 0), result?.ok ? "completed" : "incomplete");
       return result;
     })
     .catch((error) => {
-      recordProviderUsage(key, 0, "failed");
+      recordProviderUsage(queryKey, 0, "failed");
       throw error;
     })
     .finally(() => activeSearches.delete(key));
@@ -163,7 +164,7 @@ export function scrapeDoSearchPolicy() {
   };
 }
 
-async function executeMercadoLivreScrapeDo(query) {
+async function executeMercadoLivreScrapeDo(query, options = {}) {
   if (!isScrapeDoEnabled()) {
     return emptyResult("scrapedo_not_configured", "Scrape.do ainda não foi configurada.");
   }
@@ -235,7 +236,7 @@ async function executeMercadoLivreScrapeDo(query) {
   const enriched = [];
   for (let offset = 0; offset < uniqueCandidates.length; offset += 3) {
     const batch = await mapWithConcurrency(uniqueCandidates.slice(offset, offset + 3), 3, async (candidate) => (
-      enrichCandidate(candidate, querySpec, sessionId, cookies)
+      enrichCandidate(candidate, querySpec, sessionId, cookies, options)
     ));
     for (const result of batch) {
       creditsUsed += result.creditsUsed;
@@ -262,7 +263,9 @@ async function executeMercadoLivreScrapeDo(query) {
   const currentChampionCount = enriched.filter((item) => (
     item.price > 0 && item.soldQuantity >= minimumChampionSales()
   )).length;
-  const cachedVerifiedItems = currentChampionCount >= 3 ? [] : getCachedVerifiedItems(querySpec);
+  const cachedVerifiedItems = currentChampionCount >= 3 || !shouldUseScrapeDoItemCache(options)
+    ? []
+    : getCachedVerifiedItems(querySpec);
   itemCacheHits += cachedVerifiedItems.length;
   const enrichedPool = dedupe([...enriched, ...cachedVerifiedItems]);
 
@@ -335,8 +338,10 @@ async function executeMercadoLivreScrapeDo(query) {
   };
 }
 
-async function enrichCandidate(candidate, querySpec, sessionId, initialCookies) {
-  const cachedItem = getCachedMarketItem(candidate, querySpec);
+async function enrichCandidate(candidate, querySpec, sessionId, initialCookies, options = {}) {
+  const cachedItem = shouldUseScrapeDoItemCache(options)
+    ? getCachedMarketItem(candidate, querySpec)
+    : null;
   if (cachedItem) {
     return { item: cachedItem, creditsUsed: 0, cacheHit: true };
   }
@@ -544,6 +549,10 @@ function marketItemCacheTtlMs() {
     || 7,
   );
   return Math.max(1, Number.isFinite(days) ? days : 7) * 24 * 60 * 60 * 1000;
+}
+
+export function shouldUseScrapeDoItemCache(options = {}) {
+  return options.forceRefresh !== true;
 }
 
 async function requestPage(targetUrl, options = {}) {
