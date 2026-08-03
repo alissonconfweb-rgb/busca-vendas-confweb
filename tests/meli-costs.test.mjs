@@ -66,3 +66,66 @@ test("preserva o resultado quando nao ha token oficial", async () => {
   const result = { ok: true, items: [{ id: "MLB1", price: 10 }] };
   assert.equal(await enrichMercadoLivreCosts(result, {}), result);
 });
+
+test("calcula cada anuncio com os proprios dados sem valores especificos por produto", async () => {
+  const requested = [];
+  globalThis.fetch = async (url) => {
+    const requestUrl = new URL(String(url));
+    requested.push(requestUrl);
+    if (requestUrl.pathname.endsWith("/listing_prices")) {
+      const price = Number(requestUrl.searchParams.get("price"));
+      return Response.json([{
+        listing_type_id: "gold_special",
+        listing_type_name: "Classica",
+        sale_fee_amount: Number((price * 0.12).toFixed(2)),
+        sale_fee_details: { fixed_fee: 0, percentage_fee: 12, financing_add_on_fee: 0 },
+      }]);
+    }
+    const dimensions = requestUrl.searchParams.get("dimensions");
+    const weightGrams = Number(dimensions?.split(",").at(-1));
+    return Response.json({
+      coverage: {
+        all_country: {
+          list_cost: Number((weightGrams / 1000 * 5).toFixed(2)),
+          currency_id: "BRL",
+          billable_weight: weightGrams,
+        },
+      },
+    });
+  };
+
+  const products = [
+    { id: "MLB100", categoryId: "MLB-A", price: 49.9, sellerId: 10, weightKg: 0.3 },
+    { id: "MLB200", categoryId: "MLB-B", price: 138.81, sellerId: 20, weightKg: 5.9 },
+    { id: "MLB300", categoryId: "MLB-C", price: 899, sellerId: 30, weightKg: 15 },
+  ].map((item) => ({
+    ...item,
+    shippingMode: "me2",
+    logisticType: "drop_off",
+    freeShipping: item.price >= 79,
+  }));
+
+  const result = await enrichMercadoLivreCosts({ ok: true, items: products }, {
+    accessToken: "token",
+    siteId: "MLB",
+  });
+
+  assert.deepEqual(
+    result.items.map((item) => item.marketplaceFees.classic.saleFeeAmount),
+    [5.99, 16.66, 107.88],
+  );
+  assert.deepEqual(
+    result.items.map((item) => item.shippingQuote.amount),
+    [1.5, 29.5, 75],
+  );
+  assert.deepEqual(
+    requested.filter((url) => url.pathname.endsWith("/listing_prices"))
+      .map((url) => [url.searchParams.get("category_id"), url.searchParams.get("price")]),
+    [["MLB-A", "49.9"], ["MLB-B", "138.81"], ["MLB-C", "899"]],
+  );
+  assert.deepEqual(
+    requested.filter((url) => url.pathname.endsWith("/shipping_options/free"))
+      .map((url) => url.searchParams.get("dimensions")),
+    ["1x1x1,300", "1x1x1,5900", "1x1x1,15000"],
+  );
+});
