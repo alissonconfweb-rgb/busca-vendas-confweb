@@ -490,17 +490,33 @@ function parseImage(text) {
 
 function parsePrice(text) {
   const source = decodeText(text);
-  const currentPriceBlock = firstMatch(source, [
-    /<div[^>]+class=["'][^"']*poly-price__current[^"']*["'][\s\S]*?(?=<span[^>]+class=["'][^"']*poly-price__disc_label|<\/div>)/i,
-  ]);
-  const currentPrice = parseMercadoLivreMoney(currentPriceBlock);
-  if (currentPrice > 0) {
-    return currentPrice;
+  const currentPriceMarkers = [
+    /poly-price__current/i,
+    /ui-pdp-price__second-line/i,
+    /ui-pdp-price__main-container/i,
+  ];
+  for (const marker of currentPriceMarkers) {
+    const markerIndex = source.search(marker);
+    if (markerIndex < 0) {
+      continue;
+    }
+    const currentPrice = parseMercadoLivreMoney(source.slice(markerIndex, markerIndex + 2_000));
+    if (currentPrice > 0) {
+      return currentPrice;
+    }
   }
 
   const ariaPrice = parseMercadoLivreMoney(source, { requireNow: true });
   if (ariaPrice > 0) {
     return ariaPrice;
+  }
+
+  const structuredCurrentPrice = parseNumberValue(firstMatch(source, [
+    /"price"\s*:\s*\{\s*"type"\s*:\s*"standard"[\s\S]{0,240}?"amount"\s*:\s*([\d.]+)/i,
+    /"offers"\s*:\s*\{[\s\S]{0,400}?"price"\s*:\s*"?([\d.]+)"?/i,
+  ]));
+  if (Number.isFinite(structuredCurrentPrice) && structuredCurrentPrice > 0) {
+    return structuredCurrentPrice;
   }
 
   const value = parseNumberValue(firstMatch(source, [
@@ -597,16 +613,24 @@ function parseCategoryName(text) {
 function parseWeightKg(text) {
   const source = decodeText(text);
   const explicit = firstMatch(source, [
-    /"WEIGHT"[\s\S]{0,200}?"value_name"\s*:\s*"([^"]+)"/i,
-    /"PACKAGE_WEIGHT"[\s\S]{0,200}?"value_name"\s*:\s*"([^"]+)"/i,
+    /"id"\s*:\s*"WEIGHT"[\s\S]{0,500}?"value_name"\s*:\s*"([^"]+)"/i,
+    /"id"\s*:\s*"PACKAGE_WEIGHT"[\s\S]{0,500}?"value_name"\s*:\s*"([^"]+)"/i,
+    /"name"\s*:\s*"Peso"[\s\S]{0,300}?"value_name"\s*:\s*"([^"]+)"/i,
     /"package_weight"\s*:\s*"?([^",}]+(?:kg|kgs|g|gr|gramas?))"?/i,
+  ]);
+  const visibleText = normalizeHtmlText(source);
+  const weightSection = firstMatch(visibleText, [
+    /peso\s+e\s+dimens(?:ao|oes)[\s\S]{0,1200}?\bpeso\s+(\d+(?:[,.]\d+)?\s*(?:kg|kgs|g|gr|gramas?))/i,
+  ]);
+  const tableWeight = firstMatch(source, [
+    /<(?:th|td)[^>]*>\s*peso\s*<\/(?:th|td)>[\s\S]{0,500}?<(?:th|td)[^>]*>\s*(\d+(?:[,.]\d+)?\s*(?:kg|kgs|g|gr|gramas?))/i,
   ]);
   const nearbyLabel = firstMatch(source.slice(0, 240), [
     /(?:peso|weight)[^<>"']{0,80}?(\d+(?:[,.]\d+)?\s*(?:kg|kgs|g|gr|gramas?))/i,
   ]);
   // The page contains unrelated weights in recommendations and scripts. When
   // there is no explicit package attribute, only inspect the leading title.
-  const measures = extractMeasures(explicit || nearbyLabel || source.slice(0, 240));
+  const measures = extractMeasures(explicit || weightSection || tableWeight || nearbyLabel || source.slice(0, 240));
   const weight = measures.find((measure) => measure.kind === "weight");
   return weight ? Number((weight.value / 1000).toFixed(3)) : null;
 }

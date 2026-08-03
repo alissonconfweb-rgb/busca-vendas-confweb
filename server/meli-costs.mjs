@@ -71,15 +71,41 @@ export async function fetchOfficialShippingQuote(item, { accessToken } = {}) {
     return null;
   }
 
-  const params = new URLSearchParams({
-    item_id: itemId,
-    free_shipping: String(item.freeShipping ?? Number(item.price) >= 79),
-    verbose: "true",
-  });
-  const response = await mercadoLivreFetch(
-    `${API_BASE}/users/${sellerId}/shipping_options/free?${params}`,
-    accessToken,
-  );
+  const physicalWeightKg = Number(item?.weightKg || 0);
+  const shippingDimensions = normalizedShippingDimensions(item?.shippingDimensions);
+  const simulationDimensions = shippingDimensions
+    || (physicalWeightKg > 0 ? `1x1x1,${Math.round(physicalWeightKg * 1000)}` : "");
+  let response = null;
+  let calculationMode = "item_quote";
+  if (simulationDimensions && Number(item.price) > 0) {
+    const simulationParams = new URLSearchParams({
+      dimensions: simulationDimensions,
+      item_price: String(Number(item.price)),
+      listing_type_id: String(item.listingTypeId || LISTING_TYPES.classic),
+      mode: String(item.shippingMode || "me2"),
+      condition: "new",
+      logistic_type: String(item.logisticType || "drop_off"),
+      free_shipping: String(item.freeShipping ?? Number(item.price) >= 79),
+      verbose: "true",
+    });
+    response = await mercadoLivreFetch(
+      `${API_BASE}/users/${sellerId}/shipping_options/free?${simulationParams}`,
+      accessToken,
+    ).catch(() => null);
+    calculationMode = "sale_simulation";
+  }
+  if (!response) {
+    const itemParams = new URLSearchParams({
+      item_id: itemId,
+      free_shipping: String(item.freeShipping ?? Number(item.price) >= 79),
+      verbose: "true",
+    });
+    response = await mercadoLivreFetch(
+      `${API_BASE}/users/${sellerId}/shipping_options/free?${itemParams}`,
+      accessToken,
+    );
+    calculationMode = "item_quote";
+  }
   const coverage = response?.coverage?.all_country;
   const amount = Number(coverage?.list_cost);
   if (!Number.isFinite(amount) || amount < 0) {
@@ -94,6 +120,8 @@ export async function fetchOfficialShippingQuote(item, { accessToken } = {}) {
     currencyId: coverage?.currency_id || "BRL",
     source: "mercado_livre_official",
     approximate: true,
+    calculationMode,
+    inputWeightKg: physicalWeightKg > 0 ? physicalWeightKg : null,
     calculatedAt: new Date().toISOString(),
   };
 }
@@ -157,4 +185,9 @@ function shippingWeightGrams(item) {
   }
   const weightKg = Number(item?.weightKg);
   return Number.isFinite(weightKg) && weightKg > 0 ? Math.round(weightKg * 1000) : 0;
+}
+
+function normalizedShippingDimensions(value) {
+  const match = String(value || "").trim().match(/^(\d+)x(\d+)x(\d+),(\d+)$/i);
+  return match ? match[0] : "";
 }

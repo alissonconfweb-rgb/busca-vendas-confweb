@@ -123,6 +123,8 @@ type MarketplaceItem = {
     currencyId: string;
     source: "mercado_livre_official";
     approximate: true;
+    calculationMode?: "sale_simulation" | "item_quote";
+    inputWeightKg?: number | null;
     calculatedAt: string;
   };
 };
@@ -1969,10 +1971,14 @@ function buildProductMarginEstimate(
 }
 
 function officialShippingLabel(quote: MarketplaceItem["shippingQuote"]) {
-  const weight = Number(quote?.billableWeightKg || 0);
-  return weight > 0
-    ? `cotação oficial pré-venda • ${formatWeight(weight)}`
+  const inputWeight = Number(quote?.inputWeightKg || 0);
+  const weight = inputWeight > 0 ? inputWeight : Number(quote?.billableWeightKg || 0);
+  const prefix = quote?.calculationMode === "sale_simulation"
+    ? "cotação oficial para vender"
     : "cotação oficial pré-venda";
+  return weight > 0
+    ? `${prefix} • ${formatWeight(weight)}`
+    : prefix;
 }
 
 function estimateMercadoLivreFixedFee(price: number) {

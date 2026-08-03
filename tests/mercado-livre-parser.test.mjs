@@ -57,6 +57,20 @@ test("prioriza o preco promocional atual em vez do valor anterior", () => {
   assert.equal(parser.parsePrice(html), 44.9);
 });
 
+test("prioriza o preco promocional da pagina do anuncio", () => {
+  const html = `
+    <s><span class="andes-money-amount" aria-label="200 reais com 98 centavos">R$ 200,98</span></s>
+    <div class="ui-pdp-price__second-line">
+      <span class="andes-money-amount" aria-label="138 reais com 37 centavos">
+        <span class="andes-money-amount__fraction">138</span>
+        <span class="andes-money-amount__cents">37</span>
+      </span>
+    </div>
+  `;
+
+  assert.equal(parser.parsePrice(html), 138.37);
+});
+
 test("le os dados logisticos do proprio anuncio", () => {
   const html = `{
     "seller_id": 123456,
@@ -80,6 +94,20 @@ test("le os dados logisticos do proprio anuncio", () => {
 test("nao confunde pesos de recomendacoes distantes com o produto", () => {
   const html = `${"Escrivaninha industrial MDF ".padEnd(300, "x")} Peso recomendado 20 kg`;
   assert.equal(parser.parseWeightKg(html), null);
+});
+
+test("le o peso fisico sem confundir com a capacidade suportada", () => {
+  const html = `
+    <h2>Peso e dimensões</h2>
+    <table>
+      <tr><th>Profundidade</th><td>45 cm</td></tr>
+      <tr><th>Peso</th><td>5,9 kg</td></tr>
+    </table>
+    <h2>Outros</h2>
+    <table><tr><th>Capacidade em peso</th><td>20 kg</td></tr></table>
+  `;
+
+  assert.equal(parser.parseWeightKg(html), 5.9);
 });
 
 test("converte o selo publico de mais de 50 mil vendidos", () => {

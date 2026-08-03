@@ -31,7 +31,7 @@ test("anexa comissao e frete retornados pelos endpoints oficiais", async () => {
     }
     return Response.json({
       coverage: {
-        all_country: { list_cost: 38.45, currency_id: "BRL", billable_weight: 8000 },
+        all_country: { list_cost: 36.05, currency_id: "BRL", billable_weight: 6100 },
       },
     });
   };
@@ -46,15 +46,20 @@ test("anexa comissao e frete retornados pelos endpoints oficiais", async () => {
       shippingMode: "me2",
       logisticType: "drop_off",
       freeShipping: true,
+      weightKg: 5.9,
     }],
   }, { accessToken: "token", siteId: "MLB" });
 
   assert.equal(result.items[0].marketplaceFees.classic.saleFeeAmount, 15.96);
   assert.equal(result.items[0].marketplaceFees.classic.percentageFee, 11.5);
   assert.equal(result.items[0].marketplaceFees.premium.saleFeeAmount, 22.9);
-  assert.equal(result.items[0].shippingQuote.amount, 38.45);
-  assert.equal(result.items[0].shippingQuote.billableWeightKg, 8);
+  assert.equal(result.items[0].shippingQuote.amount, 36.05);
+  assert.equal(result.items[0].shippingQuote.billableWeightKg, 6.1);
+  assert.equal(result.items[0].shippingQuote.inputWeightKg, 5.9);
+  assert.equal(result.items[0].shippingQuote.calculationMode, "sale_simulation");
   assert.equal(requested.length, 2);
+  assert.match(requested[1], /item_price=138.81/);
+  assert.match(requested[1], /dimensions=1x1x1%2C5900/);
 });
 
 test("preserva o resultado quando nao ha token oficial", async () => {

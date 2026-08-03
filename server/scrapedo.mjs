@@ -13,8 +13,8 @@ const DEFAULT_ENDPOINT = "https://api.scrape.do/";
 const DEFAULT_DETAIL_LIMIT = 36;
 const DEFAULT_SEARCH_PAGES = 4;
 const EMERGING_MARKET_SAMPLE_SIZE = 12;
-const MARKET_ITEM_METADATA_VERSION = 2;
-const SALES_RANKING_STRATEGY = "visible_sales_v2";
+const MARKET_ITEM_METADATA_VERSION = 3;
+const SALES_RANKING_STRATEGY = "visible_sales_v3";
 const activeSearches = new Map();
 const providerQueue = [];
 let activeProviderSearches = 0;
@@ -512,6 +512,7 @@ function getCachedVerifiedItems(querySpec) {
         item.title
         && Number(item.price) > 0
         && Number(item.soldQuantity) > 0
+        && Number(item.metadataVersion || 0) >= MARKET_ITEM_METADATA_VERSION
         && matchesProductQuery(item.title, querySpec).ok
       ) {
         items.push(item);
