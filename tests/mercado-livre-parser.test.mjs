@@ -56,3 +56,28 @@ test("prioriza o preco promocional atual em vez do valor anterior", () => {
 
   assert.equal(parser.parsePrice(html), 44.9);
 });
+
+test("le os dados logisticos do proprio anuncio", () => {
+  const html = `{
+    "seller_id": 123456,
+    "listing_type_id": "gold_special",
+    "shipping": {
+      "mode": "me2",
+      "dimensions": "12x80x95,8000",
+      "free_shipping": true,
+      "logistic_type": "drop_off"
+    }
+  }`;
+
+  assert.equal(parser.parseSellerId(html), 123456);
+  assert.equal(parser.parseListingTypeId(html), "gold_special");
+  assert.equal(parser.parseShippingMode(html), "me2");
+  assert.equal(parser.parseLogisticType(html), "drop_off");
+  assert.equal(parser.parseShippingDimensions(html), "12x80x95,8000");
+  assert.equal(parser.parseFreeShipping(html), true);
+});
+
+test("nao confunde pesos de recomendacoes distantes com o produto", () => {
+  const html = `${"Escrivaninha industrial MDF ".padEnd(300, "x")} Peso recomendado 20 kg`;
+  assert.equal(parser.parseWeightKg(html), null);
+});

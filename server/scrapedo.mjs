@@ -409,6 +409,12 @@ async function enrichCandidate(candidate, querySpec, sessionId, initialCookies, 
     categoryId: parser.parseCategoryId(combinedHtml) || candidate.categoryId || "",
     categoryName: parser.parseCategoryName(combinedHtml) || candidate.categoryName || "",
     weightKg: parser.parseWeightKg(`${title} ${combinedHtml}`) || candidate.weightKg || null,
+    sellerId: parser.parseSellerId(combinedHtml) || candidate.sellerId || null,
+    listingTypeId: parser.parseListingTypeId(combinedHtml) || candidate.listingTypeId || "",
+    shippingMode: parser.parseShippingMode(combinedHtml) || candidate.shippingMode || "",
+    logisticType: parser.parseLogisticType(combinedHtml) || candidate.logisticType || "",
+    shippingDimensions: parser.parseShippingDimensions(combinedHtml) || candidate.shippingDimensions || "",
+    freeShipping: parser.parseFreeShipping(combinedHtml) ?? candidate.freeShipping ?? null,
   };
 
   const validItem = matchesProductQuery(item.title, querySpec).ok ? item : null;
@@ -646,6 +652,12 @@ function mapItem(item) {
     categoryId: item.categoryId || "",
     categoryName: item.categoryName || "",
     weightKg: item.weightKg || null,
+    sellerId: item.sellerId || null,
+    listingTypeId: item.listingTypeId || "",
+    shippingMode: item.shippingMode || "",
+    logisticType: item.logisticType || "",
+    shippingDimensions: item.shippingDimensions || "",
+    freeShipping: item.freeShipping ?? null,
   };
 }
 

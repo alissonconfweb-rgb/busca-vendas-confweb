@@ -66,6 +66,15 @@ type SettingsMap = Record<string, string>;
 
 type MercadoLivreListingType = "classic" | "premium";
 
+type MarketplaceFeeQuote = {
+  listingTypeId: string;
+  listingTypeName: string;
+  saleFeeAmount: number;
+  percentageFee: number;
+  fixedFee: number;
+  financingFee: number;
+};
+
 type MarketplaceItem = {
   id: string;
   title: string;
@@ -82,6 +91,20 @@ type MarketplaceItem = {
   categoryId?: string;
   categoryName?: string;
   weightKg?: number | null;
+  marketplaceFees?: {
+    source: "mercado_livre_official";
+    calculatedAt: string;
+    classic?: MarketplaceFeeQuote;
+    premium?: MarketplaceFeeQuote;
+  };
+  shippingQuote?: {
+    amount: number;
+    billableWeightKg?: number | null;
+    currencyId: string;
+    source: "mercado_livre_official";
+    approximate: true;
+    calculatedAt: string;
+  };
 };
 
 type MarginEstimate = {
@@ -97,6 +120,8 @@ type MarginEstimate = {
   marginAfterCost: number;
   percentBeforeCost: number;
   percentAfterCost: number;
+  officialFee: boolean;
+  officialShipping: boolean;
 };
 
 type SearchResult = {
@@ -1770,9 +1795,9 @@ function ProductMarginCard({ item, locked, onPlans }: { item: MarketplaceItem; l
 
           <div className="margin-grid">
             <SimpleMarginStat
-              label="Comissão Mercado Livre"
+              label={estimate.officialFee ? "Comissão oficial" : "Comissão estimada"}
               value={money.format(estimate.commission)}
-              hint={`${estimate.marketplaceRate.toFixed(1).replace(".", ",")}% sobre o preço`}
+              hint={`${estimate.marketplaceRate.toFixed(1).replace(".", ",")}% sobre o preço${estimate.officialFee ? " • Mercado Livre" : ""}`}
             />
             <SimpleMarginStat
               label="Tarifa fixa"
@@ -1780,7 +1805,7 @@ function ProductMarginCard({ item, locked, onPlans }: { item: MarketplaceItem; l
               hint={estimate.fixedFee > 0 ? "conforme a faixa de preço" : "não se aplica nesta faixa"}
             />
             <SimpleMarginStat
-              label="Frete estimado"
+              label={estimate.officialShipping ? "Frete cotado" : "Frete estimado"}
               value={money.format(estimate.shippingFee)}
               hint={estimate.shippingLabel}
             />
@@ -1881,11 +1906,19 @@ function buildProductMarginEstimate(
   const profile = inferMarketplaceProfile(`${item.categoryName || ""} ${item.title}`);
   const category = item.categoryName || profile.category;
   const estimatedWeightKg = resolveProductWeightKg(item.weightKg, profile.weightKg);
-  const marketplaceRate = listingType === "premium" ? profile.premiumRate : profile.classicRate;
-  const commission = item.price * (marketplaceRate / 100);
-  const fixedFee = estimateMercadoLivreFixedFee(item.price);
-  const shippingFee = estimateMercadoLivreShippingFee(item.price, estimatedWeightKg);
-  const totalMarketplaceFees = commission + fixedFee + shippingFee;
+  const officialFee = item.marketplaceFees?.[listingType];
+  const marketplaceRate = officialFee?.percentageFee
+    ?? (listingType === "premium" ? profile.premiumRate : profile.classicRate);
+  const fixedFee = officialFee?.fixedFee ?? estimateMercadoLivreFixedFee(item.price);
+  const commission = officialFee
+    ? Math.max(0, officialFee.saleFeeAmount - fixedFee)
+    : item.price * (marketplaceRate / 100);
+  const officialShipping = item.shippingQuote?.source === "mercado_livre_official";
+  const shippingFee = officialShipping
+    ? Number(item.shippingQuote?.amount || 0)
+    : estimateMercadoLivreShippingFee(item.price, estimatedWeightKg);
+  const saleFees = officialFee?.saleFeeAmount ?? commission + fixedFee;
+  const totalMarketplaceFees = saleFees + shippingFee;
   const rawMarginBeforeCost = item.price - totalMarketplaceFees;
   const rawMarginAfterCost = rawMarginBeforeCost - manualCost;
   const marginBeforeCost = Math.max(0, rawMarginBeforeCost);
@@ -1893,7 +1926,9 @@ function buildProductMarginEstimate(
 
   return {
     category,
-    shippingLabel: mercadoLivreShippingLabel(item.price, estimatedWeightKg),
+    shippingLabel: officialShipping
+      ? officialShippingLabel(item.shippingQuote)
+      : mercadoLivreShippingLabel(item.price, estimatedWeightKg),
     estimatedWeightKg,
     marketplaceRate,
     commission,
@@ -1904,7 +1939,16 @@ function buildProductMarginEstimate(
     marginAfterCost,
     percentBeforeCost: item.price ? (marginBeforeCost / item.price) * 100 : 0,
     percentAfterCost: item.price ? (marginAfterCost / item.price) * 100 : 0,
+    officialFee: Boolean(officialFee),
+    officialShipping,
   };
+}
+
+function officialShippingLabel(quote: MarketplaceItem["shippingQuote"]) {
+  const weight = Number(quote?.billableWeightKg || 0);
+  return weight > 0
+    ? `cotação oficial pré-venda • ${formatWeight(weight)}`
+    : "cotação oficial pré-venda";
 }
 
 function estimateMercadoLivreFixedFee(price: number) {

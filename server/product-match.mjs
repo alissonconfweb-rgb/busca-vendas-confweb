@@ -18,6 +18,33 @@ const STOPWORDS = new Set([
 ]);
 
 const BUNDLE_WORDS = ["kit", "combo", "conjunto", "pack", "pacote"];
+const OPTIONAL_MODIFIER_WORDS = new Set([
+  "aco",
+  "aluminio",
+  "borracha",
+  "couro",
+  "ferro",
+  "madeira",
+  "mdf",
+  "mdp",
+  "metal",
+  "plastico",
+  "tecido",
+  "vidro",
+]);
+const COMPONENT_WORDS = new Set([
+  "base",
+  "estrutura",
+  "gaveta",
+  "peca",
+  "perna",
+  "pernas",
+  "pe",
+  "pes",
+  "prateleira",
+  "suporte",
+  "tampo",
+]);
 const TOKEN_CORRECTIONS = new Map([
   ["bluetooh", "bluetooth"],
   ["bluethoot", "bluetooth"],
@@ -26,6 +53,9 @@ const TOKEN_CORRECTIONS = new Map([
   ["bluetoot", "bluetooth"],
   ["blutooht", "bluetooth"],
   ["blutooth", "bluetooth"],
+  ["escrinaninha", "escrivaninha"],
+  ["escrivanina", "escrivaninha"],
+  ["escrivaninhaa", "escrivaninha"],
   ["langerie", "lingerie"],
   ["rpk", "npk"],
 ]);
@@ -74,10 +104,17 @@ export function matchesProductQuery(title, specOrQuery) {
     return { ok: false, reason: "Busca sem termos validos." };
   }
 
-  for (const token of spec.tokens) {
+  const requiredTokens = spec.tokens.filter((token) => !OPTIONAL_MODIFIER_WORDS.has(token));
+  const tokensToMatch = requiredTokens.length ? requiredTokens : spec.tokens;
+
+  for (const token of tokensToMatch) {
     if (!tokenMatchesTitle(token, titleTokens, normalizedTitle)) {
       return { ok: false, reason: `Termo ausente: ${token}` };
     }
+  }
+
+  if (isUnrequestedComponent(title, spec)) {
+    return { ok: false, reason: "Resultado parece uma peca, nao o produto completo." };
   }
 
   if (spec.measures.length && !hasCompatibleMeasures(title, spec.measures)) {
@@ -191,6 +228,15 @@ function hasBundleSignal(text) {
     measurable.includes("+") ||
     /\b\d+\s*x\b/i.test(measurable)
   );
+}
+
+function isUnrequestedComponent(title, spec) {
+  const titleTokens = tokenizeProductText(title);
+  const firstTitleToken = titleTokens[0] || "";
+  if (!COMPONENT_WORDS.has(firstTitleToken)) {
+    return false;
+  }
+  return !spec.tokens.some((token) => COMPONENT_WORDS.has(token));
 }
 
 function hasUnrequestedSupplementTerms(title, normalizedQuery) {

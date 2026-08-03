@@ -216,6 +216,12 @@ async function enrichItem(item, querySpec, requestContext) {
     categoryId,
     categoryName,
     weightKg,
+    sellerId: parseSellerId(combinedText) || item.sellerId || null,
+    listingTypeId: parseListingTypeId(combinedText) || item.listingTypeId || "",
+    shippingMode: parseShippingMode(combinedText) || item.shippingMode || "",
+    logisticType: parseLogisticType(combinedText) || item.logisticType || "",
+    shippingDimensions: parseShippingDimensions(combinedText) || item.shippingDimensions || "",
+    freeShipping: parseFreeShipping(combinedText) ?? item.freeShipping ?? null,
   };
 }
 
@@ -324,6 +330,12 @@ function extractSearchItems(html) {
         categoryId: parseCategoryId(block),
         categoryName: parseCategoryName(block),
         weightKg: parseWeightKg(`${title} ${block}`),
+        sellerId: parseSellerId(block),
+        listingTypeId: parseListingTypeId(block),
+        shippingMode: parseShippingMode(block),
+        logisticType: parseLogisticType(block),
+        shippingDimensions: parseShippingDimensions(block),
+        freeShipping: parseFreeShipping(block),
         bestSeller: /mais vendido/i.test(block),
         isAd: /is_advertising=true|promoted|patrocinado/i.test(block),
         position: index + 1,
@@ -358,6 +370,12 @@ function extractStructuredProducts(productList) {
         categoryId: "",
         categoryName: productList?.categoryName || "",
         weightKg: parseWeightKg(`${title} ${JSON.stringify(product.additionalProperties || [])}`),
+        sellerId: null,
+        listingTypeId: "",
+        shippingMode: "",
+        logisticType: "",
+        shippingDimensions: "",
+        freeShipping: null,
         bestSeller: false,
         isAd: /click1\.mercadolivre\.com\.br/i.test(href),
         position: index + 1,
@@ -581,11 +599,61 @@ function parseWeightKg(text) {
   const explicit = firstMatch(source, [
     /"WEIGHT"[\s\S]{0,200}?"value_name"\s*:\s*"([^"]+)"/i,
     /"PACKAGE_WEIGHT"[\s\S]{0,200}?"value_name"\s*:\s*"([^"]+)"/i,
-    /(?:peso|weight)[^<>"']{0,80}?(\d+(?:[,.]\d+)?)\s*(kg|kgs|g|gr|gramas?)/i,
+    /"package_weight"\s*:\s*"?([^",}]+(?:kg|kgs|g|gr|gramas?))"?/i,
   ]);
-  const measures = extractMeasures(explicit || source);
+  const nearbyLabel = firstMatch(source.slice(0, 240), [
+    /(?:peso|weight)[^<>"']{0,80}?(\d+(?:[,.]\d+)?\s*(?:kg|kgs|g|gr|gramas?))/i,
+  ]);
+  // The page contains unrelated weights in recommendations and scripts. When
+  // there is no explicit package attribute, only inspect the leading title.
+  const measures = extractMeasures(explicit || nearbyLabel || source.slice(0, 240));
   const weight = measures.find((measure) => measure.kind === "weight");
   return weight ? Number((weight.value / 1000).toFixed(3)) : null;
+}
+
+function parseSellerId(text) {
+  const value = firstMatch(decodeText(text), [
+    /"seller_id"\s*:\s*"?(\d+)"?/i,
+    /"sellerId"\s*:\s*"?(\d+)"?/i,
+    /"seller"\s*:\s*\{[\s\S]{0,160}?"id"\s*:\s*"?(\d+)"?/i,
+  ]);
+  return value ? Number(value) : null;
+}
+
+function parseListingTypeId(text) {
+  return firstMatch(decodeText(text), [
+    /"listing_type_id"\s*:\s*"([^"]+)"/i,
+    /"listingTypeId"\s*:\s*"([^"]+)"/i,
+  ]);
+}
+
+function parseShippingMode(text) {
+  return firstMatch(decodeText(text), [
+    /"shipping"\s*:\s*\{[\s\S]{0,500}?"mode"\s*:\s*"([^"]+)"/i,
+    /"shipping_mode"\s*:\s*"([^"]+)"/i,
+  ]);
+}
+
+function parseLogisticType(text) {
+  return firstMatch(decodeText(text), [
+    /"shipping"\s*:\s*\{[\s\S]{0,700}?"logistic_type"\s*:\s*"([^"]+)"/i,
+    /"logistic_type"\s*:\s*"([^"]+)"/i,
+  ]);
+}
+
+function parseShippingDimensions(text) {
+  return firstMatch(decodeText(text), [
+    /"shipping"\s*:\s*\{[\s\S]{0,700}?"dimensions"\s*:\s*"([^"]+)"/i,
+    /"dimensions"\s*:\s*"(\d+x\d+x\d+,\d+)"/i,
+  ]);
+}
+
+function parseFreeShipping(text) {
+  const value = firstMatch(decodeText(text), [
+    /"shipping"\s*:\s*\{[\s\S]{0,700}?"free_shipping"\s*:\s*(true|false)/i,
+    /"free_shipping"\s*:\s*(true|false)/i,
+  ]);
+  return value ? value.toLowerCase() === "true" : null;
 }
 
 async function discoverCategory(title) {
@@ -865,9 +933,15 @@ export const mercadoLivreHtmlParser = Object.freeze({
   normalizeMercadoLivreUrl,
   parseCategoryId,
   parseCategoryName,
+  parseFreeShipping,
   parseImage,
+  parseListingTypeId,
+  parseLogisticType,
   parsePrice,
   parseSalesFromText,
+  parseSellerId,
+  parseShippingDimensions,
+  parseShippingMode,
   parseTitle,
   parseTotalAvailable,
   parseWeightKg,

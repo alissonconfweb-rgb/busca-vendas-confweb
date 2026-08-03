@@ -14,7 +14,8 @@ import {
   settingsObject,
   userFromSession,
 } from "./db.mjs";
-import { buildMeliAuthorizationUrl, createMeliPkcePair, disconnectMeliOAuth, exchangeMeliAuthorizationCode, getMeliRedirectUri, searchMercadoLivre, testMercadoLivreCatalog, testMercadoLivreConnection } from "./meli.mjs";
+import { buildMeliAuthorizationUrl, createMeliPkcePair, disconnectMeliOAuth, exchangeMeliAuthorizationCode, getMeliRedirectUri, getValidMeliAccessToken, searchMercadoLivre, testMercadoLivreCatalog, testMercadoLivreConnection } from "./meli.mjs";
+import { enrichMercadoLivreCosts } from "./meli-costs.mjs";
 import { shouldUseMarketEstimate } from "./market-estimate.mjs";
 import { bootstrapAdminFromEnv } from "./bootstrap-admin.mjs";
 import { syncMeliSettingsFromEnv, validateMeliSettingsInput, isValidMeliClientId, resolveMeliRedirectUri } from "./meli-config.mjs";
@@ -29,7 +30,7 @@ import {
   syncScrapeDoSettingsFromEnv,
   testScrapeDoConnection,
 } from "./scrapedo.mjs";
-import { buildProductQuerySpec, normalizedProductKey, normalizeProductSearchQuery } from "./product-match.mjs";
+import { buildProductQuerySpec, matchesProductQuery, normalizedProductKey, normalizeProductSearchQuery } from "./product-match.mjs";
 import {
   asaasWebhookUrl,
   billingBlocksSearch,
@@ -579,6 +580,14 @@ async function resolveMarketSearch(query, options = {}) {
     }
   }
 
+  if (isBillableSearchResult(result) && result.items.some((item) => !item.marketplaceFees)) {
+    const accessToken = await getValidMeliAccessToken();
+    result = await enrichMercadoLivreCosts(result, {
+      accessToken,
+      siteId: process.env.MELI_SITE_ID || getSetting("meli_site_id") || "MLB",
+    });
+  }
+
   return result;
 }
 
@@ -634,7 +643,7 @@ function getFreshCachedSearchResult(query) {
   }
 
   const payload = parseSearchPayload(row.payload);
-  if (!isBillableSearchResult(payload)) {
+  if (!isBillableSearchResult(payload) || !cachedResultMatchesQuery(payload, query)) {
     return null;
   }
 
@@ -669,7 +678,7 @@ function getFreshHistoryCachedSearchResult(query, ttlMs) {
     }
 
     const payload = parseSearchPayload(row.payload);
-    if (!isBillableSearchResult(payload)) {
+    if (!isBillableSearchResult(payload) || !cachedResultMatchesQuery(payload, query)) {
       continue;
     }
 
@@ -696,7 +705,7 @@ function getStaleCachedSearchResult(query) {
 
   const direct = findMarketSearchCacheRow(query);
   if (direct) {
-    const cached = staleSearchResultFromRow(direct, direct.updated_at, freshTtlMs, staleTtlMs);
+    const cached = staleSearchResultFromRow(direct, direct.updated_at, freshTtlMs, staleTtlMs, query);
     if (cached) {
       return cached;
     }
@@ -713,7 +722,7 @@ function getStaleCachedSearchResult(query) {
     if (marketCacheKey(row.query) !== key) {
       continue;
     }
-    const cached = staleSearchResultFromRow(row, row.created_at, freshTtlMs, staleTtlMs);
+    const cached = staleSearchResultFromRow(row, row.created_at, freshTtlMs, staleTtlMs, query);
     if (cached) {
       return cached;
     }
@@ -721,7 +730,7 @@ function getStaleCachedSearchResult(query) {
   return null;
 }
 
-function staleSearchResultFromRow(row, timestamp, freshTtlMs, staleTtlMs) {
+function staleSearchResultFromRow(row, timestamp, freshTtlMs, staleTtlMs, query) {
   const updatedAt = Date.parse(`${String(timestamp).replace(" ", "T")}Z`);
   const age = Date.now() - updatedAt;
   if (!Number.isFinite(updatedAt) || age <= freshTtlMs || age > staleTtlMs) {
@@ -729,7 +738,7 @@ function staleSearchResultFromRow(row, timestamp, freshTtlMs, staleTtlMs) {
   }
 
   const payload = parseSearchPayload(row.payload);
-  if (!isBillableSearchResult(payload)) {
+  if (!isBillableSearchResult(payload) || !cachedResultMatchesQuery(payload, query)) {
     return null;
   }
 
@@ -743,6 +752,14 @@ function staleSearchResultFromRow(row, timestamp, freshTtlMs, staleTtlMs) {
     providerCreditsSaved: Number(payload.providerCreditsUsed || 0),
     providerCreditsUsed: 0,
   };
+}
+
+function cachedResultMatchesQuery(result, query) {
+  if (!Array.isArray(result?.items) || result.items.length < 3) {
+    return false;
+  }
+  const spec = buildProductQuerySpec(query);
+  return result.items.slice(0, 3).every((item) => matchesProductQuery(item?.title || "", spec).ok);
 }
 
 function scheduleMarketSearchRefresh(query) {

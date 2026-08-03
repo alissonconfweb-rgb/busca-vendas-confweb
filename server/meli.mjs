@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { getSetting, setSetting } from "./db.mjs";
 import { searchMercadoLivreCatalog } from "./meli-catalog.mjs";
+import { enrichMercadoLivreCosts } from "./meli-costs.mjs";
 import { searchMercadoLivreScraper } from "./meli-scraper.mjs";
 import { isOxylabsConfigured, searchMercadoLivreOxylabs } from "./oxylabs.mjs";
 import { isProxyConfigured, isProxyEnabled, proxyPlaywrightConfig } from "./proxy.mjs";
@@ -37,6 +38,15 @@ function mapItem(item) {
     soldQuantity,
     revenue: Number((price * soldQuantity).toFixed(2)),
     permalink: item.permalink,
+    categoryId: item.category_id || "",
+    categoryName: "",
+    weightKg: null,
+    sellerId: item.seller?.id || item.seller_id || null,
+    listingTypeId: item.listing_type_id || "",
+    shippingMode: item.shipping?.mode || "",
+    logisticType: item.shipping?.logistic_type || "",
+    shippingDimensions: item.shipping?.dimensions || "",
+    freeShipping: item.shipping?.free_shipping ?? null,
   };
 }
 
@@ -46,9 +56,10 @@ export async function searchMercadoLivre(query, options = {}) {
   );
   const siteId = process.env.MELI_SITE_ID || getSetting("meli_site_id") || "MLB";
   let strictFailure = null;
+  let accessToken = null;
 
   if (provider.useMercadoLivre) {
-    let accessToken = await getValidMeliAccessToken();
+    accessToken = await getValidMeliAccessToken();
     if (!accessToken) {
       strictFailure = makeStrictFailure(
         query,
@@ -62,7 +73,7 @@ export async function searchMercadoLivre(query, options = {}) {
         );
         if (hasCompleteSalesTop3(catalog)) {
           setSetting("meli_last_error", "");
-          return catalog;
+          return enrichMercadoLivreCosts(catalog, { accessToken, siteId });
         }
         strictFailure = catalog;
         setSetting("meli_last_error", catalog.message || "O catálogo oficial não completou o Top 3 com vendas.");
@@ -78,7 +89,7 @@ export async function searchMercadoLivre(query, options = {}) {
       accessToken = officialSearch.accessToken || accessToken;
       if (hasCompleteSalesTop3(officialSearch.result)) {
         setSetting("meli_last_error", "");
-        return officialSearch.result;
+        return enrichMercadoLivreCosts(officialSearch.result, { accessToken, siteId });
       }
       strictFailure = officialSearch.result || strictFailure;
       setSetting(
@@ -94,7 +105,8 @@ export async function searchMercadoLivre(query, options = {}) {
         const scrapeDo = await searchMercadoLivreScrapeDo(query, options);
         if (hasCompleteSalesTop3(scrapeDo)) {
           setSetting("scrapedo_last_error", "");
-          return scrapeDo;
+          accessToken ||= await getValidMeliAccessToken();
+          return enrichMercadoLivreCosts(scrapeDo, { accessToken, siteId });
         }
         strictFailure = scrapeDo;
         setSetting("scrapedo_last_error", scrapeDo.message || "Scrape.do não completou o Top 3 com vendas públicas.");
