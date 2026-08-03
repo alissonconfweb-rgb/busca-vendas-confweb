@@ -758,6 +758,12 @@ function cachedResultMatchesQuery(result, query) {
   if (!Array.isArray(result?.items) || result.items.length < 3) {
     return false;
   }
+  if (
+    result.source === "scrapedo_mercado_livre"
+    && result.rankingStrategy !== "visible_sales_v2"
+  ) {
+    return false;
+  }
   const spec = buildProductQuerySpec(query);
   return result.items.slice(0, 3).every((item) => matchesProductQuery(item?.title || "", spec).ok);
 }

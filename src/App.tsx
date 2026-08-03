@@ -91,6 +91,7 @@ type MarketplaceItem = {
   categoryId?: string;
   categoryName?: string;
   weightKg?: number | null;
+  shippingDimensions?: string;
   marketplaceFees?: {
     source: "mercado_livre_official";
     calculatedAt: string;
@@ -1905,7 +1906,11 @@ function buildProductMarginEstimate(
 ): MarginEstimate {
   const profile = inferMarketplaceProfile(`${item.categoryName || ""} ${item.title}`);
   const category = item.categoryName || profile.category;
-  const estimatedWeightKg = resolveProductWeightKg(item.weightKg, profile.weightKg);
+  const estimatedWeightKg = resolveProductWeightKg(
+    item.weightKg,
+    profile.weightKg,
+    item.shippingDimensions,
+  );
   const officialFee = item.marketplaceFees?.[listingType];
   const marketplaceRate = officialFee?.percentageFee
     ?? (listingType === "premium" ? profile.premiumRate : profile.classicRate);
@@ -1973,7 +1978,7 @@ function mercadoLivreShippingLabel(price: number, weightKg: number) {
   if (price < 79) {
     return "sem frete grátis obrigatório";
   }
-  return `${formatWeight(weightKg)} usado no cálculo`;
+  return `Tabela Mercado Livre • faixa de ${formatWeight(weightKg)}`;
 }
 
 function mercadoLivreShippingPriceColumn(price: number) {
@@ -1984,9 +1989,16 @@ function mercadoLivreShippingPriceColumn(price: number) {
   return 4;
 }
 
-function resolveProductWeightKg(weightKg: number | null | undefined, fallbackWeightKg: number) {
+function resolveProductWeightKg(
+  weightKg: number | null | undefined,
+  fallbackWeightKg: number,
+  shippingDimensions = "",
+) {
   const parsedWeight = Number(weightKg);
   if (!Number.isFinite(parsedWeight) || parsedWeight < 0.05) {
+    return fallbackWeightKg;
+  }
+  if (!shippingDimensions && fallbackWeightKg >= 5 && parsedWeight > fallbackWeightKg * 2) {
     return fallbackWeightKg;
   }
   return Math.min(parsedWeight, 30);
@@ -2004,7 +2016,10 @@ function inferMarketplaceProfile(title: string) {
   if (hasAny(normalized, ["creatina", "whey", "suplemento", "vitamina", "maca peruana", "capsula", "proteina"])) {
     return { category: "Suplementos", classicRate: 12, premiumRate: 17, weightKg: 1.1 };
   }
-  if (hasAny(normalized, ["buque", "bouquet", "rosa", "flor", "arranjo", "decoracao", "artificial"])) {
+  if (hasAny(normalized, ["escrivaninha", "mesa de escritorio", "mesa home office", "mesa de computador"])) {
+    return { category: "Móveis", classicRate: 12, premiumRate: 17, weightKg: 8 };
+  }
+  if (hasAny(normalized, ["buque", "bouquet", "rosa", "flor", "arranjo floral", "flor artificial"])) {
     return { category: "Casa e decoração", classicRate: 12, premiumRate: 17, weightKg: 0.3 };
   }
   if (hasAny(normalized, ["mochila", "bolsa", "mala"])) {

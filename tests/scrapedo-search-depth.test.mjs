@@ -10,6 +10,7 @@ process.env.DB_PATH = join(tempDir, "scrapedo-depth.sqlite");
 const { db, initDatabase, setSetting } = await import("../server/db.mjs");
 const {
   ensureScrapeDoSearchDepth,
+  rankCandidatesByPublicSales,
   scrapeDoSearchPolicy,
   shouldUseScrapeDoItemCache,
 } = await import("../server/scrapedo.mjs");
@@ -49,4 +50,15 @@ test("ignora o cache individual de anuncios em uma atualizacao forcada", () => {
   assert.equal(shouldUseScrapeDoItemCache(), true);
   assert.equal(shouldUseScrapeDoItemCache({ forceRefresh: false }), true);
   assert.equal(shouldUseScrapeDoItemCache({ forceRefresh: true }), false);
+});
+
+test("ordena toda a listagem pelas vendas antes de escolher os tres campeoes", () => {
+  const ranked = rankCandidatesByPublicSales([
+    { id: "a", position: 1, soldQuantity: 10_000 },
+    { id: "b", position: 2, soldQuantity: 5_000 },
+    { id: "c", position: 3, soldQuantity: 1_000 },
+    { id: "d", position: 8, soldQuantity: 50_000 },
+  ]);
+
+  assert.deepEqual(ranked.slice(0, 3).map((item) => item.id), ["d", "a", "b"]);
 });

@@ -81,3 +81,7 @@ test("nao confunde pesos de recomendacoes distantes com o produto", () => {
   const html = `${"Escrivaninha industrial MDF ".padEnd(300, "x")} Peso recomendado 20 kg`;
   assert.equal(parser.parseWeightKg(html), null);
 });
+
+test("converte o selo publico de mais de 50 mil vendidos", () => {
+  assert.equal(parser.parseSalesFromText("4.8 | +50 mil vendidos"), 50_000);
+});
