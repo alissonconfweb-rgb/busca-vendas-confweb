@@ -3897,6 +3897,102 @@ button.learn-card span {
   line-height: 1.45;
 }
 
+.meli-diagnostic {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid #f2c49f;
+  border-left: 4px solid var(--orange);
+  border-radius: 8px;
+  background: #fffaf6;
+}
+
+.meli-diagnostic.is-ready {
+  border-color: #a9dcc5;
+  border-left-color: #0c8659;
+  background: #f5fcf8;
+}
+
+.meli-diagnostic-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.meli-diagnostic-heading span,
+.meli-diagnostic-heading b {
+  color: #6a7789;
+  font-size: 0.78rem;
+}
+
+.meli-diagnostic-heading h4 {
+  margin: 3px 0 0;
+  font-size: 1.05rem;
+}
+
+.meli-diagnostic-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.diagnostic-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  min-width: 0;
+  padding: 11px;
+  border: 1px solid #dce6ef;
+  border-radius: 7px;
+  background: #fff;
+}
+
+.diagnostic-check > svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.diagnostic-check div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.diagnostic-check strong,
+.diagnostic-check small {
+  overflow-wrap: anywhere;
+}
+
+.diagnostic-check small {
+  color: #667488;
+  line-height: 1.35;
+}
+
+.diagnostic-check.is-ok > svg {
+  color: #0c8659;
+}
+
+.diagnostic-check.is-blocked > svg {
+  color: #d76019;
+}
+
+.meli-diagnostic > p,
+.meli-diagnostic > small {
+  margin: 0;
+}
+
+@media (max-width: 720px) {
+  .meli-diagnostic-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .meli-diagnostic-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .provider-priority-note {
   border-left-color: #087a48;
   color: #086b42;

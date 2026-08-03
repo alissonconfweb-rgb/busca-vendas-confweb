@@ -521,6 +521,161 @@ export async function testMercadoLivreConnection() {
   };
 }
 
+export async function diagnoseMercadoLivreIntegration(query = "escrivaninha de mdf") {
+  const accessToken = await getValidMeliAccessToken();
+  if (!accessToken) {
+    throw new Error("Autorize a conta do Mercado Livre antes de executar o diagnóstico oficial.");
+  }
+
+  const siteId = process.env.MELI_SITE_ID || getSetting("meli_site_id") || "MLB";
+  const normalizedQuery = normalizeProductSearchQuery(query);
+  const encodedQuery = encodeURIComponent(normalizedQuery);
+  const [account, searchBasic, searchSorted, products, discovery] = await Promise.all([
+    diagnosticFetchJson("https://api.mercadolibre.com/users/me", accessToken),
+    diagnosticFetchJson(
+      `https://api.mercadolibre.com/sites/${siteId}/search?q=${encodedQuery}&limit=3`,
+      accessToken,
+    ),
+    diagnosticFetchJson(
+      `https://api.mercadolibre.com/sites/${siteId}/search?q=${encodedQuery}&limit=3&sort=sold_quantity_desc`,
+      accessToken,
+    ),
+    diagnosticFetchJson(
+      `https://api.mercadolibre.com/products/search?status=active&site_id=${siteId}&q=${encodedQuery}&limit=3`,
+      accessToken,
+    ),
+    diagnosticFetchJson(
+      `https://api.mercadolibre.com/sites/${siteId}/domain_discovery/search?q=${encodedQuery}&limit=3`,
+      accessToken,
+    ),
+  ]);
+
+  const discovered = Array.isArray(discovery.data)
+    ? discovery.data.find((entry) => entry?.category_id)
+    : null;
+  const highlights = discovered?.category_id
+    ? await diagnosticFetchJson(
+      `https://api.mercadolibre.com/highlights/${siteId}/category/${encodeURIComponent(discovered.category_id)}`,
+      accessToken,
+    )
+    : diagnosticUnavailable("Nenhuma categoria foi descoberta para testar o ranking.");
+  const itemCandidate = Array.isArray(highlights.data?.content)
+    ? highlights.data.content.find((entry) => entry?.type === "ITEM" && /^MLB\d+$/i.test(entry?.id || ""))
+    : null;
+  const itemDetail = itemCandidate?.id
+    ? await diagnosticFetchJson(
+      `https://api.mercadolibre.com/items/${encodeURIComponent(itemCandidate.id)}`,
+      accessToken,
+    )
+    : diagnosticUnavailable("O ranking não retornou um anúncio para testar os detalhes.");
+
+  const basicResults = Array.isArray(searchBasic.data?.results) ? searchBasic.data.results : [];
+  const searchHasSales = basicResults.some((item) => Number(item?.sold_quantity || 0) > 0);
+  const itemHasSales = itemDetail.ok && Number(itemDetail.data?.sold_quantity || 0) > 0;
+  const refreshConfigured = Boolean(getMeliRefreshToken());
+  const searchReady = searchBasic.ok && searchHasSales;
+  const detailsReady = itemHasSales;
+  const readyForBuscaVendas = Boolean(account.ok && (searchReady || detailsReady));
+
+  if (account.ok) {
+    setSetting("meli_user_id", account.data?.id || getSetting("meli_user_id") || "");
+    setSetting("meli_last_error", "");
+  }
+
+  const checks = [
+    diagnosticCheck("oauth", "OAuth e conta autorizada", account, account.ok
+      ? `Conta ${account.data?.nickname || "principal"} autenticada.`
+      : diagnosticMessage(account)),
+    {
+      key: "refresh",
+      label: "Renovação automática do token",
+      ok: refreshConfigured,
+      status: null,
+      detail: refreshConfigured ? "Refresh token salvo no servidor." : "Refresh token não foi recebido.",
+    },
+    diagnosticCheck("search", "Busca global por palavra-chave", searchBasic, searchBasic.ok
+      ? `${basicResults.length} resultado(s); vendas públicas ${searchHasSales ? "disponíveis" : "ausentes"}.`
+      : diagnosticMessage(searchBasic)),
+    diagnosticCheck("search_sort", "Ordenação por mais vendidos", searchSorted, searchSorted.ok
+      ? "A ordenação oficial foi aceita."
+      : diagnosticMessage(searchSorted)),
+    diagnosticCheck("catalog", "Pesquisa de produtos do catálogo", products, products.ok
+      ? `${Array.isArray(products.data?.results) ? products.data.results.length : 0} produto(s) retornado(s).`
+      : diagnosticMessage(products)),
+    diagnosticCheck("discovery", "Descoberta de categoria", discovery, discovery.ok
+      ? `Categoria ${discovered?.category_id || "não identificada"}.`
+      : diagnosticMessage(discovery)),
+    diagnosticCheck("highlights", "Ranking oficial da categoria", highlights, highlights.ok
+      ? `${Array.isArray(highlights.data?.content) ? highlights.data.content.length : 0} posição(ões) retornada(s).`
+      : diagnosticMessage(highlights)),
+    diagnosticCheck("item", "Preço e vendas do anúncio", itemDetail, itemDetail.ok
+      ? `Preço ${Number(itemDetail.data?.price || 0) > 0 ? "disponível" : "ausente"}; vendas ${itemHasSales ? "disponíveis" : "ausentes"}.`
+      : diagnosticMessage(itemDetail)),
+  ];
+
+  return {
+    ok: account.ok,
+    readyForBuscaVendas,
+    oauthConnected: account.ok,
+    searchAuthorized: searchBasic.ok,
+    salesDataAvailable: searchReady || detailsReady,
+    query: normalizedQuery,
+    testedAt: new Date().toISOString(),
+    checks,
+    summary: readyForBuscaVendas
+      ? "A API oficial está pronta para fornecer busca, preço e vendas ao Busca Vendas."
+      : account.ok && searchBasic.status === 403
+        ? "O OAuth está correto, mas o Mercado Livre ainda bloqueia a busca global e os detalhes de anúncios para este App ID. O catálogo está acessível, porém não entrega sozinho preço e vendas dos campeões."
+        : "O OAuth respondeu, mas os endpoints oficiais ainda não entregam todos os dados necessários ao Busca Vendas.",
+  };
+}
+
+async function diagnosticFetchJson(url, accessToken) {
+  try {
+    const response = await fetch(url, {
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${accessToken}`,
+        "User-Agent": "BuscaVendasConfweb/1.0",
+      },
+      signal: AbortSignal.timeout(12_000),
+    });
+    const text = await response.text();
+    let data = {};
+    try {
+      data = text ? JSON.parse(text) : {};
+    } catch {
+      data = { message: text.slice(0, 180) };
+    }
+    return { ok: response.ok, status: response.status, data };
+  } catch (error) {
+    return {
+      ok: false,
+      status: 0,
+      data: { message: error instanceof Error ? error.message : "Falha de comunicação." },
+    };
+  }
+}
+
+function diagnosticUnavailable(message) {
+  return { ok: false, status: null, data: { message } };
+}
+
+function diagnosticMessage(result) {
+  const detail = result?.data?.message || result?.data?.error || "Endpoint indisponível.";
+  return `${result?.status ? `HTTP ${result.status}: ` : ""}${String(detail).slice(0, 180)}`;
+}
+
+function diagnosticCheck(key, label, result, detail) {
+  return {
+    key,
+    label,
+    ok: Boolean(result?.ok),
+    status: result?.status ?? null,
+    detail,
+  };
+}
+
 function makeStrictFailure(query, message, source = "market_data_pending") {
   const safeMessage = sanitizeSearchError(message);
   return {

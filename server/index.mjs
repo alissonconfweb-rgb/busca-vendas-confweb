@@ -14,7 +14,7 @@ import {
   settingsObject,
   userFromSession,
 } from "./db.mjs";
-import { buildMeliAuthorizationUrl, createMeliPkcePair, disconnectMeliOAuth, exchangeMeliAuthorizationCode, getMeliRedirectUri, getValidMeliAccessToken, searchMercadoLivre, testMercadoLivreCatalog, testMercadoLivreConnection } from "./meli.mjs";
+import { buildMeliAuthorizationUrl, createMeliPkcePair, diagnoseMercadoLivreIntegration, disconnectMeliOAuth, exchangeMeliAuthorizationCode, getMeliRedirectUri, getValidMeliAccessToken, searchMercadoLivre, testMercadoLivreCatalog } from "./meli.mjs";
 import { enrichMercadoLivreCosts } from "./meli-costs.mjs";
 import { shouldUseMarketEstimate } from "./market-estimate.mjs";
 import { bootstrapAdminFromEnv } from "./bootstrap-admin.mjs";
@@ -1225,12 +1225,10 @@ async function handleAdmin(req, res, url, currentUser) {
       return json(res, 403, { error: "Somente administradores autorizados podem validar o Mercado Livre." });
     }
     try {
-      const result = await testMercadoLivreConnection();
+      const result = await diagnoseMercadoLivreIntegration();
       return json(res, 200, {
         ...result,
-        message: result.nickname
-          ? `Mercado Livre conectado à conta ${result.nickname}.`
-          : "Mercado Livre conectado e token validado.",
+        message: result.summary,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Falha ao validar o Mercado Livre.";

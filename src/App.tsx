@@ -2,6 +2,7 @@ import {
   BarChart3,
   BookOpen,
   ChevronRight,
+  CircleAlert,
   CircleCheck,
   ClipboardCopy,
   CreditCard,
@@ -63,6 +64,24 @@ type User = {
 };
 
 type SettingsMap = Record<string, string>;
+
+type MeliDiagnostic = {
+  ok: boolean;
+  readyForBuscaVendas: boolean;
+  oauthConnected: boolean;
+  searchAuthorized: boolean;
+  salesDataAvailable: boolean;
+  query: string;
+  testedAt: string;
+  summary: string;
+  checks: Array<{
+    key: string;
+    label: string;
+    ok: boolean;
+    status: number | null;
+    detail: string;
+  }>;
+};
 
 type MercadoLivreListingType = "classic" | "premium";
 
@@ -5001,6 +5020,7 @@ function AdminSettingsSimple({ settings, afterSave }: { settings: SettingsMap; a
   const [providerError, setProviderError] = useState("");
   const [meliError, setMeliError] = useState("");
   const [redirectCopied, setRedirectCopied] = useState(false);
+  const [meliDiagnostic, setMeliDiagnostic] = useState<MeliDiagnostic | null>(null);
   const [asaasError, setAsaasError] = useState("");
   const [scrapeDoError, setScrapeDoError] = useState("");
 
@@ -5048,8 +5068,9 @@ function AdminSettingsSimple({ settings, afterSave }: { settings: SettingsMap; a
     setMeliError("");
     setBusy("meli-test");
     try {
-      const data = await api<{ message?: string }>("/api/admin/meli/test", { method: "POST" });
-      afterSave(data.message || "Mercado Livre conectado e token validado.");
+      const data = await api<MeliDiagnostic & { message?: string }>("/api/admin/meli/test", { method: "POST" });
+      setMeliDiagnostic(data);
+      afterSave(data.message || data.summary || "Diagnóstico oficial concluído.");
     } catch (error) {
       setMeliError(error instanceof Error ? error.message : "Não foi possível validar o Mercado Livre.");
     } finally {
@@ -5303,6 +5324,31 @@ function AdminSettingsSimple({ settings, afterSave }: { settings: SettingsMap; a
           <strong className="oauth-error">{meliError || settings.meli_last_error}</strong>
         )}
 
+        {meliDiagnostic && (
+          <section className={`meli-diagnostic ${meliDiagnostic.readyForBuscaVendas ? "is-ready" : "is-limited"}`}>
+            <div className="meli-diagnostic-heading">
+              <div>
+                <span>Diagnóstico oficial</span>
+                <h4>{meliDiagnostic.readyForBuscaVendas ? "API pronta para pesquisas" : "OAuth válido, acesso de dados limitado"}</h4>
+              </div>
+              <b>{meliDiagnostic.readyForBuscaVendas ? "Operacional" : "Aguardando liberação"}</b>
+            </div>
+            <div className="meli-diagnostic-grid">
+              {meliDiagnostic.checks.map((check) => (
+                <div className={check.ok ? "diagnostic-check is-ok" : "diagnostic-check is-blocked"} key={check.key}>
+                  {check.ok ? <CircleCheck size={18} /> : <CircleAlert size={18} />}
+                  <div>
+                    <strong>{check.label}</strong>
+                    <small>{check.detail}</small>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <p>{meliDiagnostic.summary}</p>
+            <small>Teste realizado somente na API oficial, sem consumir créditos da Scrape.do.</small>
+          </section>
+        )}
+
         <p className="integration-note">
           Depois da autorização, todos os usuários pesquisam pela integração central. Eles não veem nem preenchem estas credenciais. A Scrape.do continua disponível como apoio quando a API oficial não liberar um dado público.
         </p>
@@ -5319,7 +5365,7 @@ function AdminSettingsSimple({ settings, afterSave }: { settings: SettingsMap; a
           {settings.meli_oauth_connected && (
             <>
               <button className="secondary-action" type="button" onClick={testMeli} disabled={isBusy}>
-                {busy === "meli-test" ? "Validando..." : "Validar conexão"}
+                {busy === "meli-test" ? "Diagnosticando..." : "Diagnóstico oficial"}
               </button>
               <button className="secondary-action danger-action" type="button" onClick={disconnectMeli} disabled={isBusy}>
                 {busy === "meli-disconnect" ? "Desconectando..." : "Desconectar"}
