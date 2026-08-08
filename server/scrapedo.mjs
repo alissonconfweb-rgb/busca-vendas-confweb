@@ -13,7 +13,8 @@ const DEFAULT_ENDPOINT = "https://api.scrape.do/";
 const DEFAULT_DETAIL_LIMIT = 36;
 const DEFAULT_SEARCH_PAGES = 4;
 const EMERGING_MARKET_SAMPLE_SIZE = 12;
-const MARKET_ITEM_METADATA_VERSION = 3;
+const MARKET_ITEM_METADATA_VERSION = 4;
+export const SCRAPEDO_PRICE_PARSER_VERSION = 2;
 const SALES_RANKING_STRATEGY = "visible_sales_v3";
 const activeSearches = new Map();
 const providerQueue = [];
@@ -173,6 +174,7 @@ export function searchMercadoLivreCachedItems(query) {
       item.title
       && Number(item.price) > 0
       && Number(item.soldQuantity) > 0
+      && hasTrustedCachedPrice(item)
       && matchesProductQuery(item.title, querySpec).ok
     ))
     .sort((a, b) => (
@@ -527,6 +529,7 @@ function getCachedMarketItem(candidate, querySpec, options = {}) {
       item.title
       && Number(item.price) > 0
       && Number(item.soldQuantity) > 0
+      && hasTrustedCachedPrice(item)
       && (!options.requireMetadata || Number(item.metadataVersion || 0) >= MARKET_ITEM_METADATA_VERSION)
       && matchesProductQuery(item.title, querySpec).ok
     ) {
@@ -560,6 +563,7 @@ function getCachedVerifiedItems(querySpec, options = {}) {
         item.title
         && Number(item.price) > 0
         && Number(item.soldQuantity) > 0
+        && hasTrustedCachedPrice(item)
         && (options.requireMetadata === false || Number(item.metadataVersion || 0) >= MARKET_ITEM_METADATA_VERSION)
         && matchesProductQuery(item.title, querySpec).ok
       ) {
@@ -580,6 +584,7 @@ function buildSalesResult(items, metadata = {}) {
     ok: true,
     source: "scrapedo_mercado_livre",
     rankingStrategy: SALES_RANKING_STRATEGY,
+    priceParserVersion: SCRAPEDO_PRICE_PARSER_VERSION,
     strictRealOnly: true,
     metricsMode: "sales",
     salesAvailable: true,
@@ -614,8 +619,16 @@ function saveMarketItemCache(candidate, item) {
     marketItemCacheKey(candidate),
     item.title,
     item.href || candidate.href || "",
-    JSON.stringify({ ...item, metadataVersion: MARKET_ITEM_METADATA_VERSION }),
+    JSON.stringify({
+      ...item,
+      metadataVersion: MARKET_ITEM_METADATA_VERSION,
+      priceParserVersion: SCRAPEDO_PRICE_PARSER_VERSION,
+    }),
   );
+}
+
+function hasTrustedCachedPrice(item) {
+  return Number(item?.priceParserVersion || 0) >= SCRAPEDO_PRICE_PARSER_VERSION;
 }
 
 function marketItemCacheKey(candidate) {

@@ -27,7 +27,8 @@ function saveItem(id, title, soldQuantity, price) {
     soldQuantity,
     price,
     revenue: soldQuantity * price,
-    metadataVersion: 3,
+    metadataVersion: 4,
+    priceParserVersion: 2,
   };
   db.prepare(`
     INSERT INTO market_item_cache (key, title, permalink, payload, updated_at)
@@ -71,14 +72,12 @@ test("não mistura anúncios de outro produto ao reaproveitar a base", () => {
   assert.equal(result, null);
 });
 
-test("reaproveita vendas reais antigas mesmo quando os metadados de frete serão recalculados", () => {
+test("nao publica precos antigos antes de recalcular os metadados do anuncio", () => {
   saveLegacyItem("MLB4", "Creatina monohidratada pura 500g marca A", 50_000, 49.9);
   saveLegacyItem("MLB5", "Creatina monohidratada pura 500g marca B", 10_000, 59.9);
   saveLegacyItem("MLB6", "Creatina monohidratada pura 500g marca C", 5_000, 69.9);
 
   const result = searchMercadoLivreCachedItems("creatina 500g");
 
-  assert.equal(result?.ok, true);
-  assert.equal(result?.items.length, 3);
-  assert.equal(result?.totals.demand, 65_000);
+  assert.equal(result, null);
 });

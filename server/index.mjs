@@ -27,6 +27,7 @@ import {
   isScrapeDoConfigured,
   normalizeScrapeDoToken,
   scrapeDoUsageSummary,
+  SCRAPEDO_PRICE_PARSER_VERSION,
   searchMercadoLivreCachedItems,
   syncScrapeDoSettingsFromEnv,
   testScrapeDoConnection,
@@ -85,6 +86,7 @@ ensureScrapeDoSearchDepth();
 syncAsaasSettingsFromEnv();
 migrateMarketSearchCacheKeys();
 pruneInvalidChampionCaches();
+pruneInvalidPriceCaches();
 seedMarketItemCacheFromSearches();
 if (isZyteConfigured() && isZyteSearchEnabled() && process.env.MELI_LOCAL_BROWSER_ENABLED !== "true") {
   enforceZytePrimarySettings();
@@ -370,7 +372,7 @@ async function route(req, res) {
     return json(res, 200, rows
       .map((row) => {
         const result = parseSearchPayload(row.payload);
-        if (!isCompleteRealSalesResult(result)) {
+        if (!isCompleteRealSalesResult(result) || !cachedResultMatchesQuery(result, row.query)) {
           return null;
         }
 
@@ -787,6 +789,12 @@ function cachedResultMatchesQuery(result, query) {
   ) {
     return false;
   }
+  if (
+    ["scrapedo_mercado_livre", "confweb_cache"].includes(result.source)
+    && Number(result.priceParserVersion || 0) < SCRAPEDO_PRICE_PARSER_VERSION
+  ) {
+    return false;
+  }
   const spec = buildProductQuerySpec(query);
   return result.items.slice(0, 3).every((item) => matchesProductQuery(item?.title || "", spec).ok);
 }
@@ -913,6 +921,32 @@ function pruneInvalidChampionCaches() {
       }
     }
     setSetting("champion_cache_policy_min", String(minimum));
+  });
+  prune();
+}
+
+function pruneInvalidPriceCaches() {
+  const policyVersion = String(SCRAPEDO_PRICE_PARSER_VERSION);
+  if (getSetting("price_cache_policy_version") === policyVersion) {
+    return;
+  }
+
+  const removeItem = db.prepare("DELETE FROM market_item_cache WHERE key = ?");
+  const removeSearch = db.prepare("DELETE FROM market_search_cache WHERE key = ?");
+  const prune = db.transaction(() => {
+    for (const row of db.prepare("SELECT key, payload FROM market_item_cache").all()) {
+      const item = parseSearchPayload(row.payload);
+      if (Number(item?.priceParserVersion || 0) < SCRAPEDO_PRICE_PARSER_VERSION) {
+        removeItem.run(row.key);
+      }
+    }
+    for (const row of db.prepare("SELECT key, query, payload FROM market_search_cache").all()) {
+      const result = parseSearchPayload(row.payload);
+      if (!cachedResultMatchesQuery(result, row.query)) {
+        removeSearch.run(row.key);
+      }
+    }
+    setSetting("price_cache_policy_version", policyVersion);
   });
   prune();
 }

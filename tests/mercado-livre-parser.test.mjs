@@ -71,6 +71,29 @@ test("prioriza o preco promocional da pagina do anuncio", () => {
   assert.equal(parser.parsePrice(html), 138.37);
 });
 
+test("ignora precos de produtos relacionados na pagina do anuncio", () => {
+  const html = `
+    <div class="ui-pdp-price__main-container">
+      <s><span class="andes-money-amount">R$ 76,53</span></s>
+      <div class="ui-pdp-price__second-line">
+        <span class="andes-money-amount">
+          <span class="andes-money-amount__fraction">68</span>
+          <span class="andes-money-amount__cents">59</span>
+          <meta itemprop="price" content="68.59">
+        </span>
+      </div>
+    </div>
+    <section class="recommendations">
+      <div class="poly-price__current">
+        <span class="andes-money-amount__fraction">98</span>
+        <span class="andes-money-amount__cents">61</span>
+      </div>
+    </section>
+  `;
+
+  assert.equal(parser.parsePrice(html), 68.59);
+});
+
 test("le os dados logisticos do proprio anuncio", () => {
   const html = `{
     "seller_id": 123456,

@@ -490,17 +490,28 @@ function parseImage(text) {
 
 function parsePrice(text) {
   const source = decodeText(text);
-  const currentPriceMarkers = [
-    /poly-price__current/i,
-    /ui-pdp-price__second-line/i,
-    /ui-pdp-price__main-container/i,
-  ];
+  // Product pages also contain carousels with unrelated `poly-price` values.
+  // When a PDP price exists, it is the only valid source for the advertised item.
+  const hasProductPagePrice = /ui-pdp-price__(?:second-line|main-container)/i.test(source);
+  const currentPriceMarkers = hasProductPagePrice
+    ? [/ui-pdp-price__second-line/i, /ui-pdp-price__main-container/i]
+    : [/poly-price__current/i];
   for (const marker of currentPriceMarkers) {
     const markerIndex = source.search(marker);
     if (markerIndex < 0) {
       continue;
     }
-    const currentPrice = parseMercadoLivreMoney(source.slice(markerIndex, markerIndex + 2_000));
+    const priceBlock = source
+      .slice(markerIndex, markerIndex + 2_000)
+      .replace(/<s\b[^>]*>[\s\S]*?<\/s>/gi, " ");
+    const itemPropPrice = parseNumberValue(firstMatch(priceBlock, [
+      /itemprop=["']price["'][^>]*content=["']([\d.,]+)/i,
+      /content=["']([\d.,]+)["'][^>]*itemprop=["']price["']/i,
+    ]));
+    if (Number.isFinite(itemPropPrice) && itemPropPrice > 0) {
+      return itemPropPrice;
+    }
+    const currentPrice = parseMercadoLivreMoney(priceBlock);
     if (currentPrice > 0) {
       return currentPrice;
     }
