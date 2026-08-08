@@ -10,6 +10,7 @@ process.env.DB_PATH = join(tempDir, "scrapedo-depth.sqlite");
 const { db, initDatabase, setSetting } = await import("../server/db.mjs");
 const {
   ensureScrapeDoSearchDepth,
+  hasEnoughInspectedCandidates,
   rankCandidatesByPublicSales,
   scrapeDoSearchPolicy,
   shouldUseScrapeDoItemCache,
@@ -31,6 +32,8 @@ test("migra a varredura curta que deixava buscas novas sem Top 3", () => {
   assert.deepEqual(scrapeDoSearchPolicy(), {
     pages: 4,
     detailLimit: 36,
+    candidateTarget: 12,
+    detailConcurrency: 4,
   });
 });
 
@@ -43,7 +46,30 @@ test("preserva uma profundidade maior configurada para a fonte", () => {
   assert.deepEqual(scrapeDoSearchPolicy(), {
     pages: 4,
     detailLimit: 48,
+    candidateTarget: 12,
+    detailConcurrency: 4,
   });
+});
+
+test("encerra a validacao assim que encontra tres campeoes reais", () => {
+  assert.equal(hasEnoughInspectedCandidates({
+    championCount: 3,
+    verifiedCount: 3,
+    inspectedCount: 4,
+    sampleTarget: 12,
+  }), true);
+  assert.equal(hasEnoughInspectedCandidates({
+    championCount: 2,
+    verifiedCount: 4,
+    inspectedCount: 4,
+    sampleTarget: 12,
+  }), false);
+  assert.equal(hasEnoughInspectedCandidates({
+    championCount: 0,
+    verifiedCount: 8,
+    inspectedCount: 12,
+    sampleTarget: 12,
+  }), true);
 });
 
 test("ignora o cache individual de anuncios em uma atualizacao forcada", () => {
