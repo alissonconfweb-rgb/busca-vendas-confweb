@@ -166,6 +166,54 @@ export function scrapeDoSearchPolicy() {
   };
 }
 
+export function searchMercadoLivreCachedItems(query) {
+  const querySpec = buildProductQuerySpec(query);
+  const verifiedSalesItems = getCachedVerifiedItems(querySpec)
+    .filter((item) => (
+      item.title
+      && Number(item.price) > 0
+      && Number(item.soldQuantity) > 0
+      && matchesProductQuery(item.title, querySpec).ok
+    ))
+    .sort((a, b) => (
+      Number(b.soldQuantity) - Number(a.soldQuantity)
+      || parser.championScore(a) - parser.championScore(b)
+    ));
+
+  if (verifiedSalesItems.length < 3) {
+    return null;
+  }
+
+  const threshold = minimumChampionSales();
+  const championItems = verifiedSalesItems
+    .filter((item) => Number(item.soldQuantity) >= threshold)
+    .slice(0, 3)
+    .map(mapItem);
+  let items = championItems;
+  let opportunityMode = "";
+
+  if (items.length < 3) {
+    items = verifiedSalesItems.slice(0, 3).map(mapItem);
+    opportunityMode = championItems.length === 0 && items.every((item) => item.soldQuantity < threshold)
+      ? "emerging"
+      : "developing";
+  }
+
+  return {
+    ...buildSalesResult(items, {
+      message: "Dados públicos reais do Mercado Livre recuperados da base interna.",
+      exactMatches: items.length,
+      totalAvailable: verifiedSalesItems.length,
+      providerCreditsUsed: 0,
+      itemCacheHits: items.length,
+      opportunityMode,
+      marketThreshold: threshold,
+    }),
+    source: "confweb_cache",
+    cacheHit: true,
+  };
+}
+
 async function executeMercadoLivreScrapeDo(query, options = {}) {
   if (!isScrapeDoEnabled()) {
     return emptyResult("scrapedo_not_configured", "Scrape.do ainda não foi configurada.");

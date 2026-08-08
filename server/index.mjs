@@ -27,6 +27,7 @@ import {
   isScrapeDoConfigured,
   normalizeScrapeDoToken,
   scrapeDoUsageSummary,
+  searchMercadoLivreCachedItems,
   syncScrapeDoSettingsFromEnv,
   testScrapeDoConnection,
 } from "./scrapedo.mjs";
@@ -560,6 +561,9 @@ async function handleSearch(req, res, user, query, options = {}) {
 
 async function resolveMarketSearch(query, options = {}) {
   const cleanQuery = String(query || "").trim();
+  const refreshFallback = options.fresh
+    ? getFreshCachedSearchResult(cleanQuery) || getStaleCachedSearchResult(cleanQuery)
+    : null;
   let result = options.fresh ? null : getFreshCachedSearchResult(cleanQuery);
 
   if (!result && !options.fresh) {
@@ -567,6 +571,13 @@ async function resolveMarketSearch(query, options = {}) {
     if (staleResult) {
       const refreshed = enforceChampionThreshold(cleanQuery, await scheduleMarketSearchRefresh(cleanQuery));
       result = isBillableSearchResult(refreshed) ? refreshed : staleResult;
+    }
+  }
+
+  if (!result && !options.fresh) {
+    result = searchMercadoLivreCachedItems(cleanQuery);
+    if (isBillableSearchResult(result)) {
+      saveMarketSearchCache(cleanQuery, result);
     }
   }
 
@@ -578,6 +589,18 @@ async function resolveMarketSearch(query, options = {}) {
     if (isBillableSearchResult(result)) {
       saveMarketSearchCache(cleanQuery, result);
     }
+  }
+
+  if (!isBillableSearchResult(result) && refreshFallback) {
+    result = {
+      ...refreshFallback,
+      source: "confweb_cache",
+      message: "O último resultado real continua disponível enquanto a atualização automática tenta novamente.",
+      cacheHit: true,
+      cacheStale: true,
+      refreshPending: true,
+      providerCreditsUsed: 0,
+    };
   }
 
   if (isBillableSearchResult(result) && result.items.some((item) => !item.marketplaceFees)) {
