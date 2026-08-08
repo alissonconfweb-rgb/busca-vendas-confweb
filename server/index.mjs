@@ -16,7 +16,6 @@ import {
 } from "./db.mjs";
 import { buildMeliAuthorizationUrl, createMeliPkcePair, diagnoseMercadoLivreIntegration, disconnectMeliOAuth, exchangeMeliAuthorizationCode, getMeliRedirectUri, getValidMeliAccessToken, searchMercadoLivre, testMercadoLivreCatalog } from "./meli.mjs";
 import { enrichMercadoLivreCosts } from "./meli-costs.mjs";
-import { shouldUseMarketEstimate } from "./market-estimate.mjs";
 import { bootstrapAdminFromEnv } from "./bootstrap-admin.mjs";
 import { syncMeliSettingsFromEnv, validateMeliSettingsInput, isValidMeliClientId, resolveMeliRedirectUri } from "./meli-config.mjs";
 import { syncOxylabsSettingsFromEnv, testOxylabsConnection } from "./oxylabs.mjs";
@@ -56,13 +55,17 @@ initDatabase();
 const PORT = Number(process.env.PORT || 3001);
 const HOST = process.env.HOST || "0.0.0.0";
 const IS_PRODUCTION = process.env.NODE_ENV === "production";
-const COOKIE = "bv_session";
+const COOKIE = "bv_session_v2";
+const LEGACY_COOKIES = ["bv_session"];
 const CREATOR_EMAIL = (process.env.CREATOR_EMAIL || process.env.ADMIN_EMAIL || "").trim().toLowerCase();
 const DIST_DIR = resolve(process.cwd(), "dist");
 const MELI_OAUTH_STATE_TTL_MS = 15 * 60 * 1000;
 const SEARCH_RESPONSE_TIMEOUT_MS = Number(process.env.SEARCH_RESPONSE_TIMEOUT_MS || 120_000);
+const SEARCH_JOB_STALE_MS = Number(process.env.SEARCH_JOB_STALE_MS || 15 * 60_000);
+const SEARCH_JOB_POLL_AFTER_MS = Number(process.env.SEARCH_JOB_POLL_AFTER_MS || 1_500);
 const MARKET_CACHE_REFRESH_INTERVAL_MS = Number(process.env.MARKET_CACHE_REFRESH_INTERVAL_MS || 6 * 60 * 60_000);
 const marketRefreshFlights = new Map();
+const marketSearchRequestFlights = new Map();
 const marketBackgroundRefreshAttempts = new Map();
 let marketCacheRefreshTimer = null;
 const rateLimiter = new MemoryRateLimiter();
@@ -88,6 +91,7 @@ migrateMarketSearchCacheKeys();
 pruneInvalidChampionCaches();
 pruneInvalidPriceCaches();
 seedMarketItemCacheFromSearches();
+db.prepare("DELETE FROM search_requests WHERE updated_at < datetime('now', '-7 days')").run();
 if (isZyteConfigured() && isZyteSearchEnabled() && process.env.MELI_LOCAL_BROWSER_ENABLED !== "true") {
   enforceZytePrimarySettings();
 }
@@ -284,13 +288,17 @@ async function route(req, res) {
   }
 
   if (url.pathname === "/api/auth/logout" && method === "POST") {
-    deleteSession(readCookie(req, COOKIE));
+    for (const name of [COOKIE, ...LEGACY_COOKIES]) {
+      for (const token of readCookieValues(req, name)) {
+        deleteSession(token);
+      }
+    }
     clearCookie(res);
     return json(res, 200, { ok: true });
   }
 
   if (url.pathname === "/api/auth/me" && method === "GET") {
-    const currentUser = userFromSession(readCookie(req, COOKIE));
+    const currentUser = sessionUserFromRequest(req, res);
     return json(res, 200, { user: currentUser ? publicUserWithPermissions(currentUser) : null });
   }
 
@@ -359,6 +367,11 @@ async function route(req, res) {
     return handleSearch(req, res, user, body.q || "", {
       fresh: canUseAdmin(user) && ["1", "true", "yes", "sim"].includes(String(url.searchParams.get("fresh") || "").toLowerCase()),
     });
+  }
+
+  const searchStatusMatch = url.pathname.match(/^\/api\/search-status\/([A-Za-z0-9_-]+)$/);
+  if (searchStatusMatch && method === "GET") {
+    return handleSearchStatus(req, res, user, searchStatusMatch[1]);
   }
 
   if (url.pathname === "/api/search-history" && method === "GET") {
@@ -532,33 +545,235 @@ async function handleSearch(req, res, user, query, options = {}) {
     return json(res, 402, { error: "Limite de pesquisas atingido. Faça upgrade para continuar." });
   }
 
-  let result = await resolveMarketSearch(cleanQuery, { fresh: options.fresh });
-  if (shouldUseMarketEstimate(result)) {
-    result = strictRealSearchUnavailable(
-      cleanQuery,
-      result?.message || "A fonte real ainda não retornou 3 anúncios completos com vendas públicas.",
-    );
-  }
-  const responseResult = canUseAdmin(user) ? result : publicSearchResult(result);
-  if (isCompleteRealSalesResult(result)) {
-    db.prepare(`
-      INSERT INTO search_history (user_id, query, source, total_demand, total_revenue, payload)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(
-      user.id,
-      cleanQuery,
-      result.source,
-      result.totals.demand,
-      result.totals.revenue,
-      JSON.stringify(result),
-    );
+  const immediate = options.fresh ? null : await resolveImmediateMarketSearch(cleanQuery);
+  if (isBillableSearchResult(immediate)) {
+    recordDeliveredSearch(user, cleanQuery, immediate);
+    return json(res, 200, canUseAdmin(user) ? immediate : publicSearchResult(immediate));
   }
 
-  if (user.role !== "admin" && isBillableSearchResult(result)) {
+  const request = createOrReuseSearchRequest(user.id, cleanQuery);
+  startSearchRequest(request.id, cleanQuery);
+  console.info(`[search:${request.id}] queued user=${user.id} query=${JSON.stringify(cleanQuery)}`);
+  return json(res, 202, {
+    pending: true,
+    requestId: request.id,
+    query: cleanQuery,
+    pollAfterMs: SEARCH_JOB_POLL_AFTER_MS,
+  });
+}
+
+async function handleSearchStatus(req, res, user, requestId) {
+  if (!limitRequest(req, res, "search-status-user", user.id, 90, 60_000)) {
+    return;
+  }
+
+  let request = findSearchRequest(requestId, user.id);
+  if (!request) {
+    return json(res, 404, { error: "Pesquisa em andamento não encontrada." });
+  }
+
+  if (request.status !== "ready") {
+    const cached = await resolveImmediateMarketSearch(request.query);
+    if (isBillableSearchResult(cached)) {
+      markSearchRequestReady(request.id, cached);
+      request = findSearchRequest(request.id, user.id);
+    }
+  }
+
+  if (request.status === "pending") {
+    const updatedAt = new Date(String(request.updated_at).replace(" ", "T") + "Z").getTime();
+    const ageMs = Date.now() - updatedAt;
+    if (!marketSearchRequestFlights.has(request.id) && ageMs < SEARCH_JOB_STALE_MS) {
+      startSearchRequest(request.id, request.query);
+    }
+    if (ageMs >= SEARCH_JOB_STALE_MS) {
+      markSearchRequestFailed(request.id, "A fonte de dados demorou mais que o esperado para concluir a leitura.");
+      request = findSearchRequest(request.id, user.id);
+    } else {
+      return json(res, 202, {
+        pending: true,
+        requestId: request.id,
+        query: request.query,
+        pollAfterMs: SEARCH_JOB_POLL_AFTER_MS,
+      });
+    }
+  }
+
+  if (request.status === "ready") {
+    const result = parseSearchPayload(request.payload);
+    if (isBillableSearchResult(result)) {
+      recordDeliveredSearch(user, request.query, result, request.id);
+      return json(res, 200, {
+        pending: false,
+        result: canUseAdmin(user) ? result : publicSearchResult(result),
+      });
+    }
+  }
+
+  const fallback = getStaleCachedSearchResult(request.query) || searchMercadoLivreCachedItems(request.query);
+  if (isBillableSearchResult(fallback)) {
+    markSearchRequestReady(request.id, fallback);
+    recordDeliveredSearch(user, request.query, fallback, request.id);
+    return json(res, 200, {
+      pending: false,
+      result: canUseAdmin(user) ? fallback : publicSearchResult(fallback),
+    });
+  }
+
+  return json(res, 200, {
+    pending: false,
+    result: strictRealSearchUnavailable(
+      request.query,
+      request.error || "A fonte real ainda não retornou 3 anúncios completos com vendas públicas.",
+    ),
+  });
+}
+
+async function resolveImmediateMarketSearch(query) {
+  let result = getFreshCachedSearchResult(query);
+  if (!result) {
+    result = searchMercadoLivreCachedItems(query);
+    if (isBillableSearchResult(result)) {
+      saveMarketSearchCache(query, result);
+    }
+  }
+  return result;
+}
+
+function createOrReuseSearchRequest(userId, query) {
+  const cacheKey = marketCacheKey(query);
+  const existing = db.prepare(`
+    SELECT *
+    FROM search_requests
+    WHERE user_id = ?
+      AND cache_key = ?
+      AND status = 'pending'
+      AND updated_at >= datetime('now', '-15 minutes')
+    ORDER BY created_at DESC
+    LIMIT 1
+  `).get(userId, cacheKey);
+  if (existing) {
+    return existing;
+  }
+
+  const id = randomToken(18).replace(/[^A-Za-z0-9_-]/g, "");
+  db.prepare(`
+    INSERT INTO search_requests (id, user_id, query, cache_key, status)
+    VALUES (?, ?, ?, ?, 'pending')
+  `).run(id, userId, query, cacheKey);
+  return findSearchRequest(id, userId);
+}
+
+function findSearchRequest(id, userId) {
+  return db.prepare("SELECT * FROM search_requests WHERE id = ? AND user_id = ?").get(id, userId);
+}
+
+function markSearchRequestReady(id, result) {
+  db.prepare(`
+    UPDATE search_requests
+    SET status = 'ready', payload = ?, error = NULL, updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(JSON.stringify(result), id);
+}
+
+function markSearchRequestFailed(id, message) {
+  db.prepare(`
+    UPDATE search_requests
+    SET status = 'failed', error = ?, updated_at = CURRENT_TIMESTAMP
+    WHERE id = ? AND status != 'ready'
+  `).run(sanitizeSearchError(message), id);
+}
+
+function startSearchRequest(requestId, query) {
+  if (marketSearchRequestFlights.has(requestId)) {
+    return marketSearchRequestFlights.get(requestId);
+  }
+
+  const startedAt = Date.now();
+  console.info(`[search:${requestId}] provider-start query=${JSON.stringify(query)}`);
+  const task = scheduleMarketSearchRefresh(query)
+    .then(async (result) => {
+      let completed = result;
+      if (!isBillableSearchResult(completed)) {
+        completed = getFreshCachedSearchResult(query)
+          || getStaleCachedSearchResult(query)
+          || searchMercadoLivreCachedItems(query);
+      }
+      if (isBillableSearchResult(completed) && completed.items.some((item) => !item.marketplaceFees)) {
+        const accessToken = await getValidMeliAccessToken();
+        completed = await enrichMercadoLivreCosts(completed, {
+          accessToken,
+          siteId: process.env.MELI_SITE_ID || getSetting("meli_site_id") || "MLB",
+        });
+      }
+      if (isBillableSearchResult(completed)) {
+        saveMarketSearchCache(query, completed);
+        markSearchRequestReady(requestId, completed);
+        console.info(
+          `[search:${requestId}] ready durationMs=${Date.now() - startedAt} source=${completed.source || "unknown"} credits=${Number(completed.providerCreditsUsed || 0)}`,
+        );
+      } else {
+        const message = completed?.message || "A fonte real não completou os três anúncios desta pesquisa.";
+        markSearchRequestFailed(
+          requestId,
+          message,
+        );
+        console.warn(`[search:${requestId}] incomplete durationMs=${Date.now() - startedAt} message=${JSON.stringify(sanitizeSearchError(message))}`);
+      }
+      return completed;
+    })
+    .catch((error) => {
+      const message = error instanceof Error ? error.message : "Falha inesperada ao concluir a pesquisa.";
+      markSearchRequestFailed(
+        requestId,
+        message,
+      );
+      console.error(`[search:${requestId}] failed durationMs=${Date.now() - startedAt} message=${JSON.stringify(sanitizeSearchError(message))}`);
+      return null;
+    })
+    .finally(() => marketSearchRequestFlights.delete(requestId));
+
+  marketSearchRequestFlights.set(requestId, task);
+  return task;
+}
+
+const recordSearchRequestDelivery = db.transaction((user, query, result, requestId) => {
+  if (requestId) {
+    const delivery = db.prepare(`
+      UPDATE search_requests
+      SET delivered_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND user_id = ? AND delivered_at IS NULL
+    `).run(requestId, user.id);
+    if (delivery.changes === 0) {
+      return false;
+    }
+  }
+
+  db.prepare(`
+    INSERT INTO search_history (user_id, query, source, total_demand, total_revenue, payload)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(
+    user.id,
+    query,
+    result.source,
+    result.totals.demand,
+    result.totals.revenue,
+    JSON.stringify(result),
+  );
+
+  if (user.role !== "admin") {
     db.prepare("UPDATE users SET searches_used = searches_used + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(user.id);
   }
+  return true;
+});
 
-  return json(res, 200, responseResult);
+function recordDeliveredSearch(user, query, result, requestId = "") {
+  if (isCompleteRealSalesResult(result)) {
+    const recorded = recordSearchRequestDelivery(user, query, result, requestId || null);
+    if (requestId && recorded) {
+      console.info(`[search:${requestId}] delivered user=${user.id} query=${JSON.stringify(query)}`);
+    }
+  }
 }
 
 async function resolveMarketSearch(query, options = {}) {
@@ -571,8 +786,13 @@ async function resolveMarketSearch(query, options = {}) {
   if (!result && !options.fresh) {
     const staleResult = getStaleCachedSearchResult(cleanQuery);
     if (staleResult) {
-      const refreshed = enforceChampionThreshold(cleanQuery, await scheduleMarketSearchRefresh(cleanQuery));
-      result = isBillableSearchResult(refreshed) ? refreshed : staleResult;
+      scheduleMarketSearchRefresh(cleanQuery);
+      result = {
+        ...staleResult,
+        cacheHit: true,
+        cacheStale: true,
+        refreshPending: true,
+      };
     }
   }
 
@@ -805,7 +1025,7 @@ function scheduleMarketSearchRefresh(query) {
     return marketRefreshFlights.get(key);
   }
 
-  const refresh = searchWithResponseGuard(query, { forceRefresh: true })
+  const refresh = runLiveMarketSearch(query, { forceRefresh: true })
     .then((result) => {
       if (isBillableSearchResult(result)) {
         saveMarketSearchCache(query, result);
@@ -819,6 +1039,21 @@ function scheduleMarketSearchRefresh(query) {
     .finally(() => marketRefreshFlights.delete(key));
   marketRefreshFlights.set(key, refresh);
   return refresh;
+}
+
+async function runLiveMarketSearch(query, options = {}) {
+  try {
+    const result = enforceChampionThreshold(query, await searchMercadoLivre(query, options));
+    if (isBillableSearchResult(result)) {
+      saveMarketSearchCache(query, result);
+    }
+    return result;
+  } catch (error) {
+    const message = sanitizeSearchError(
+      error instanceof Error ? error.message : "Falha inesperada ao consultar a fonte real.",
+    );
+    return strictRealSearchUnavailable(query, message);
+  }
 }
 
 function saveMarketSearchCache(query, result) {
@@ -2224,7 +2459,7 @@ function isCreator(user) {
 }
 
 function requireUser(req, res) {
-  const user = userFromSession(readCookie(req, COOKIE));
+  const user = sessionUserFromRequest(req, res);
   if (!user) {
     json(res, 401, { error: "Login necessário." });
     return null;
@@ -2233,12 +2468,48 @@ function requireUser(req, res) {
 }
 
 function readCookie(req, name) {
+  return readCookieValues(req, name)[0] || null;
+}
+
+function readCookieValues(req, name) {
   const cookieHeader = req.headers.cookie || "";
+  const values = [];
   for (const part of cookieHeader.split(";")) {
     const [key, ...value] = part.trim().split("=");
     if (key === name) {
-      return decodeURIComponent(value.join("="));
+      try {
+        values.push(decodeURIComponent(value.join("=")));
+      } catch {
+        // Ignore malformed legacy cookies instead of blocking the current session.
+      }
     }
+  }
+  return values;
+}
+
+function sessionUserFromRequest(req, res) {
+  for (const token of readCookieValues(req, COOKIE)) {
+    const user = userFromSession(token);
+    if (user) {
+      return user;
+    }
+  }
+
+  for (const legacyName of LEGACY_COOKIES) {
+    for (const token of readCookieValues(req, legacyName)) {
+      const user = userFromSession(token);
+      if (!user) {
+        continue;
+      }
+      deleteSession(token);
+      const session = createSession(user.id);
+      setCookie(res, session.token, session.expires);
+      return user;
+    }
+  }
+
+  if ([COOKIE, ...LEGACY_COOKIES].some((name) => readCookieValues(req, name).length > 0)) {
+    clearCookie(res);
   }
   return null;
 }
@@ -2249,12 +2520,20 @@ function cookieSuffix(expires) {
 }
 
 function setCookie(res, token, expires) {
-  res.setHeader("Set-Cookie", `${COOKIE}=${encodeURIComponent(token)}${cookieSuffix(expires)}`);
+  res.setHeader("Set-Cookie", [
+    `${COOKIE}=${encodeURIComponent(token)}${cookieSuffix(expires)}`,
+    ...LEGACY_COOKIES.flatMap(expiredCookieHeaders),
+  ]);
 }
 
 function clearCookie(res) {
+  res.setHeader("Set-Cookie", [COOKIE, ...LEGACY_COOKIES].flatMap(expiredCookieHeaders));
+}
+
+function expiredCookieHeaders(name) {
   const secure = IS_PRODUCTION ? "; Secure" : "";
-  res.setHeader("Set-Cookie", `${COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${secure}`);
+  const base = `${name}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${secure}`;
+  return IS_PRODUCTION ? [base, `${base}; Domain=.confweb.com.br`] : [base];
 }
 
 async function readJson(req, { maxBytes = 64 * 1024 } = {}) {
@@ -2297,6 +2576,10 @@ async function drainRequest(req) {
 function json(res, status, payload) {
   const headers = {
     "Content-Type": "application/json; charset=utf-8",
+    "Cache-Control": "no-store, no-cache, must-revalidate, private",
+    "Pragma": "no-cache",
+    "Expires": "0",
+    "Vary": "Cookie",
   };
 
   if (!IS_PRODUCTION) {
@@ -2458,6 +2741,7 @@ function serveStatic(req, res, url) {
   res.writeHead(200, {
     "Content-Type": contentTypeFor(filePath),
     "Cache-Control": filePath === indexPath ? "no-store" : "public, max-age=31536000, immutable",
+    ...(filePath === indexPath ? { Pragma: "no-cache", Expires: "0" } : {}),
   });
 
   if (req.method === "HEAD") {

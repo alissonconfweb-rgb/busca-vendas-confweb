@@ -166,6 +166,22 @@ type SearchResult = {
   };
 };
 
+type PendingSearch = {
+  pending: true;
+  requestId: string;
+  query: string;
+  pollAfterMs: number;
+};
+
+type SearchStatusResponse = PendingSearch | {
+  pending: false;
+  result: SearchResult;
+};
+
+function isPendingSearch(value: SearchResult | PendingSearch): value is PendingSearch {
+  return "pending" in value && value.pending === true;
+}
+
 type Tip = {
   id: number;
   title: string;
@@ -426,6 +442,7 @@ async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
 
   try {
     response = await fetch(path, {
+      cache: "no-store",
       credentials: "include",
       headers: {
         "Content-Type": "application/json",
@@ -1340,6 +1357,7 @@ function SearchPage({
   const [elapsedMs, setElapsedMs] = useState(0);
   const [error, setError] = useState("");
   const resultsRef = useRef<HTMLDivElement>(null);
+  const searchRunRef = useRef(0);
 
   const canSeeMargin = canUseAdmin(user) || (user?.plan && user.plan !== "free");
 
@@ -1373,6 +1391,89 @@ function SearchPage({
     return () => window.clearInterval(timer);
   }, [loading]);
 
+  const pendingStorageKey = user ? `bv_pending_search_v2_${user.id}` : "";
+
+  const finishSearch = (data: SearchResult, cleanQuery: string) => {
+    setResult(sanitizeClientSearchResult(data, cleanQuery, settings));
+    setError("");
+    if (pendingStorageKey) {
+      localStorage.removeItem(pendingStorageKey);
+    }
+    onHistoryRefresh();
+  };
+
+  const pollSearch = async (pending: PendingSearch, runId: number) => {
+    let pollAfterMs = Math.max(1_000, Number(pending.pollAfterMs || 1_500));
+    while (searchRunRef.current === runId) {
+      await new Promise<void>((resolve) => window.setTimeout(resolve, pollAfterMs));
+      if (searchRunRef.current !== runId) {
+        return null;
+      }
+      let status: SearchStatusResponse;
+      try {
+        status = await api<SearchStatusResponse>(`/api/search-status/${encodeURIComponent(pending.requestId)}`);
+      } catch (pollError) {
+        if (pollError instanceof ApiError && [401, 402, 404].includes(pollError.status)) {
+          throw pollError;
+        }
+        pollAfterMs = Math.min(5_000, Math.max(2_000, pollAfterMs + 500));
+        continue;
+      }
+      if (!status.pending) {
+        return status.result;
+      }
+      pollAfterMs = Math.max(1_000, Number(status.pollAfterMs || pollAfterMs));
+    }
+    return null;
+  };
+
+  useEffect(() => {
+    if (!user || !pendingStorageKey) {
+      return;
+    }
+    let saved: (PendingSearch & { startedAt?: number }) | null = null;
+    try {
+      saved = JSON.parse(localStorage.getItem(pendingStorageKey) || "null");
+    } catch {
+      localStorage.removeItem(pendingStorageKey);
+    }
+    if (!saved?.requestId || Date.now() - Number(saved.startedAt || 0) > 20 * 60_000) {
+      localStorage.removeItem(pendingStorageKey);
+      return;
+    }
+
+    const runId = ++searchRunRef.current;
+    setQuery(saved.query);
+    setActiveQuery(saved.query);
+    setResult(null);
+    setError("");
+    setLoading(true);
+    pollSearch(saved, runId)
+      .then((data) => {
+        if (data && searchRunRef.current === runId) {
+          finishSearch(data, saved?.query || "");
+        }
+      })
+      .catch((pollError) => {
+        if (searchRunRef.current !== runId) {
+          return;
+        }
+        const reason = pollError instanceof Error ? pollError.message : "Não foi possível acompanhar a pesquisa.";
+        setResult(buildUnavailableSearchResult(saved?.query || "", reason));
+      })
+      .finally(() => {
+        if (searchRunRef.current === runId) {
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      if (searchRunRef.current === runId) {
+        searchRunRef.current += 1;
+      }
+    };
+  }, [user?.id]);
+
   const submitSearch = async (event?: FormEvent<HTMLFormElement>) => {
     event?.preventDefault();
     if (!onLoginRequired()) {
@@ -1390,6 +1491,7 @@ function SearchPage({
     }
 
     setActiveQuery(cleanQuery);
+    const runId = ++searchRunRef.current;
     setLoading(true);
     setError("");
     setResult(null);
@@ -1398,13 +1500,24 @@ function SearchPage({
     }, 80);
     const minimumFeedback = new Promise<void>((resolve) => window.setTimeout(resolve, 1800));
     try {
-      const data = await api<SearchResult>("/api/search", {
+      const data = await api<SearchResult | PendingSearch>("/api/search", {
         method: "POST",
         body: JSON.stringify({ q: cleanQuery }),
       });
-      await minimumFeedback;
-      setResult(sanitizeClientSearchResult(data, cleanQuery, settings));
-      onHistoryRefresh();
+      if (isPendingSearch(data)) {
+        if (pendingStorageKey) {
+          localStorage.setItem(pendingStorageKey, JSON.stringify({ ...data, startedAt: Date.now() }));
+        }
+        const completed = await pollSearch(data, runId);
+        if (completed && searchRunRef.current === runId) {
+          finishSearch(completed, cleanQuery);
+        }
+      } else {
+        await minimumFeedback;
+        if (searchRunRef.current === runId) {
+          finishSearch(data, cleanQuery);
+        }
+      }
     } catch (apiError) {
       await minimumFeedback;
       if (apiError instanceof ApiError && [401, 402].includes(apiError.status)) {
@@ -1415,7 +1528,9 @@ function SearchPage({
       setResult(buildUnavailableSearchResult(cleanQuery, `${reason} Não vou exibir estimativas: o Busca Vendas só mostra dados reais dos anúncios.`));
       setError("");
     } finally {
-      setLoading(false);
+      if (searchRunRef.current === runId) {
+        setLoading(false);
+      }
     }
   };
 

@@ -78,6 +78,23 @@ export function initDatabase() {
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE TABLE IF NOT EXISTS search_requests (
+      id TEXT PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      query TEXT NOT NULL,
+      cache_key TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      payload TEXT,
+      error TEXT,
+      delivered_at TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_search_requests_user_status
+      ON search_requests(user_id, status, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_search_requests_cache_status
+      ON search_requests(cache_key, status, updated_at);
+
     CREATE TABLE IF NOT EXISTS market_search_cache (
       key TEXT PRIMARY KEY,
       query TEXT NOT NULL,
