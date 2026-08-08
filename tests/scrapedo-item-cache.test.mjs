@@ -35,6 +35,22 @@ function saveItem(id, title, soldQuantity, price) {
   `).run(id, title, item.href, JSON.stringify(item));
 }
 
+function saveLegacyItem(id, title, soldQuantity, price) {
+  const item = {
+    id,
+    title,
+    href: `https://produto.mercadolivre.com.br/${id}`,
+    soldQuantity,
+    price,
+    revenue: soldQuantity * price,
+    metadataVersion: 2,
+  };
+  db.prepare(`
+    INSERT INTO market_item_cache (key, title, permalink, payload, updated_at)
+    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+  `).run(id, title, item.href, JSON.stringify(item));
+}
+
 test("reaproveita tres anuncios reais para uma consulta equivalente ainda sem cache de pesquisa", () => {
   saveItem("MLB1", "Adubo NPK 10-10-10 para plantas 1kg", 12_000, 49.9);
   saveItem("MLB2", "Fertilizante Adubo NPK granulado 1kg", 5_000, 39.9);
@@ -53,4 +69,16 @@ test("não mistura anúncios de outro produto ao reaproveitar a base", () => {
   const result = searchMercadoLivreCachedItems("cafeteira elétrica");
 
   assert.equal(result, null);
+});
+
+test("reaproveita vendas reais antigas mesmo quando os metadados de frete serão recalculados", () => {
+  saveLegacyItem("MLB4", "Creatina monohidratada pura 500g marca A", 50_000, 49.9);
+  saveLegacyItem("MLB5", "Creatina monohidratada pura 500g marca B", 10_000, 59.9);
+  saveLegacyItem("MLB6", "Creatina monohidratada pura 500g marca C", 5_000, 69.9);
+
+  const result = searchMercadoLivreCachedItems("creatina 500g");
+
+  assert.equal(result?.ok, true);
+  assert.equal(result?.items.length, 3);
+  assert.equal(result?.totals.demand, 65_000);
 });

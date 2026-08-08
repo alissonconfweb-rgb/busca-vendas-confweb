@@ -168,7 +168,7 @@ export function scrapeDoSearchPolicy() {
 
 export function searchMercadoLivreCachedItems(query) {
   const querySpec = buildProductQuerySpec(query);
-  const verifiedSalesItems = getCachedVerifiedItems(querySpec)
+  const verifiedSalesItems = getCachedVerifiedItems(querySpec, { requireMetadata: false })
     .filter((item) => (
       item.title
       && Number(item.price) > 0
@@ -538,7 +538,7 @@ function getCachedMarketItem(candidate, querySpec, options = {}) {
   return null;
 }
 
-function getCachedVerifiedItems(querySpec) {
+function getCachedVerifiedItems(querySpec, options = {}) {
   const rows = db.prepare(`
     SELECT payload, updated_at
     FROM market_item_cache
@@ -560,7 +560,7 @@ function getCachedVerifiedItems(querySpec) {
         item.title
         && Number(item.price) > 0
         && Number(item.soldQuantity) > 0
-        && Number(item.metadataVersion || 0) >= MARKET_ITEM_METADATA_VERSION
+        && (options.requireMetadata === false || Number(item.metadataVersion || 0) >= MARKET_ITEM_METADATA_VERSION)
         && matchesProductQuery(item.title, querySpec).ok
       ) {
         items.push(item);
