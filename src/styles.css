@@ -2868,6 +2868,150 @@ button.learn-card span {
   font-weight: 900;
 }
 
+.profile-account-card > .cancel-plan-button {
+  min-height: 34px;
+  width: max-content;
+  justify-self: center;
+  border: 0;
+  border-radius: 7px;
+  color: var(--muted);
+  background: transparent;
+  padding: 0 8px;
+  box-shadow: none;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.profile-account-card > .cancel-plan-button:hover {
+  color: var(--danger);
+  background: #fff4f2;
+}
+
+.cancel-plan-modal {
+  position: relative;
+  width: min(470px, 100%);
+  max-height: calc(100vh - 40px);
+  max-height: calc(100dvh - 40px);
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  gap: 18px 14px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: #fff;
+  padding: 26px;
+  box-shadow: 0 28px 90px rgba(5, 8, 18, 0.2);
+}
+
+.cancel-plan-icon {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: var(--blue);
+  background: var(--blue-soft);
+}
+
+.cancel-plan-heading {
+  display: grid;
+  gap: 5px;
+  padding-right: 26px;
+}
+
+.cancel-plan-heading > span {
+  color: var(--blue);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.cancel-plan-heading h2,
+.cancel-plan-heading p {
+  margin: 0;
+}
+
+.cancel-plan-heading h2 {
+  font-size: 22px;
+  line-height: 1.15;
+}
+
+.cancel-plan-heading p {
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.cancel-plan-modal > label,
+.cancel-plan-notice,
+.cancel-plan-actions {
+  grid-column: 1 / -1;
+}
+
+.cancel-plan-modal > label {
+  display: grid;
+  gap: 7px;
+  color: var(--blue-dark);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.cancel-plan-modal textarea {
+  min-height: 112px;
+  resize: vertical;
+}
+
+.cancel-plan-modal label small {
+  justify-self: end;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.cancel-plan-notice {
+  margin: 0;
+  border-left: 3px solid var(--orange);
+  color: var(--muted);
+  background: var(--orange-soft);
+  padding: 10px 12px;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.45;
+}
+
+.cancel-plan-actions {
+  display: grid;
+  grid-template-columns: 0.65fr 1.35fr;
+  gap: 10px;
+}
+
+.cancel-plan-actions button {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--blue-dark);
+  background: #fff;
+  padding: 0 14px;
+  font-weight: 900;
+}
+
+.cancel-plan-actions .cancel-plan-confirm {
+  border-color: var(--orange);
+  color: #fff;
+  background: var(--orange);
+}
+
+.cancel-plan-actions .cancel-plan-confirm:disabled {
+  border-color: var(--line);
+  color: var(--muted);
+  background: var(--surface-soft);
+  cursor: not-allowed;
+}
+
 .support-form,
 .admin-form,
 .settings-form,

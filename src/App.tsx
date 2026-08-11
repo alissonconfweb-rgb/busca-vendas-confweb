@@ -4,6 +4,7 @@ import {
   ChevronRight,
   CircleAlert,
   CircleCheck,
+  CircleX,
   ClipboardCopy,
   CreditCard,
   Crown,
@@ -887,6 +888,7 @@ function ProductApp({ user, onUserChange }: { user: User | null; onUserChange: (
           <ProfilePage
             user={user}
             settings={settings}
+            contacts={contacts}
             onLoginRequired={requireLogin}
             onPlans={() => setMode("plans")}
           />
@@ -3396,11 +3398,13 @@ function CommercialPage({ contacts, cta }: { contacts: Contact[]; cta?: string }
 function ProfilePage({
   user,
   settings,
+  contacts,
   onLoginRequired,
   onPlans,
 }: {
   user: User | null;
   settings: SettingsMap;
+  contacts: Contact[];
   onLoginRequired: () => boolean;
   onPlans: () => void;
 }) {
@@ -3408,6 +3412,7 @@ function ProfilePage({
   const [message, setMessage] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [cancelPlanOpen, setCancelPlanOpen] = useState(false);
 
   if (!user) {
     return <AccessPrompt title="Entre para acessar seu perfil" onLoginRequired={onLoginRequired} />;
@@ -3470,6 +3475,12 @@ function ProfilePage({
           <button type="button" onClick={onPlans}>
             Ver planos desde {money.format(Number(settings.starter_monthly || 19.9))}
           </button>
+          {user.plan !== "free" && (
+            <button className="cancel-plan-button" type="button" onClick={() => setCancelPlanOpen(true)}>
+              <CircleX size={15} />
+              Cancelar plano
+            </button>
+          )}
         </article>
 
         <form className="profile-card profile-password-form" onSubmit={submitPassword}>
@@ -3508,7 +3519,85 @@ function ProfilePage({
           </button>
         </form>
       </div>
+      {cancelPlanOpen && (
+        <CancelPlanModal
+          contacts={contacts}
+          onClose={() => setCancelPlanOpen(false)}
+        />
+      )}
     </section>
+  );
+}
+
+function cancellationWhatsappHref(contacts: Contact[], reason: string) {
+  const contact = contacts.find((item) => item.status === "active" && /whats|telefone|phone|celular/i.test(item.channel))
+    || contacts.find((item) => /whats|telefone|phone|celular/i.test(item.channel))
+    || defaultContacts[0];
+  const digits = contact.value.replace(/\D/g, "") || defaultContacts[0].value.replace(/\D/g, "");
+  const phone = digits.startsWith("55") ? digits : `55${digits}`;
+  const message = `quero cancelar meu plano por motivo: ${reason.trim()}`;
+
+  return `https://wa.me/${phone}?text=${encodeURIComponent(message)}`;
+}
+
+function CancelPlanModal({ contacts, onClose }: { contacts: Contact[]; onClose: () => void }) {
+  const [reason, setReason] = useState("");
+
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const cleanReason = reason.trim();
+    if (!cleanReason) {
+      return;
+    }
+    window.location.assign(cancellationWhatsappHref(contacts, cleanReason));
+  };
+
+  return (
+    <div
+      className="modal-backdrop"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="cancel-plan-title"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) {
+          onClose();
+        }
+      }}
+    >
+      <form className="cancel-plan-modal" onSubmit={submit}>
+        <button className="modal-close" type="button" onClick={onClose} aria-label="Fechar cancelamento">
+          <X size={20} />
+        </button>
+        <span className="cancel-plan-icon"><MessageCircle size={24} /></span>
+        <div className="cancel-plan-heading">
+          <span>Atendimento Confweb</span>
+          <h2 id="cancel-plan-title">Solicitar cancelamento</h2>
+          <p>Conte brevemente o motivo. Você continuará no WhatsApp do nosso comercial para concluir a solicitação.</p>
+        </div>
+        <label>
+          Motivo do cancelamento
+          <textarea
+            value={reason}
+            onChange={(event) => setReason(event.target.value)}
+            placeholder="Ex.: Não estou usando a ferramenta neste momento."
+            rows={4}
+            maxLength={500}
+            required
+          />
+          <small>{reason.length}/500</small>
+        </label>
+        <p className="cancel-plan-notice">
+          Seu plano permanece ativo até a confirmação do cancelamento pela equipe.
+        </p>
+        <div className="cancel-plan-actions">
+          <button type="button" onClick={onClose}>Voltar</button>
+          <button className="cancel-plan-confirm" type="submit" disabled={!reason.trim()}>
+            <MessageCircle size={18} />
+            Solicitar no WhatsApp
+          </button>
+        </div>
+      </form>
+    </div>
   );
 }
 
