@@ -1776,10 +1776,8 @@ function ResultsPanel({
               <Metric label="Preço" value={money.format(item.price)} variant="price" />
               <Metric
                 label={estimateMode ? "Receita projetada" : "Receita gerada"}
-                value={canSeeMargin ? formatMoneyOrLabel(item.revenue, item.revenueMetricLabel) : maskCurrency(item.revenue || 0)}
+                value={formatMoneyOrLabel(item.revenue, item.revenueMetricLabel)}
                 variant="revenue"
-                locked={!canSeeMargin}
-                onUnlock={onPlans}
               />
               <a className="ad-link" href={item.permalink} target="_blank" rel="noreferrer">
                 Ver anúncio no Mercado Livre
@@ -1793,13 +1791,13 @@ function ResultsPanel({
               <strong>
                 {emergingMode
                   ? "Você encontrou um mercado com espaço para se destacar."
-                  : <>Seu produto tem potencial{estimateMode ? " estimado" : ""}: {canSeeMargin ? money.format(salesPotential) : maskCurrency(salesPotential)} em vendas.</>}
+                  : <>Seu produto tem potencial{estimateMode ? " estimado" : ""}: {money.format(salesPotential)} em vendas.</>}
               </strong>
               <p>
                 {!canSeeMargin
                   ? emergingMode
-                    ? `Existem compradores, mas nenhum líder analisado passou de ${number.format(marketThreshold)} vendas. Revele os números e teste seu preço antes de investir.`
-                    : "Você já viu que existem compradores. Libere o faturamento completo e descubra quanto pode ganhar por venda."
+                    ? `Existem compradores, mas nenhum líder analisado passou de ${number.format(marketThreshold)} vendas. Teste seu preço e calcule seu ganho antes de investir.`
+                    : "Você já viu que existem compradores. Libere o cálculo completo e descubra quanto pode ganhar por venda."
                   : estimateMode
                     ? "Use este raio-x como triagem inicial. Quando a leitura real responder, exibimos os anúncios e vendas públicas."
                     : emergingMode
@@ -1810,7 +1808,7 @@ function ResultsPanel({
             {!canSeeMargin ? (
               <button type="button" onClick={onPlans}>
                 <UnlockKeyhole size={18} />
-                Quero ver o valor completo
+                Quero calcular meu ganho
               </button>
             ) : (
               <a href={commercialHref} target="_blank" rel="noreferrer">
@@ -2260,14 +2258,6 @@ function formatMoneyOrLabel(value: number | null | undefined, fallback = "Aguard
   return fallback;
 }
 
-function maskCurrency(value: number) {
-  let visibleDigits = 0;
-  return money.format(Number(value) || 0).replace(/\d/g, (digit) => {
-    visibleDigits += 1;
-    return visibleDigits <= 2 ? digit : "•";
-  });
-}
-
 function DemandCard({
   result,
   locked,
@@ -2308,8 +2298,8 @@ function DemandCard({
         </div>
         <div className="opportunity-metric revenue">
           <dt>{estimateMode ? "Receita projetada" : "Dinheiro movimentado"}</dt>
-          <dd>{locked ? maskCurrency(totalRevenue) : money.format(totalRevenue)}</dd>
-          <small>{locked ? "valor completo para assinantes" : "somado nos 3 anúncios"}</small>
+          <dd>{money.format(totalRevenue)}</dd>
+          <small>somado nos 3 anúncios</small>
         </div>
         <div className="opportunity-metric ticket">
           <dt>Preço médio vendido</dt>
@@ -2325,7 +2315,7 @@ function DemandCard({
       {locked && (
         <button className="opportunity-unlock" type="button" onClick={onPlans}>
           <UnlockKeyhole size={18} />
-          Revelar o faturamento e quanto posso ganhar
+          Desbloquear cálculo de ganho por produto
           <ChevronRight size={18} />
         </button>
       )}
@@ -2421,7 +2411,6 @@ function HistoryPage({
 }) {
   const [busyId, setBusyId] = useState<number | null>(null);
   const [error, setError] = useState("");
-  const canSeeRevenue = Boolean(user && (canUseAdmin(user) || user.plan !== "free"));
   if (!user) {
     return <AccessPrompt title="Entre para ver suas pesquisas" onLoginRequired={onLoginRequired} />;
   }
@@ -2451,9 +2440,7 @@ function HistoryPage({
               <span>{historySourceLabel(record.source)}</span>
             </div>
             <b>{number.format(record.total_demand)} vendas</b>
-            <b className={!canSeeRevenue ? "history-revenue-locked" : ""}>
-              {canSeeRevenue ? money.format(record.total_revenue) : maskCurrency(record.total_revenue)}
-            </b>
+            <b>{money.format(record.total_revenue)}</b>
             <small>{new Date(record.created_at).toLocaleString("pt-BR")}</small>
             <button type="button" onClick={() => viewSearch(record)} disabled={busyId === record.id}>
               {busyId === record.id ? "Abrindo..." : "Ver pesquisa"}
