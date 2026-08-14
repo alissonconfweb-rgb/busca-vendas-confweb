@@ -2944,7 +2944,6 @@ button.learn-card span {
 }
 
 .cancel-plan-modal > label,
-.cancel-plan-notice,
 .cancel-plan-actions {
   grid-column: 1 / -1;
 }
@@ -2966,17 +2965,6 @@ button.learn-card span {
   justify-self: end;
   color: var(--muted);
   font-size: 11px;
-}
-
-.cancel-plan-notice {
-  margin: 0;
-  border-left: 3px solid var(--orange);
-  color: var(--muted);
-  background: var(--orange-soft);
-  padding: 10px 12px;
-  font-size: 12px;
-  font-weight: 700;
-  line-height: 1.45;
 }
 
 .cancel-plan-actions {
@@ -5548,7 +5536,20 @@ article.finance-row {
     box-shadow: none;
   }
 
-  .mobile-profile-panel .profile-security-action {
+  .mobile-profile-panel-compact {
+    width: min(250px, calc(100vw - 24px));
+    grid-template-columns: 1fr;
+    gap: 9px;
+    padding: 50px 12px 12px;
+  }
+
+  .mobile-profile-panel-compact .profile-close-button {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+  }
+
+  .mobile-profile-panel .mobile-profile-action {
     gap: 8px;
   }
 

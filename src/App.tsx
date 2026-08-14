@@ -839,7 +839,6 @@ function ProductApp({ user, onUserChange }: { user: User | null; onUserChange: (
       <Sidebar
         mode={mode}
         user={user}
-        settings={settings}
         collapsed={sidebarCollapsed}
         onToggleCollapsed={() => setSidebarCollapsed((value) => !value)}
         onMode={setMode}
@@ -952,7 +951,6 @@ function BrandMark() {
 function Sidebar({
   mode,
   user,
-  settings,
   collapsed,
   onToggleCollapsed,
   onMode,
@@ -963,7 +961,6 @@ function Sidebar({
 }: {
   mode: Mode;
   user: User | null;
-  settings: SettingsMap;
   collapsed: boolean;
   onToggleCollapsed: () => void;
   onMode: (mode: Mode) => void;
@@ -1001,12 +998,10 @@ function Sidebar({
       </div>
       <MobileProfileMenu
         user={user}
-        settings={settings}
         mode={mode}
         onLogin={onLogin}
         onRegister={onRegister}
         onLogout={onLogout}
-        onPlans={() => onMode("plans")}
         onProfile={onProfile}
       />
       <AccountSummary user={user} onProfile={onProfile} onLogout={onLogout} />
@@ -1092,21 +1087,17 @@ function billingNeedsAttention(user: User | null) {
 
 function MobileProfileMenu({
   user,
-  settings,
   mode,
   onLogin,
   onRegister,
   onLogout,
-  onPlans,
   onProfile,
 }: {
   user: User | null;
-  settings: SettingsMap;
   mode: Mode;
   onLogin: () => void;
   onRegister: () => void;
   onLogout: () => void;
-  onPlans: () => void;
   onProfile: () => void;
 }) {
   const { planLabel, remaining, usage } = userPlanInfo(user);
@@ -1164,50 +1155,60 @@ function MobileProfileMenu({
         aria-label="Fechar perfil"
         onClick={() => setOpen(false)}
       />
-      <div className="mobile-profile-panel">
-        <div className="mobile-profile-panel-head">
-          <div>
-            <span>{user ? "Perfil" : "Acesso"}</span>
-            <strong>{user?.name || "Criar conta grátis"}</strong>
-            <small>{user?.email || "Cadastre-se para liberar sua primeira busca."}</small>
-            {user?.phone && <small>{user.phone}</small>}
-          </div>
-          <button
-            className="profile-close-button"
-            type="button"
-            onClick={() => setOpen(false)}
-            aria-label="Fechar perfil"
-            title="Fechar perfil"
-          >
-            <X size={19} />
-          </button>
-        </div>
-        <div className="mobile-plan-summary">
-          <span>Plano atual</span>
-          <strong>{planLabel}</strong>
-          {billingNeedsAttention(user) && <small className="billing-status-label">Pagamento pendente</small>}
-          <small>Pesquisas restantes: {remaining}</small>
-          <div className="usage-track">
-            <i style={{ width: `${usage}%` }} />
-          </div>
-        </div>
-        <button type="button" onClick={() => closeAndRun(user ? onPlans : onRegister)}>
-          {user ? `Planos desde ${money.format(Number(settings.starter_monthly || 19.9))}` : "Criar conta grátis"}
-        </button>
-        {user && (
-          <button className="ghost-action profile-security-action" type="button" onClick={() => closeAndRun(onProfile)}>
-            <Lock size={17} />
-            Trocar senha
-          </button>
-        )}
+      <div className={`mobile-profile-panel${user ? " mobile-profile-panel-compact" : ""}`}>
         {user ? (
-          <button className="ghost-action" type="button" onClick={() => closeAndRun(onLogout)}>
-            Sair da conta
-          </button>
+          <>
+            <button
+              className="profile-close-button"
+              type="button"
+              onClick={() => setOpen(false)}
+              aria-label="Fechar perfil"
+              title="Fechar perfil"
+            >
+              <X size={19} />
+            </button>
+            <button className="mobile-profile-action" type="button" onClick={() => closeAndRun(onProfile)}>
+              <UserRound size={18} />
+              Ver perfil
+            </button>
+            <button className="ghost-action mobile-profile-action" type="button" onClick={() => closeAndRun(onLogout)}>
+              <LogOut size={18} />
+              Sair
+            </button>
+          </>
         ) : (
-          <button className="ghost-action" type="button" onClick={() => closeAndRun(onLogin)}>
-            Entrar
-          </button>
+          <>
+            <div className="mobile-profile-panel-head">
+              <div>
+                <span>Acesso</span>
+                <strong>Criar conta grátis</strong>
+                <small>Cadastre-se para liberar sua primeira busca.</small>
+              </div>
+              <button
+                className="profile-close-button"
+                type="button"
+                onClick={() => setOpen(false)}
+                aria-label="Fechar perfil"
+                title="Fechar perfil"
+              >
+                <X size={19} />
+              </button>
+            </div>
+            <div className="mobile-plan-summary">
+              <span>Plano atual</span>
+              <strong>{planLabel}</strong>
+              <small>Pesquisas restantes: {remaining}</small>
+              <div className="usage-track">
+                <i style={{ width: `${usage}%` }} />
+              </div>
+            </div>
+            <button type="button" onClick={() => closeAndRun(onRegister)}>
+              Criar conta grátis
+            </button>
+            <button className="ghost-action" type="button" onClick={() => closeAndRun(onLogin)}>
+              Entrar
+            </button>
+          </>
         )}
       </div>
     </details>
@@ -3586,9 +3587,6 @@ function CancelPlanModal({ contacts, onClose }: { contacts: Contact[]; onClose: 
           />
           <small>{reason.length}/500</small>
         </label>
-        <p className="cancel-plan-notice">
-          Seu plano permanece ativo até a confirmação do cancelamento pela equipe.
-        </p>
         <div className="cancel-plan-actions">
           <button type="button" onClick={onClose}>Voltar</button>
           <button className="cancel-plan-confirm" type="submit" disabled={!reason.trim()}>
