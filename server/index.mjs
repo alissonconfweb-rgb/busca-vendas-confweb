@@ -38,6 +38,7 @@ import {
   configureAsaasApiKey,
   createAsaasCheckout,
   handleAsaasWebhook,
+  publicAsaasCheckoutError,
   refreshAsaasCheckoutStatus,
   setupAsaasIntegration,
   syncAsaasSettingsFromEnv,
@@ -491,9 +492,21 @@ async function route(req, res) {
       const refreshedUser = db.prepare("SELECT * FROM users WHERE id = ?").get(user.id);
       return json(res, 200, { ...result, user: publicUserWithPermissions(refreshedUser) });
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Não foi possível criar o checkout.";
-      setSetting("asaas_last_error", message);
-      return json(res, 400, { error: message });
+      const internalMessage = error instanceof Error ? error.message : "Não foi possível criar o checkout.";
+      const publicMessage = publicAsaasCheckoutError(error);
+      setSetting("asaas_last_error", internalMessage);
+      console.warn("[checkout] Pagamento recusado", {
+        userId: user.id,
+        plan: String(body.plan || ""),
+        cycle: String(body.cycle || ""),
+        billingType: String(body.billingType || ""),
+        providerStatus: Number(error?.statusCode || 0) || null,
+        providerCode: String(error?.providerCode || "") || null,
+      });
+      return json(res, 400, {
+        error: publicMessage,
+        code: error?.name === "AsaasRequestError" ? "PAYMENT_NOT_AUTHORIZED" : "CHECKOUT_VALIDATION_ERROR",
+      });
     }
   }
 

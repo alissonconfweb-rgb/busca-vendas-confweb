@@ -636,6 +636,28 @@ function formatCardNumber(value: string) {
   return digits.match(/.{1,4}/g)?.join(" ") || "";
 }
 
+function isValidCardNumber(value: string) {
+  const number = digitsOnly(value);
+  if (number.length < 13 || number.length > 19 || /^(\d)\1+$/.test(number)) {
+    return false;
+  }
+
+  let sum = 0;
+  let doubleDigit = false;
+  for (let index = number.length - 1; index >= 0; index -= 1) {
+    let digit = Number(number[index]);
+    if (doubleDigit) {
+      digit *= 2;
+      if (digit > 9) {
+        digit -= 9;
+      }
+    }
+    sum += digit;
+    doubleDigit = !doubleDigit;
+  }
+  return sum % 10 === 0;
+}
+
 function formatCpfCnpj(value: string) {
   const digits = digitsOnly(value).slice(0, 14);
   if (digits.length <= 11) {
@@ -2831,8 +2853,8 @@ function CheckoutPage({
         const currentDate = new Date();
         const currentYear = currentDate.getFullYear();
         const currentMonth = currentDate.getMonth() + 1;
-        if (cardDigits.length < 13 || cardDigits.length > 19) {
-          throw new Error("O número do cartão deve ter entre 13 e 19 números.");
+        if (!isValidCardNumber(cardDigits)) {
+          throw new Error("Confira o número do cartão. Ele parece ter sido digitado incorretamente.");
         }
         if (expiryMonth < 1 || expiryMonth > 12) {
           throw new Error("Informe um mês de validade entre 01 e 12.");

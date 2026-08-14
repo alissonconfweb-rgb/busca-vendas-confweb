@@ -39,6 +39,47 @@ export function normalizeAsaasApiKey(value) {
   return String(value || "").trim().replace(/^['"]|['"]$/g, "");
 }
 
+export function isValidCreditCardNumber(value) {
+  const number = digits(value);
+  if (number.length < 13 || number.length > 19 || /^(\d)\1+$/.test(number)) {
+    return false;
+  }
+
+  let sum = 0;
+  let doubleDigit = false;
+  for (let index = number.length - 1; index >= 0; index -= 1) {
+    let digit = Number(number[index]);
+    if (doubleDigit) {
+      digit *= 2;
+      if (digit > 9) {
+        digit -= 9;
+      }
+    }
+    sum += digit;
+    doubleDigit = !doubleDigit;
+  }
+  return sum % 10 === 0;
+}
+
+export function publicAsaasCheckoutError(error) {
+  if (error?.name !== "AsaasRequestError") {
+    return error instanceof Error ? error.message : "Não foi possível criar o pagamento.";
+  }
+
+  const providerCode = String(error.providerCode || "").toLowerCase();
+  const providerMessage = String(error.message || "").toLowerCase();
+  if (
+    providerCode.includes("invalid_creditcard")
+    || providerMessage.includes("transação não autorizada")
+    || providerMessage.includes("transacao nao autorizada")
+    || providerMessage.includes("unauthorized transaction")
+  ) {
+    return "Não foi possível autorizar este cartão. Confira o número, a validade, o CVV e os dados do titular. Nenhuma cobrança foi realizada. Se estiver tudo correto, tente outro cartão.";
+  }
+
+  return "Não foi possível processar o pagamento agora. Nenhuma cobrança foi realizada. Aguarde alguns instantes e tente novamente.";
+}
+
 export function detectAsaasEnvironment(apiKey, fallback = "sandbox") {
   const normalized = normalizeAsaasApiKey(apiKey).toLowerCase();
   if (normalized.includes("hmlg") || normalized.includes("sandbox")) {
@@ -597,8 +638,8 @@ function creditCardPayload(body, remoteIp) {
   if (missingCard.length || missingHolder.length) {
     throw new Error("Preencha todos os dados do cartão, titular, CPF/CNPJ, CEP, número e telefone.");
   }
-  if (payload.creditCard.number.length < 13 || payload.creditCard.number.length > 19) {
-    throw new Error("O número do cartão deve ter entre 13 e 19 números.");
+  if (!isValidCreditCardNumber(payload.creditCard.number)) {
+    throw new Error("Confira o número do cartão. Ele parece ter sido digitado incorretamente.");
   }
   const expiryMonth = Number(payload.creditCard.expiryMonth);
   const expiryYear = Number(payload.creditCard.expiryYear);
@@ -678,7 +719,7 @@ async function asaasRequest(path, { method = "GET", body } = {}) {
   const text = await response.text();
   const data = text ? safeJson(text) : {};
   if (!response.ok) {
-    throw new Error(asaasErrorMessage(data, response.status));
+    throw new AsaasRequestError(data, response.status);
   }
   return data;
 }
@@ -1037,6 +1078,17 @@ function asaasErrorMessage(data, status) {
     ? data.errors.map((error) => error.description || error.message || error.code).filter(Boolean).join(" ")
     : data?.message || data?.error || "";
   return `Asaas respondeu ${status}${details ? `: ${details}` : "."}`;
+}
+
+class AsaasRequestError extends Error {
+  constructor(data, status) {
+    super(asaasErrorMessage(data, status));
+    this.name = "AsaasRequestError";
+    this.statusCode = status;
+    this.providerCode = Array.isArray(data?.errors)
+      ? data.errors.map((error) => error.code).filter(Boolean).join(",")
+      : "";
+  }
 }
 
 async function readJsonFromRequest(req) {
