@@ -1,6 +1,7 @@
 import {
   BarChart3,
   BookOpen,
+  ChevronDown,
   ChevronRight,
   CircleAlert,
   CircleCheck,
@@ -5421,6 +5422,46 @@ function AdminSettings({ settings, afterSave }: { settings: SettingsMap; afterSa
   );
 }
 
+type SettingsAccordionKey = "search" | "meli" | "scrapedo" | "payments";
+
+function SettingsAccordionTrigger({
+  id,
+  title,
+  description,
+  status,
+  Icon,
+  open,
+  onToggle,
+}: {
+  id: SettingsAccordionKey;
+  title: string;
+  description: string;
+  status: string;
+  Icon: LucideIcon;
+  open: boolean;
+  onToggle: (id: SettingsAccordionKey) => void;
+}) {
+  return (
+    <button
+      className="settings-accordion-trigger"
+      type="button"
+      aria-expanded={open}
+      aria-controls={`settings-panel-${id}`}
+      onClick={() => onToggle(id)}
+    >
+      <span className="settings-accordion-icon" aria-hidden="true">
+        <Icon size={22} />
+      </span>
+      <span className="settings-accordion-copy">
+        <strong>{title}</strong>
+        <small>{description}</small>
+      </span>
+      <span className="settings-accordion-status">{status}</span>
+      <ChevronDown className="settings-accordion-chevron" size={22} aria-hidden="true" />
+    </button>
+  );
+}
+
 function AdminSettingsSimple({ settings, afterSave }: { settings: SettingsMap; afterSave: (text?: string) => void }) {
   const [busy, setBusy] = useState<"provider-save" | "meli-save" | "meli-test" | "meli-disconnect" | "asaas-save" | "asaas-test" | "scrapedo-save" | "scrapedo-test" | "">("");
   const [providerMode, setProviderMode] = useState(settings.market_search_provider || "auto");
@@ -5430,6 +5471,16 @@ function AdminSettingsSimple({ settings, afterSave }: { settings: SettingsMap; a
   const [meliDiagnostic, setMeliDiagnostic] = useState<MeliDiagnostic | null>(null);
   const [asaasError, setAsaasError] = useState("");
   const [scrapeDoError, setScrapeDoError] = useState("");
+  const [openSections, setOpenSections] = useState<Record<SettingsAccordionKey, boolean>>({
+    search: false,
+    meli: false,
+    scrapedo: false,
+    payments: false,
+  });
+
+  const toggleSection = (section: SettingsAccordionKey) => {
+    setOpenSections((current) => ({ ...current, [section]: !current[section] }));
+  };
 
   const saveSearchProvider = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -5613,18 +5664,18 @@ function AdminSettingsSimple({ settings, afterSave }: { settings: SettingsMap; a
 
   return (
     <div className="admin-section settings-simple">
-      <form className="settings-card provider-mode-card" onSubmit={saveSearchProvider}>
-        <div className="settings-card-heading">
-          <div className="settings-card-title">
-            <span>Motor de busca</span>
-            <h3>Fonte das pesquisas</h3>
-            <p>Escolha a fonte externa. A base interna é consultada antes de qualquer API para economizar requisições.</p>
-          </div>
-          <div className="credential-status">
-            <b>Mercado Livre: {settings.meli_oauth_connected ? "conectado" : "pendente"}</b>
-            <b>Scrape.do: {settings.scrapedo_connected ? "pronta" : "pendente"}</b>
-          </div>
-        </div>
+      <form className="settings-card settings-accordion-item provider-mode-card" onSubmit={saveSearchProvider}>
+        <SettingsAccordionTrigger
+          id="search"
+          title="Motor de busca"
+          description="Defina qual fonte atende pesquisas que ainda não estão na base interna."
+          status={providerMode === "meli_only" ? "Somente Mercado Livre" : providerMode === "scrapedo_only" ? "Somente Scrape.do" : "Automático"}
+          Icon={Search}
+          open={openSections.search}
+          onToggle={toggleSection}
+        />
+
+        <div className="settings-accordion-content" id="settings-panel-search" hidden={!openSections.search}>
 
         <div className="settings-grid settings-grid-compact">
           <label className="wide">
@@ -5660,21 +5711,30 @@ function AdminSettingsSimple({ settings, afterSave }: { settings: SettingsMap; a
             {busy === "provider-save" ? "Salvando..." : "Salvar motor de busca"}
           </button>
         </div>
+        </div>
       </form>
 
-      <form className="settings-card" onSubmit={saveAndConnectMeli}>
-        <div className="settings-card-heading">
-          <div className="settings-card-title">
-            <span>Fonte oficial</span>
-            <h3>Mercado Livre</h3>
-            <p>Cole o Client ID e a Secret Key da nova aplicação. O Busca Vendas salva as credenciais, abre a autorização e renova o token automaticamente.</p>
-          </div>
-          <div className="credential-status">
-            <b>Client ID: {settings.meli_client_id ? "salvo" : "pendente"}</b>
-            <b>Secret Key: {settings.meli_client_secret_configured ? "salva" : "pendente"}</b>
-            <b>OAuth: {settings.meli_oauth_connected ? "conectado" : "pendente"}</b>
+      <section className="settings-accordion-group" aria-labelledby="settings-api-title">
+        <div className="settings-accordion-group-heading">
+          <span>Integrações</span>
+          <div>
+            <h3 id="settings-api-title">APIs</h3>
+            <p>Abra somente a integração que deseja configurar ou testar.</p>
           </div>
         </div>
+
+      <form className="settings-card settings-accordion-item" onSubmit={saveAndConnectMeli}>
+        <SettingsAccordionTrigger
+          id="meli"
+          title="Mercado Livre"
+          description="Credenciais, autorização OAuth e diagnóstico da fonte oficial."
+          status={settings.meli_oauth_connected ? "Conectado" : "Pendente"}
+          Icon={PackageSearch}
+          open={openSections.meli}
+          onToggle={toggleSection}
+        />
+
+        <div className="settings-accordion-content" id="settings-panel-meli" hidden={!openSections.meli}>
 
         <div className="integration-setup-guide">
           <div>
@@ -5780,29 +5840,21 @@ function AdminSettingsSimple({ settings, afterSave }: { settings: SettingsMap; a
             </>
           )}
         </div>
+        </div>
       </form>
 
-      <form className="settings-card" onSubmit={saveAndTestScrapeDo}>
-        <div className="settings-card-heading">
-          <div className="settings-card-title">
-            <span>Fonte de emergência</span>
-            <h3>Scrape.do</h3>
-            <p>No modo automático, só é usada quando o Mercado Livre oficial não completa a pesquisa. Também pode ser selecionada manualmente para testes.</p>
-          </div>
-          <div className="credential-status">
-            <b>Token: {settings.scrapedo_api_token_configured ? "salvo" : "pendente"}</b>
-            <b>Conexão: {settings.scrapedo_connected ? "validada" : "não validada"}</b>
-            <b>
-              Créditos da API: {
-                settings.scrapedo_provider_remaining_credits === "0"
-                  ? "esgotados"
-                  : settings.scrapedo_provider_remaining_credits
-                    ? number.format(Number(settings.scrapedo_provider_remaining_credits))
-                    : "teste pendente"
-              }
-            </b>
-          </div>
-        </div>
+      <form className="settings-card settings-accordion-item" onSubmit={saveAndTestScrapeDo}>
+        <SettingsAccordionTrigger
+          id="scrapedo"
+          title="Scrape.do"
+          description="Token, créditos, atualização da base e testes da fonte de emergência."
+          status={settings.scrapedo_connected ? "Conectada" : "Pendente"}
+          Icon={Database}
+          open={openSections.scrapedo}
+          onToggle={toggleSection}
+        />
+
+        <div className="settings-accordion-content" id="settings-panel-scrapedo" hidden={!openSections.scrapedo}>
 
         <div className="settings-grid settings-grid-compact">
           <label className="wide">
@@ -5882,21 +5934,22 @@ function AdminSettingsSimple({ settings, afterSave }: { settings: SettingsMap; a
             </button>
           )}
         </div>
-      </form>
-
-      <form className="settings-card" onSubmit={saveAsaas}>
-        <div className="settings-card-heading">
-          <div className="settings-card-title">
-            <span>Pagamentos</span>
-            <h3>Asaas</h3>
-            <p>Configura Pix anual, cartão mensal e a liberação automática dos planos.</p>
-          </div>
-          <div className="credential-status">
-            <b>API Key: {settings.asaas_api_key_configured ? "salva" : "pendente"}</b>
-            <b>Ambiente: {settings.asaas_environment === "production" ? "produção" : "sandbox"}</b>
-            <b>Webhook: {settings.asaas_webhook_ready === "true" ? "pronto" : "será preparado ao salvar"}</b>
-          </div>
         </div>
+      </form>
+      </section>
+
+      <form className="settings-card settings-accordion-item" onSubmit={saveAsaas}>
+        <SettingsAccordionTrigger
+          id="payments"
+          title="Pagamentos"
+          description="Configure a Asaas, o ambiente de cobrança e o webhook."
+          status={settings.asaas_api_key_configured ? (settings.asaas_environment === "production" ? "Produção" : "Sandbox") : "Pendente"}
+          Icon={CreditCard}
+          open={openSections.payments}
+          onToggle={toggleSection}
+        />
+
+        <div className="settings-accordion-content" id="settings-panel-payments" hidden={!openSections.payments}>
 
         <div className="settings-grid">
           <label className="wide">
@@ -5953,6 +6006,7 @@ function AdminSettingsSimple({ settings, afterSave }: { settings: SettingsMap; a
               {busy === "asaas-test" ? "Validando..." : "Validar chave e webhook"}
             </button>
           )}
+        </div>
         </div>
       </form>
     </div>

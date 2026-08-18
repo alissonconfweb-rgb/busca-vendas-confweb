@@ -3990,6 +3990,138 @@ button.learn-card span {
   gap: 16px;
 }
 
+.settings-accordion-group {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: #f7faff;
+  padding: 12px;
+}
+
+.settings-accordion-group-heading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 2px 4px 6px;
+}
+
+.settings-accordion-group-heading > span {
+  border-radius: 999px;
+  color: var(--blue);
+  background: var(--blue-soft);
+  padding: 6px 10px;
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.settings-accordion-group-heading div {
+  min-width: 0;
+}
+
+.settings-accordion-group-heading h3,
+.settings-accordion-group-heading p {
+  margin: 0;
+}
+
+.settings-accordion-group-heading h3 {
+  color: var(--text);
+  font-size: 18px;
+}
+
+.settings-accordion-group-heading p {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.settings-card.settings-accordion-item {
+  display: block;
+  overflow: hidden;
+  border-radius: 8px;
+  padding: 0;
+}
+
+.settings-accordion-trigger {
+  width: 100%;
+  min-height: 78px;
+  display: grid;
+  grid-template-columns: 46px minmax(0, 1fr) auto 28px;
+  align-items: center;
+  gap: 12px;
+  color: var(--blue-dark);
+  background: #fff;
+  padding: 14px 16px;
+  text-align: left;
+}
+
+.settings-accordion-trigger:hover,
+.settings-accordion-trigger[aria-expanded="true"] {
+  background: #f7faff;
+}
+
+.settings-accordion-icon {
+  width: 46px;
+  height: 46px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #cfe0f1;
+  border-radius: 8px;
+  color: var(--blue);
+  background: var(--blue-soft);
+}
+
+.settings-accordion-copy {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.settings-accordion-copy strong {
+  color: var(--text);
+  font-size: 17px;
+  font-weight: 900;
+}
+
+.settings-accordion-copy small {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.settings-accordion-status {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--blue-dark);
+  background: #fff;
+  padding: 7px 10px;
+  font-size: 12px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.settings-accordion-chevron {
+  transition: transform 180ms ease;
+}
+
+.settings-accordion-trigger[aria-expanded="true"] .settings-accordion-chevron {
+  transform: rotate(180deg);
+}
+
+.settings-accordion-content {
+  display: grid;
+  gap: 14px;
+  border-top: 1px solid var(--line-soft);
+  background: #fff;
+  padding: 16px;
+}
+
+.settings-accordion-content[hidden] {
+  display: none;
+}
+
 .settings-card-heading {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -6281,6 +6413,73 @@ article.finance-row {
 }
 
 @media (max-width: 620px) {
+  .settings-simple {
+    gap: 12px;
+  }
+
+  .settings-accordion-group {
+    gap: 8px;
+    padding: 9px;
+  }
+
+  .settings-accordion-group-heading {
+    align-items: flex-start;
+    padding: 3px 2px 7px;
+  }
+
+  .settings-accordion-group-heading > span {
+    display: none;
+  }
+
+  .settings-accordion-group-heading h3 {
+    font-size: 17px;
+  }
+
+  .settings-accordion-group-heading p {
+    font-size: 12px;
+  }
+
+  .settings-accordion-trigger {
+    min-height: 72px;
+    grid-template-columns: 40px minmax(0, 1fr) 22px;
+    gap: 10px;
+    padding: 12px;
+  }
+
+  .settings-accordion-icon {
+    width: 40px;
+    height: 40px;
+  }
+
+  .settings-accordion-copy strong {
+    font-size: 15px;
+  }
+
+  .settings-accordion-copy small {
+    font-size: 11px;
+  }
+
+  .settings-accordion-status {
+    grid-column: 2;
+    width: fit-content;
+    border: 0;
+    border-radius: 0;
+    color: var(--blue);
+    background: transparent;
+    padding: 0;
+    font-size: 10px;
+  }
+
+  .settings-accordion-chevron {
+    grid-column: 3;
+    grid-row: 1 / span 2;
+  }
+
+  .settings-accordion-content {
+    gap: 12px;
+    padding: 12px;
+  }
+
   .admin-tabs {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
