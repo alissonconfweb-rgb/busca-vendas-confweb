@@ -322,6 +322,62 @@ async function route(req, res) {
     return json(res, 201, { user: publicUserWithPermissions(user) });
   }
 
+  if (url.pathname === "/api/integrations/vemserseller/provision" && method === "POST") {
+    const expectedSecret = String(process.env.VEMSERSELLER_INTEGRATION_SECRET || "").trim();
+    const authorization = String(req.headers.authorization || "");
+    const providedSecret = authorization.startsWith("Bearer ") ? authorization.slice(7).trim() : "";
+    if (!expectedSecret || !providedSecret || hashToken(providedSecret) !== hashToken(expectedSecret)) {
+      return json(res, 401, { error: "Integração não autorizada." });
+    }
+
+    const body = await readJson(req);
+    const email = normalizeEmail(required(body.email));
+    if (!isValidEmail(email)) {
+      return json(res, 400, { error: "Informe um e-mail válido." });
+    }
+    const existingUser = findUserByEmail(email);
+    if (existingUser) {
+      return json(res, 200, {
+        status: "existing",
+        freeSearches: Math.max(0, Number(existingUser.search_limit || 0) - Number(existingUser.searches_used || 0)),
+      });
+    }
+    const password = required(body.password);
+    const phone = normalizePhone(required(body.phone));
+    const businessModel = oneOf(body.business_model, BUSINESS_MODELS, "Modelo de negócio inválido.");
+    const marketplaceExperience = oneOf(body.marketplace_experience, MARKETPLACE_EXPERIENCES, "Experiência em marketplace inválida.");
+    if (phone.length < 10 || phone.length > 13) {
+      return json(res, 400, { error: "Informe um telefone válido com DDD." });
+    }
+    const passwordError = validateNewPassword(password);
+    if (passwordError) {
+      return json(res, 400, { error: passwordError });
+    }
+    if (!booleanValue(body.acceptedTerms) || !booleanValue(body.acceptedPrivacy)) {
+      return json(res, 400, { error: "O consentimento do cliente é obrigatório." });
+    }
+
+    const result = db.prepare(`
+      INSERT INTO users (
+        name, email, phone, password_hash, role, status, plan, search_limit,
+        terms_accepted_at, privacy_accepted_at, business_model, marketplace_experience
+      )
+      VALUES (?, ?, ?, ?, 'user', 'active', 'free', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?, ?)
+    `).run(
+      required(body.name).slice(0, 100),
+      email,
+      phone,
+      hashPassword(password),
+      businessModel,
+      marketplaceExperience,
+    );
+    const user = db.prepare("SELECT * FROM users WHERE id = ?").get(result.lastInsertRowid);
+    return json(res, 201, {
+      status: "created",
+      freeSearches: Math.max(0, Number(user.search_limit || 0) - Number(user.searches_used || 0)),
+    });
+  }
+
   if (url.pathname === "/api/auth/logout" && method === "POST") {
     for (const name of [COOKIE, ...LEGACY_COOKIES]) {
       for (const token of readCookieValues(req, name)) {
