@@ -1,6 +1,7 @@
 import { randomInt } from "node:crypto";
 import { db, getSetting, setSetting } from "./db.mjs";
 import {
+  buildMarketplaceSearchQueries,
   buildProductQuerySpec,
   matchesMarketplaceSearchResult,
   normalizeProductSearchQuery,
@@ -12,6 +13,7 @@ import { minimumChampionSales } from "./champion-policy.mjs";
 const DEFAULT_ENDPOINT = "https://api.scrape.do/";
 const DEFAULT_DETAIL_LIMIT = 36;
 const DEFAULT_SEARCH_PAGES = 4;
+const SUPPLEMENTAL_SEARCH_PAGES = 3;
 const EMERGING_MARKET_SAMPLE_SIZE = 12;
 const DEFAULT_DETAIL_CONCURRENCY = 4;
 const MARKET_ITEM_METADATA_VERSION = 4;
@@ -206,7 +208,7 @@ export function searchMercadoLivreCachedItems(query) {
       || parser.championScore(a) - parser.championScore(b)
     ));
 
-  if (!verifiedSalesItems.length) {
+  if (verifiedSalesItems.length < 3) {
     return null;
   }
 
@@ -366,7 +368,26 @@ async function executeMercadoLivreScrapeDo(query, options = {}) {
     ? []
     : getCachedVerifiedItems(querySpec);
   itemCacheHits += cachedVerifiedItems.length;
-  const enrichedPool = dedupe([...enriched, ...cachedVerifiedItems]);
+  let enrichedPool = dedupe([...enriched, ...cachedVerifiedItems]);
+  const verifiedBeforeSupplement = enrichedPool.filter((item) => (
+    item.title
+    && Number(item.price) > 0
+    && Number(item.soldQuantity) > 0
+    && matchesMarketplaceSearchResult(item.title, querySpec).ok
+  ));
+
+  if (verifiedBeforeSupplement.length < 3) {
+    const supplemental = await collectSupplementalVerifiedItems(query, querySpec, {
+      sessionId,
+      cookies,
+      existingItems: enrichedPool,
+      options,
+    });
+    creditsUsed += supplemental.creditsUsed;
+    itemCacheHits += supplemental.itemCacheHits;
+    totalAvailable = Math.max(totalAvailable, supplemental.totalAvailable);
+    enrichedPool = dedupe([...enrichedPool, ...supplemental.items]);
+  }
 
   const verifiedSalesItems = enrichedPool
     .filter((item) => (
@@ -400,7 +421,7 @@ async function executeMercadoLivreScrapeDo(query, options = {}) {
     .slice(0, 3)
     .map(mapItem);
 
-  if (championItems.length === 0 && emergingItems.length >= 1) {
+  if (championItems.length === 0 && emergingItems.length >= 3) {
     return buildSalesResult(emergingItems, {
       message: `Na amostra analisada, nenhum anúncio passou de ${minimumChampionSales().toLocaleString("pt-BR")} vendas públicas.`,
       exactMatches: emergingItems.length,
@@ -413,7 +434,7 @@ async function executeMercadoLivreScrapeDo(query, options = {}) {
   }
 
   const leadingItems = verifiedSalesItems.slice(0, 3).map(mapItem);
-  if (leadingItems.length >= 1) {
+  if (leadingItems.length >= 3) {
     return buildSalesResult(leadingItems, {
       message: `Encontramos ${leadingItems.length} anúncio(s) líder(es) com vendas públicas reais deste mercado.`,
       exactMatches: leadingItems.length,
@@ -435,6 +456,79 @@ async function executeMercadoLivreScrapeDo(query, options = {}) {
     providerCreditsUsed: creditsUsed,
     itemCacheHits,
   };
+}
+
+async function collectSupplementalVerifiedItems(query, querySpec, context) {
+  const variants = buildMarketplaceSearchQueries(query).slice(1);
+  const collected = [];
+  let cookies = context.cookies || "";
+  let creditsUsed = 0;
+  let itemCacheHits = 0;
+  let totalAvailable = 0;
+
+  for (const variant of variants) {
+    for (let page = 1; page <= SUPPLEMENTAL_SEARCH_PAGES; page += 1) {
+      let response = await requestPage(parser.searchUrlFor(variant, page), {
+        sessionId: context.sessionId,
+        cookies,
+        render: false,
+      }).catch(() => null);
+      if (!response) {
+        continue;
+      }
+
+      cookies = response.cookies || cookies;
+      creditsUsed += response.cost;
+      let candidates = parser.extractSearchItems(response.html);
+      if (candidates.length < 3) {
+        const rendered = await requestPage(parser.searchUrlFor(variant, page), {
+          sessionId: context.sessionId,
+          cookies,
+          render: true,
+        }).catch(() => null);
+        if (rendered) {
+          cookies = rendered.cookies || cookies;
+          creditsUsed += rendered.cost;
+          const renderedItems = parser.extractSearchItems(rendered.html);
+          if (renderedItems.length > candidates.length) {
+            response = rendered;
+            candidates = renderedItems;
+          }
+        }
+      }
+
+      totalAvailable = Math.max(totalAvailable, parser.parseTotalAvailable(response.html) || 0);
+      const rankedCandidates = rankCandidatesByPublicSales(dedupe(candidates))
+        .filter((candidate) => (
+          candidate.title
+          && Number(candidate.price) > 0
+          && matchesMarketplaceSearchResult(candidate.title, querySpec).ok
+        ));
+
+      for (const candidate of rankedCandidates) {
+        const currentPool = dedupe([...context.existingItems, ...collected]);
+        if (currentPool.some((item) => marketItemCacheKey(item) === marketItemCacheKey(candidate))) {
+          continue;
+        }
+        const result = await enrichCandidate(candidate, querySpec, context.sessionId, cookies, {
+          ...context.options,
+          requireMetadata: false,
+        });
+        creditsUsed += result.creditsUsed;
+        itemCacheHits += result.cacheHit ? 1 : 0;
+        if (result.item && Number(result.item.soldQuantity) > 0 && Number(result.item.price) > 0) {
+          collected.push(result.item);
+        }
+        if (dedupe([...context.existingItems, ...collected]).filter((item) => (
+          Number(item.soldQuantity) > 0 && Number(item.price) > 0
+        )).length >= 3) {
+          return { items: collected, creditsUsed, itemCacheHits, totalAvailable };
+        }
+      }
+    }
+  }
+
+  return { items: collected, creditsUsed, itemCacheHits, totalAvailable };
 }
 
 async function enrichCandidate(candidate, querySpec, sessionId, initialCookies, options = {}) {

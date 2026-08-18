@@ -188,6 +188,28 @@ export function normalizeProductSearchQuery(text) {
   return normalizeCorrectedText(text);
 }
 
+export function buildMarketplaceSearchQueries(query) {
+  const exactQuery = normalizeProductSearchQuery(query);
+  const spec = buildProductQuerySpec(query);
+  const tokens = spec.tokens;
+  const variants = [exactQuery];
+
+  if (tokens.length >= 4) {
+    const descriptiveTokens = tokens.filter((token) => token.length >= 5 || /\d/.test(token));
+    if (descriptiveTokens.length >= 2) {
+      variants.push(descriptiveTokens.join(" "));
+    }
+    variants.push([...tokens.slice(0, 2), tokens.at(-1)].join(" "));
+  }
+
+  if (tokens.length >= 3) {
+    variants.push(tokens.slice(0, 3).join(" "));
+    variants.push(tokens.slice(0, 2).join(" "));
+  }
+
+  return [...new Set(variants.map((value) => value.trim()).filter(Boolean))].slice(0, 5);
+}
+
 export function tokenizeProductText(text) {
   const withoutMeasures = stripMeasures(text);
   return normalizeText(withoutMeasures)

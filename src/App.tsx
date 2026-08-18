@@ -615,13 +615,12 @@ function buildUnavailableSearchResult(query: string, message: string): SearchRes
 }
 
 function isClientCompleteChampionResult(result: SearchResult, settings: SettingsMap) {
-  const hasVerifiedItems = result.items.length >= 1 && result.items.slice(0, 3).every((item) => (
+  const hasVerifiedItems = result.items.length >= 3 && result.items.slice(0, 3).every((item) => (
     Number(item.soldQuantity) > 0 &&
     Number(item.price) > 0 &&
     Number(item.revenue) > 0
   ));
-  const hasDeliverableShape = result.items.length >= 3
-    || ["emerging", "developing"].includes(result.opportunityMode || "");
+  const hasDeliverableShape = result.items.length >= 3;
 
   return Boolean(
     result.ok &&

@@ -1082,7 +1082,7 @@ function staleSearchResultFromRow(row, timestamp, freshTtlMs, staleTtlMs, query)
 }
 
 function cachedResultMatchesQuery(result, query) {
-  if (!Array.isArray(result?.items) || result.items.length < 1) {
+  if (!Array.isArray(result?.items) || result.items.length < 3) {
     return false;
   }
   if (

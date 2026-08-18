@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  buildMarketplaceSearchQueries,
   buildProductQuerySpec,
   matchesMarketplaceSearchResult,
   matchesProductQuery,
@@ -70,6 +71,18 @@ test("aceita resultado relevante do marketplace mesmo quando a marca nao aparece
   assert.equal(
     matchesMarketplaceSearchResult("Conjunto infantil masculino de algodao", spec).ok,
     false,
+  );
+});
+
+test("amplia uma busca com marca sem perder o produto principal", () => {
+  assert.deepEqual(
+    buildMarketplaceSearchQueries("conjunto feminino Blue Bay Plush"),
+    [
+      "conjunto feminino blue bay plush",
+      "conjunto feminino plush",
+      "conjunto feminino blue",
+      "conjunto feminino",
+    ],
   );
 });
 
