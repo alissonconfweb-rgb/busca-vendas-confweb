@@ -1401,7 +1401,7 @@ function SearchPage({
   onCheckout: (selection: CheckoutSelection) => void;
   onTip: (tip: Tip) => void;
 }) {
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(() => new URLSearchParams(window.location.search).get("q")?.trim().slice(0, 160) || "");
   const [result, setResult] = useState<SearchResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [activeQuery, setActiveQuery] = useState(query);
