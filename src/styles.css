@@ -2021,6 +2021,90 @@ button.learn-card span {
   font-size: 13px;
 }
 
+.commercial-training-card {
+  position: relative;
+  gap: 14px;
+  overflow: hidden;
+  border-color: #f4c69f;
+  background:
+    linear-gradient(145deg, rgba(255, 245, 237, 0.98), rgba(255, 255, 255, 0.98) 58%),
+    #fff;
+}
+
+.commercial-training-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 5px;
+  background: var(--orange);
+}
+
+.commercial-training-kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #a74a08;
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.commercial-training-card h2 {
+  max-width: 15ch;
+  font-size: 22px;
+  line-height: 1.15;
+}
+
+.commercial-training-card .commercial-training-copy {
+  display: block;
+  margin: 0;
+  color: #4f6174;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.commercial-training-link {
+  min-height: 46px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border-radius: 8px;
+  color: #fff;
+  background: var(--orange);
+  padding: 0 15px;
+  font-weight: 900;
+  text-decoration: none;
+  box-shadow: 0 12px 26px rgba(237, 105, 13, 0.2);
+}
+
+.commercial-training-link svg {
+  color: currentColor;
+}
+
+.commercial-support-row {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  border-top: 1px solid #efd8c5;
+  color: var(--muted);
+  padding-top: 12px;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.commercial-support-row svg {
+  color: var(--blue);
+}
+
+.commercial-support-row a {
+  color: var(--blue);
+  font-weight: 900;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
 .contact-link {
   color: var(--blue);
   font-weight: 900;
@@ -3920,6 +4004,45 @@ button.learn-card span {
   padding: 0;
 }
 
+.commercial-content-editor {
+  gap: 18px;
+}
+
+.commercial-content-editor .settings-card-title h2,
+.commercial-contacts-heading h2 {
+  margin: 3px 0 0;
+  color: var(--text);
+  font-size: 20px;
+}
+
+.commercial-content-editor .settings-card-title p,
+.commercial-contacts-heading p {
+  margin: 5px 0 0;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.settings-eyebrow {
+  color: var(--blue);
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.commercial-editor-grid {
+  grid-template-columns: repeat(2, minmax(220px, 1fr));
+}
+
+.commercial-editor-grid textarea {
+  min-height: 88px;
+  resize: vertical;
+}
+
+.commercial-contacts-heading {
+  border-top: 1px solid var(--line-soft);
+  padding-top: 4px;
+}
+
 .settings-card-heading .credential-status {
   justify-content: flex-end;
   margin: 0;
@@ -4475,6 +4598,14 @@ article.finance-row {
     grid-column: 1 / -1;
   }
 
+  .commercial-training-card h2 {
+    max-width: 34ch;
+  }
+
+  .commercial-training-card .commercial-training-copy {
+    max-width: 78ch;
+  }
+
   .result-main {
     grid-template-columns: 28px 70px minmax(180px, 1fr) minmax(108px, 0.72fr) minmax(108px, 0.72fr) minmax(156px, 0.98fr);
   }
@@ -4542,6 +4673,10 @@ article.finance-row {
   .support-admin-row,
   .history-row {
     grid-template-columns: 1fr;
+  }
+
+  .commercial-editor-grid .wide {
+    grid-column: 1;
   }
 
   .billing-alert {
@@ -5136,6 +5271,20 @@ article.finance-row {
   .margin-card,
   .commercial-mini {
     padding: 15px 14px;
+  }
+
+  .commercial-training-card h2 {
+    max-width: none;
+    font-size: 20px;
+  }
+
+  .commercial-support-row {
+    grid-template-columns: 18px minmax(0, 1fr);
+  }
+
+  .commercial-support-row a {
+    grid-column: 2;
+    width: fit-content;
   }
 
   .panel-head {

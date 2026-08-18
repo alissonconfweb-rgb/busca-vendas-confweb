@@ -370,6 +370,13 @@ const defaultSettings: SettingsMap = {
   scale_monthly: "39.90",
   scale_yearly: "359.10",
   commercial_cta: "Fale com um Especialista Certificado da Confweb",
+  commercial_training_eyebrow: "Treinamento Confweb",
+  commercial_training_title: "Agora, aprenda a aplicar e a vender muito com esses produtos, com o treinamento da Confweb.",
+  commercial_training_body: "Hoje, a Confweb gerencia mais de 60 empresas no modelo de administração, gestão e escala. Você também pode ser um case de sucesso.",
+  commercial_training_button: "Conhecer o treinamento",
+  commercial_training_url: "https://www.confweb.com.br",
+  commercial_support_text: "Precisa de ajuda? Fale com um especialista da Confweb.",
+  commercial_support_button: "Conversar",
 };
 
 const defaultTips: Tip[] = [
@@ -1651,7 +1658,7 @@ function SearchPage({
             <LearnPreview tips={tips} onTip={onTip} />
           </div>
           <aside className="right-stack">
-            <CommercialMini contacts={contacts} />
+            <CommercialMini contacts={contacts} settings={settings} />
           </aside>
         </section>
       </div>
@@ -1697,6 +1704,18 @@ function contactHref(contact: Contact) {
 
 function contactDisplayValue(contact: Contact) {
   return contact.value.replace(/^https?:\/\//i, "");
+}
+
+function externalHref(value: string, fallback = "") {
+  const normalized = value.trim();
+  const candidate = /^www\./i.test(normalized) ? `https://${normalized}` : normalized;
+
+  try {
+    const url = new URL(candidate);
+    return ["http:", "https:"].includes(url.protocol) ? url.toString() : fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 function ResultsPanel({
@@ -2424,27 +2443,37 @@ function LearnPreview({ tips, onTip }: { tips: Tip[]; onTip: (tip: Tip) => void 
   );
 }
 
-function CommercialMini({ contacts }: { contacts: Contact[] }) {
-  return (
-    <section className="commercial-mini">
-      <MessageCircle size={24} />
-      <h2>Fale com um Especialista Certificado da Confweb</h2>
-      {contacts.slice(0, 2).map((contact) => {
-        const href = contactHref(contact);
+function CommercialMini({ contacts, settings }: { contacts: Contact[]; settings: SettingsMap }) {
+  const supportContact = contacts.find((contact) => /whats/i.test(contact.channel))
+    || contacts.find((contact) => Boolean(contactHref(contact)));
+  const supportHref = supportContact ? contactHref(supportContact) : "";
+  const siteContact = contacts.find((contact) => /site|web|url|link/i.test(contact.channel));
+  const fallbackTrainingUrl = siteContact ? contactHref(siteContact) : "https://www.confweb.com.br";
+  const trainingUrl = externalHref(settings.commercial_training_url || "", fallbackTrainingUrl);
 
-        return (
-          <p key={contact.id}>
-            <strong>{contact.name}</strong>
-            {href ? (
-              <a className="contact-link" href={href} target="_blank" rel="noreferrer">
-                {contact.channel}: {contactDisplayValue(contact)}
-              </a>
-            ) : (
-              <span>{contact.channel}: {contact.value}</span>
-            )}
-          </p>
-        );
-      })}
+  return (
+    <section className="commercial-mini commercial-training-card">
+      <span className="commercial-training-kicker">
+        <Rocket size={18} />
+        {settings.commercial_training_eyebrow || defaultSettings.commercial_training_eyebrow}
+      </span>
+      <h2>{settings.commercial_training_title || defaultSettings.commercial_training_title}</h2>
+      <p className="commercial-training-copy">
+        {settings.commercial_training_body || defaultSettings.commercial_training_body}
+      </p>
+      <a className="commercial-training-link" href={trainingUrl} target="_blank" rel="noreferrer">
+        {settings.commercial_training_button || defaultSettings.commercial_training_button}
+        <ChevronRight size={18} />
+      </a>
+      <div className="commercial-support-row">
+        <MessageCircle size={18} />
+        <span>{settings.commercial_support_text || defaultSettings.commercial_support_text}</span>
+        {supportHref && (
+          <a href={supportHref} target="_blank" rel="noreferrer">
+            {settings.commercial_support_button || defaultSettings.commercial_support_button}
+          </a>
+        )}
+      </div>
     </section>
   );
 }
@@ -4103,7 +4132,7 @@ function AdminPanel({ user, onSettingsChange }: { user: User; onSettingsChange: 
       {tab === "searches" && <AdminSearchCache />}
       {tab === "users" && <AdminUsers currentUser={user} users={data.users} afterSave={afterSave} />}
       {tab === "finance" && <AdminFinance finance={data.finance} users={data.users} afterSave={afterSave} />}
-      {tab === "contacts" && <AdminContacts contacts={data.contacts} afterSave={afterSave} />}
+      {tab === "contacts" && <AdminContacts contacts={data.contacts} settings={data.settings} afterSave={afterSave} />}
       {tab === "tips" && <AdminTips tips={data.tips} afterSave={afterSave} />}
       {tab === "support" && <AdminSupport tickets={data.tickets} afterSave={afterSave} />}
       {tab === "settings" && <AdminSettings settings={data.settings} afterSave={afterSave} />}
@@ -4591,7 +4620,13 @@ function AdminFinance({ finance, users, afterSave }: { finance: FinanceRecord[];
   );
 }
 
-function AdminContacts({ contacts, afterSave }: { contacts: Contact[]; afterSave: () => void }) {
+function AdminContacts({ contacts, settings, afterSave }: { contacts: Contact[]; settings: SettingsMap; afterSave: () => void }) {
+  const saveCommercialCard = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    await api("/api/admin/settings", { method: "PATCH", body: JSON.stringify(formJson(event.currentTarget)) });
+    afterSave();
+  };
+
   const create = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const form = event.currentTarget;
@@ -4609,6 +4644,92 @@ function AdminContacts({ contacts, afterSave }: { contacts: Contact[]; afterSave
 
   return (
     <div className="admin-section">
+      <section className="settings-card commercial-content-editor">
+        <div className="settings-card-heading">
+          <div className="settings-card-title">
+            <span className="settings-eyebrow">Card da página inicial</span>
+            <h2>Treinamento e resultados da Confweb</h2>
+            <p>Edite a chamada, a prova social, o botão da landing page e o suporte discreto exibidos ao lado das pesquisas.</p>
+          </div>
+        </div>
+        <form className="settings-form" onSubmit={saveCommercialCard}>
+          <div className="settings-grid commercial-editor-grid">
+            <label>
+              Chamada curta
+              <input
+                name="commercial_training_eyebrow"
+                defaultValue={settings.commercial_training_eyebrow || defaultSettings.commercial_training_eyebrow}
+                required
+              />
+            </label>
+            <label>
+              Texto do botão
+              <input
+                name="commercial_training_button"
+                defaultValue={settings.commercial_training_button || defaultSettings.commercial_training_button}
+                required
+              />
+            </label>
+            <label className="wide">
+              Título principal
+              <textarea
+                name="commercial_training_title"
+                defaultValue={settings.commercial_training_title || defaultSettings.commercial_training_title}
+                rows={3}
+                required
+              />
+            </label>
+            <label className="wide">
+              Texto de autoridade e resultado
+              <textarea
+                name="commercial_training_body"
+                defaultValue={settings.commercial_training_body || defaultSettings.commercial_training_body}
+                rows={4}
+                required
+              />
+            </label>
+            <label className="wide">
+              Link da landing page
+              <input
+                name="commercial_training_url"
+                type="url"
+                defaultValue={settings.commercial_training_url || defaultSettings.commercial_training_url}
+                placeholder="https://www.confweb.com.br/sua-pagina"
+                required
+              />
+            </label>
+            <label>
+              Chamada discreta do suporte
+              <input
+                name="commercial_support_text"
+                defaultValue={settings.commercial_support_text || defaultSettings.commercial_support_text}
+                required
+              />
+            </label>
+            <label>
+              Botão do suporte
+              <input
+                name="commercial_support_button"
+                defaultValue={settings.commercial_support_button || defaultSettings.commercial_support_button}
+                required
+              />
+            </label>
+          </div>
+          <div className="settings-card-actions">
+            <button className="primary-action" type="submit">
+              <Rocket size={18} />
+              Salvar card comercial
+            </button>
+          </div>
+        </form>
+      </section>
+
+      <div className="admin-section-heading commercial-contacts-heading">
+        <div>
+          <h2>Contatos da Confweb</h2>
+          <p>O WhatsApp principal é usado no suporte discreto e nas chamadas comerciais da ferramenta.</p>
+        </div>
+      </div>
       <form className="admin-form" onSubmit={create}>
         <input name="name" placeholder="Nome" required />
         <input name="channel" placeholder="Canal: WhatsApp, E-mail, Site..." required />

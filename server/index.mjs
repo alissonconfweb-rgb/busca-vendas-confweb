@@ -78,6 +78,13 @@ const PUBLIC_SETTING_KEYS = new Set([
   "scale_monthly",
   "scale_yearly",
   "commercial_cta",
+  "commercial_training_eyebrow",
+  "commercial_training_title",
+  "commercial_training_body",
+  "commercial_training_button",
+  "commercial_training_url",
+  "commercial_support_text",
+  "commercial_support_button",
 ]);
 const BUSINESS_MODELS = [
   "importer",
@@ -2657,7 +2664,7 @@ function boolValue(value) {
 }
 
 function normalizeSettingValue(key, value) {
-  if (key.startsWith("meli_") || key.startsWith("oxylabs_") || key.startsWith("proxy_") || key.startsWith("zyte_") || key.startsWith("scrapedo_") || key.startsWith("asaas_") || key.startsWith("market_") || key === "min_champion_sales" || key === "frontend_origin") {
+  if (key.startsWith("meli_") || key.startsWith("oxylabs_") || key.startsWith("proxy_") || key.startsWith("zyte_") || key.startsWith("scrapedo_") || key.startsWith("asaas_") || key.startsWith("market_") || key.startsWith("commercial_") || key === "min_champion_sales" || key === "frontend_origin") {
     return String(value || "").trim();
   }
   return value;
