@@ -171,7 +171,24 @@ export function scrapeDoSearchPolicy() {
 }
 
 export function hasEnoughInspectedCandidates({ championCount, verifiedCount, inspectedCount, sampleTarget }) {
-  return championCount >= 3 || (verifiedCount >= 3 && inspectedCount >= sampleTarget);
+  return verifiedCount >= 3 && inspectedCount >= sampleTarget;
+}
+
+export function isUsableMercadoLivreHtml(status, html) {
+  if (status >= 200 && status < 300) {
+    return true;
+  }
+  if (status !== 404) {
+    return false;
+  }
+  const text = String(html || "").toLowerCase();
+  return text.includes("<html")
+    && text.includes("mercadolivre")
+    && (
+      text.includes("lista.mercadolivre.com.br")
+      || text.includes("ui-search")
+      || text.includes("search-nordic")
+    );
 }
 
 export function searchMercadoLivreCachedItems(query) {
@@ -297,8 +314,7 @@ async function executeMercadoLivreScrapeDo(query, options = {}) {
     );
 
     const uniquePageCandidates = dedupe(candidates);
-    const candidatesWithPublicSales = uniquePageCandidates.filter((item) => Number(item.soldQuantity || 0) > 0);
-    if (candidatesWithPublicSales.length >= 3 || uniquePageCandidates.length >= candidateTarget()) {
+    if (uniquePageCandidates.length >= candidateTarget()) {
       break;
     }
   }
@@ -329,9 +345,10 @@ async function executeMercadoLivreScrapeDo(query, options = {}) {
     )).length;
     const inspectedCount = Math.min(offset + batchSize, uniqueCandidates.length);
     const verifiedCount = enriched.filter((item) => item.price > 0 && item.soldQuantity > 0).length;
-    const minimumInspectionTarget = listingHasCompleteRanking
-      ? Math.min(3, uniqueCandidates.length)
-      : Math.min(EMERGING_MARKET_SAMPLE_SIZE, uniqueCandidates.length);
+    const minimumInspectionTarget = Math.min(
+      Math.max(candidateTarget(), EMERGING_MARKET_SAMPLE_SIZE),
+      uniqueCandidates.length,
+    );
     if (hasEnoughInspectedCandidates({
       championCount,
       verifiedCount,
@@ -696,7 +713,7 @@ async function requestPage(targetUrl, options = {}) {
   const startedAt = Date.now();
   const response = await fetchScrapeDoPageWithRetry(requestUrl);
   const html = await response.text();
-  if (!response.ok) {
+  if (!isUsableMercadoLivreHtml(response.status, html)) {
     throw new Error(describeError(response.status, html));
   }
   const result = {

@@ -2832,6 +2832,17 @@ button.learn-card span {
   overflow-wrap: anywhere;
 }
 
+.profile-business-data {
+  display: grid;
+  gap: 3px;
+  margin-top: 6px;
+}
+
+.profile-business-data small {
+  color: var(--blue-dark);
+  line-height: 1.35;
+}
+
 .profile-metrics {
   display: grid;
   gap: 6px;
@@ -3187,7 +3198,7 @@ button.learn-card span {
 
 .login-modal {
   position: relative;
-  width: min(420px, 100%);
+  width: min(470px, 100%);
   max-height: calc(100vh - 40px);
   max-height: calc(100dvh - 40px);
   display: grid;
@@ -4321,6 +4332,13 @@ button.learn-card span {
   color: var(--muted);
   font-size: 12px;
   font-weight: 800;
+}
+
+.user-contact-cell small:nth-last-child(-n + 2) {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  line-height: 1.25;
 }
 
 .user-row-actions {

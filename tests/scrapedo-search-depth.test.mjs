@@ -11,6 +11,7 @@ const { db, initDatabase, setSetting } = await import("../server/db.mjs");
 const {
   ensureScrapeDoSearchDepth,
   hasEnoughInspectedCandidates,
+  isUsableMercadoLivreHtml,
   rankCandidatesByPublicSales,
   scrapeDoSearchPolicy,
   shouldUseScrapeDoItemCache,
@@ -51,13 +52,13 @@ test("preserva uma profundidade maior configurada para a fonte", () => {
   });
 });
 
-test("encerra a validacao assim que encontra tres campeoes reais", () => {
+test("compara a amostra inteira antes de fechar os tres campeoes", () => {
   assert.equal(hasEnoughInspectedCandidates({
     championCount: 3,
     verifiedCount: 3,
     inspectedCount: 4,
     sampleTarget: 12,
-  }), true);
+  }), false);
   assert.equal(hasEnoughInspectedCandidates({
     championCount: 2,
     verifiedCount: 4,
@@ -70,6 +71,15 @@ test("encerra a validacao assim que encontra tres campeoes reais", () => {
     inspectedCount: 12,
     sampleTarget: 12,
   }), true);
+});
+
+test("aceita a pagina valida do Mercado Livre mesmo quando a Scrape.do repassa status 404", () => {
+  const mercadoLivreHtml = `<!doctype html><html lang="pt-BR"><head><base href="https://lista.mercadolivre.com.br/produto"><script src="search-nordic.js"></script></head></html>`;
+
+  assert.equal(isUsableMercadoLivreHtml(404, mercadoLivreHtml), true);
+  assert.equal(isUsableMercadoLivreHtml(404, "<html><body>Not found</body></html>"), false);
+  assert.equal(isUsableMercadoLivreHtml(500, mercadoLivreHtml), false);
+  assert.equal(isUsableMercadoLivreHtml(200, "qualquer resposta"), true);
 });
 
 test("ignora o cache individual de anuncios em uma atualizacao forcada", () => {

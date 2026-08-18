@@ -190,6 +190,8 @@ export function initDatabase() {
   ensureColumn("users", "terms_accepted_at", "TEXT");
   ensureColumn("users", "privacy_accepted_at", "TEXT");
   ensureColumn("users", "password_changed_at", "TEXT");
+  ensureColumn("users", "business_model", "TEXT");
+  ensureColumn("users", "marketplace_experience", "TEXT");
   ensureColumn("finance_records", "provider", "TEXT");
   ensureColumn("finance_records", "external_id", "TEXT");
   ensureColumn("finance_records", "provider_payment_id", "TEXT");

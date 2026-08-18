@@ -108,6 +108,11 @@ test("entrega uma coleta concluída depois da resposta inicial sem cobrar duas v
     INSERT INTO market_search_cache (key, query, source, total_demand, total_revenue, payload, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
   `).run(cacheKey, query, result.source, demand, revenue, JSON.stringify(result));
+  database.prepare(`
+    UPDATE search_requests
+    SET status = 'ready', payload = ?, error = NULL, updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(JSON.stringify(result), pending.requestId);
 
   const firstStatus = await fetch(`${baseUrl}/api/search-status/${pending.requestId}`, {
     headers: { Cookie: cookie, Origin: origin },
@@ -122,6 +127,35 @@ test("entrega uma coleta concluída depois da resposta inicial sem cobrar duas v
   });
   assert.equal(secondStatus.status, 200);
   assert.equal(database.prepare("SELECT COUNT(*) count FROM search_history").get().count, 1);
+
+  const history = database.prepare("SELECT id, payload FROM search_history LIMIT 1").get();
+  const changedResult = {
+    ...result,
+    items: result.items.map((item) => ({
+      ...item,
+      soldQuantity: item.soldQuantity * 10,
+      revenue: item.revenue * 10,
+    })),
+  };
+  changedResult.totals = {
+    ...result.totals,
+    demand: demand * 10,
+    actualDemand: demand * 10,
+    revenue: revenue * 10,
+  };
+  database.prepare(`
+    UPDATE market_search_cache
+    SET total_demand = ?, total_revenue = ?, payload = ?, updated_at = CURRENT_TIMESTAMP
+    WHERE key = ?
+  `).run(demand * 10, revenue * 10, JSON.stringify(changedResult), cacheKey);
+
+  const restoredResponse = await fetch(`${baseUrl}/api/search-history/${history.id}`, {
+    headers: { Cookie: cookie, Origin: origin },
+  });
+  assert.equal(restoredResponse.status, 200);
+  const restored = await restoredResponse.json();
+  assert.deepEqual(restored.result.items.map((item) => item.soldQuantity), items.map((item) => item.soldQuantity));
+  assert.equal(database.prepare("SELECT payload FROM search_history WHERE id = ?").get(history.id).payload, history.payload);
 
   const userId = database.prepare("SELECT id FROM users WHERE email = ?").get("admin-search-job@teste.local").id;
   const legacyToken = "legacy-session-token-for-migration";

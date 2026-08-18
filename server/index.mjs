@@ -79,6 +79,15 @@ const PUBLIC_SETTING_KEYS = new Set([
   "scale_yearly",
   "commercial_cta",
 ]);
+const BUSINESS_MODELS = [
+  "importer",
+  "manufacturer",
+  "distributor",
+  "physical_retail",
+  "online_retail_cnpj",
+  "online_retail_no_cnpj",
+];
+const MARKETPLACE_EXPERIENCES = ["selling", "starting"];
 
 bootstrapAdminFromEnv(db);
 syncMeliSettingsFromEnv();
@@ -258,6 +267,12 @@ async function route(req, res) {
     const email = normalizeEmail(required(body.email));
     const password = required(body.password);
     const phone = normalizePhone(required(body.phone));
+    const businessModel = oneOf(body.business_model, BUSINESS_MODELS, "Selecione seu modelo de negócio.");
+    const marketplaceExperience = oneOf(
+      body.marketplace_experience,
+      MARKETPLACE_EXPERIENCES,
+      "Informe se você já vende em e-commerce ou marketplace.",
+    );
     if (!isValidEmail(email)) {
       return json(res, 400, { error: "Informe um e-mail válido." });
     }
@@ -278,10 +293,17 @@ async function route(req, res) {
     const result = db.prepare(`
       INSERT INTO users (
         name, email, phone, password_hash, role, status, plan, search_limit,
-        terms_accepted_at, privacy_accepted_at
+        terms_accepted_at, privacy_accepted_at, business_model, marketplace_experience
       )
-      VALUES (?, ?, ?, ?, 'user', 'active', 'free', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-    `).run(required(body.name).slice(0, 100), email, phone, hashPassword(password));
+      VALUES (?, ?, ?, ?, 'user', 'active', 'free', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?, ?)
+    `).run(
+      required(body.name).slice(0, 100),
+      email,
+      phone,
+      hashPassword(password),
+      businessModel,
+      marketplaceExperience,
+    );
     const user = db.prepare("SELECT * FROM users WHERE id = ?").get(result.lastInsertRowid);
     const session = createSession(user.id);
     setCookie(res, session.token, session.expires);
@@ -415,23 +437,10 @@ async function route(req, res) {
       return json(res, 404, { error: "Pesquisa não encontrada." });
     }
 
-    const result = await resolveMarketSearch(record.query);
-    if (!isCompleteRealSalesResult(result)) {
+    const result = parseSearchPayload(record.payload);
+    if (!isCompleteRealSalesResult(result) || !cachedResultMatchesQuery(result, record.query)) {
       return json(res, 410, { error: "Essa pesquisa salva é antiga e não contém três anúncios reais completos. Faça uma nova busca para atualizar." });
     }
-
-    db.prepare(`
-      UPDATE search_history
-      SET source = ?, total_demand = ?, total_revenue = ?, payload = ?
-      WHERE id = ? AND user_id = ?
-    `).run(
-      result.source,
-      result.totals.demand,
-      result.totals.revenue,
-      JSON.stringify(result),
-      record.id,
-      user.id,
-    );
 
     return json(res, 200, {
       id: record.id,
@@ -583,14 +592,6 @@ async function handleSearchStatus(req, res, user, requestId) {
   let request = findSearchRequest(requestId, user.id);
   if (!request) {
     return json(res, 404, { error: "Pesquisa em andamento não encontrada." });
-  }
-
-  if (request.status !== "ready") {
-    const cached = await resolveImmediateMarketSearch(request.query);
-    if (isBillableSearchResult(cached)) {
-      markSearchRequestReady(request.id, cached);
-      request = findSearchRequest(request.id, user.id);
-    }
   }
 
   if (request.status === "pending") {
@@ -1370,6 +1371,9 @@ function sanitizeSearchError(message) {
   if (/captcha|verificacao|verificação|seguranca|segurança|suspicious|account-verification/i.test(text)) {
     return "O Mercado Livre pediu verificação de segurança para a leitura automática.";
   }
+  if (/<(!doctype|html|head|body|base|script)\b/i.test(text)) {
+    return "A fonte de dados respondeu com uma página temporária em vez dos anúncios. A pesquisa pode ser tentada novamente sem consumir seu limite.";
+  }
   return text.length > 220 ? `${text.slice(0, 220)}...` : text;
 }
 
@@ -1848,7 +1852,8 @@ async function handleAdmin(req, res, url, currentUser) {
 
   if (path === "users" && method === "GET") {
     return json(res, 200, db.prepare(`
-      SELECT id, name, email, phone, role, status, plan, search_limit, searches_used,
+      SELECT id, name, email, phone, business_model, marketplace_experience,
+             role, status, plan, search_limit, searches_used,
              billing_status, billing_cycle, billing_payment_url, billing_access_until, created_at
       FROM users
       ORDER BY id DESC
@@ -1862,6 +1867,12 @@ async function handleAdmin(req, res, url, currentUser) {
     const email = normalizeEmail(required(body.email));
     const phone = normalizePhone(required(body.phone));
     const password = required(body.password);
+    const businessModel = body.business_model
+      ? oneOf(body.business_model, BUSINESS_MODELS, "Modelo de negócio inválido.")
+      : null;
+    const marketplaceExperience = body.marketplace_experience
+      ? oneOf(body.marketplace_experience, MARKETPLACE_EXPERIENCES, "Experiência em marketplace inválida.")
+      : null;
     if (!isValidEmail(email)) {
       return json(res, 400, { error: "Informe um e-mail válido." });
     }
@@ -1879,8 +1890,11 @@ async function handleAdmin(req, res, url, currentUser) {
     const role = isCreator(currentUser) && (body.role === "admin" || email.toLowerCase() === CREATOR_EMAIL) ? "admin" : "user";
     const billingStatus = ["starter", "scale"].includes(plan) ? "active" : "none";
     const result = db.prepare(`
-      INSERT INTO users (name, email, phone, password_hash, role, status, plan, search_limit, billing_status)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO users (
+        name, email, phone, password_hash, role, status, plan, search_limit, billing_status,
+        business_model, marketplace_experience
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       name,
       email,
@@ -1891,9 +1905,12 @@ async function handleAdmin(req, res, url, currentUser) {
       plan,
       searchLimit,
       billingStatus,
+      businessModel,
+      marketplaceExperience,
     );
     return json(res, 201, db.prepare(`
-      SELECT id, name, email, phone, role, status, plan, search_limit, searches_used,
+      SELECT id, name, email, phone, business_model, marketplace_experience,
+             role, status, plan, search_limit, searches_used,
              billing_status, billing_cycle, billing_payment_url, billing_access_until, created_at
       FROM users
       WHERE id = ?

@@ -44,13 +44,31 @@ type PaidPlan = "starter" | "scale";
 type PlanCycle = "monthly" | "yearly";
 type BillingType = "PIX" | "CREDIT_CARD";
 type ChargeMode = "subscription" | "single";
+type BusinessModel = "importer" | "manufacturer" | "distributor" | "physical_retail" | "online_retail_cnpj" | "online_retail_no_cnpj";
+type MarketplaceExperience = "selling" | "starting";
 type Mode = "search" | "history" | "plans" | "checkout" | "learn" | "commercial" | "support" | "profile" | "admin" | "terms" | "privacy";
+
+const BUSINESS_MODEL_LABELS: Record<BusinessModel, string> = {
+  importer: "Importador",
+  manufacturer: "Fabricante",
+  distributor: "Distribuidor",
+  physical_retail: "Varejo com loja física",
+  online_retail_cnpj: "Varejo sem loja física (com CNPJ)",
+  online_retail_no_cnpj: "Varejo sem loja física (sem CNPJ)",
+};
+
+const MARKETPLACE_EXPERIENCE_LABELS: Record<MarketplaceExperience, string> = {
+  selling: "Sim, já vendo",
+  starting: "Não, mas quero começar",
+};
 
 type User = {
   id: number;
   name: string;
   email: string;
   phone?: string | null;
+  business_model?: BusinessModel | null;
+  marketplace_experience?: MarketplaceExperience | null;
   role: Role;
   status: string;
   plan: Plan;
@@ -621,6 +639,14 @@ function titleCase(text: string) {
     .filter(Boolean)
     .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
     .join(" ");
+}
+
+function businessModelLabel(value?: BusinessModel | null) {
+  return value ? BUSINESS_MODEL_LABELS[value] || "Não informado" : "Modelo de negócio não informado";
+}
+
+function marketplaceExperienceLabel(value?: MarketplaceExperience | null) {
+  return value ? MARKETPLACE_EXPERIENCE_LABELS[value] || "Não informado" : "Experiência em marketplace não informada";
 }
 
 function formJson(form: HTMLFormElement) {
@@ -3486,6 +3512,10 @@ function ProfilePage({
             <strong>{user.name}</strong>
             <p>{user.email}</p>
             {user.phone && <p>{user.phone}</p>}
+            <div className="profile-business-data">
+              <small>{businessModelLabel(user.business_model)}</small>
+              <small>{marketplaceExperienceLabel(user.marketplace_experience)}</small>
+            </div>
           </div>
           <div className="profile-metrics">
             <span>Plano atual</span>
@@ -3844,6 +3874,28 @@ function LoginModal({
           <label>
             Telefone
             <input name="phone" type="tel" placeholder="(11) 99999-9999" autoComplete="tel" required />
+          </label>
+        )}
+        {authMode === "register" && (
+          <label>
+            Modelo de negócio
+            <select name="business_model" defaultValue="" required>
+              <option value="" disabled>Selecione seu modelo</option>
+              {Object.entries(BUSINESS_MODEL_LABELS).map(([value, label]) => (
+                <option key={value} value={value}>{label}</option>
+              ))}
+            </select>
+          </label>
+        )}
+        {authMode === "register" && (
+          <label>
+            Já vende em E-commerce ou Marketplace?
+            <select name="marketplace_experience" defaultValue="" required>
+              <option value="" disabled>Selecione uma opção</option>
+              {Object.entries(MARKETPLACE_EXPERIENCE_LABELS).map(([value, label]) => (
+                <option key={value} value={value}>{label}</option>
+              ))}
+            </select>
           </label>
         )}
         {authMode !== "recovery" && <label>
@@ -4290,6 +4342,18 @@ function AdminUsers({
         <input name="name" placeholder="Nome" required />
         <input name="email" type="email" placeholder="E-mail" required />
         <input name="phone" type="tel" placeholder="Telefone" />
+        <select name="business_model" defaultValue="">
+          <option value="">Modelo de negócio (opcional)</option>
+          {Object.entries(BUSINESS_MODEL_LABELS).map(([value, label]) => (
+            <option key={value} value={value}>{label}</option>
+          ))}
+        </select>
+        <select name="marketplace_experience" defaultValue="">
+          <option value="">Experiência (opcional)</option>
+          {Object.entries(MARKETPLACE_EXPERIENCE_LABELS).map(([value, label]) => (
+            <option key={value} value={value}>{label}</option>
+          ))}
+        </select>
         <input name="password" type="password" placeholder="Senha inicial" required />
         <select name="plan" defaultValue="free">
           <option value="free">Grátis</option>
@@ -4317,6 +4381,8 @@ function AdminUsers({
               <div className="user-contact-cell">
                 <strong>{item.email}</strong>
                 <small>{item.phone || "Sem telefone"}</small>
+                <small>{businessModelLabel(item.business_model)}</small>
+                <small>{marketplaceExperienceLabel(item.marketplace_experience)}</small>
               </div>
               <input name="phone" type="tel" defaultValue={item.phone || ""} placeholder="Telefone" />
               <select name="status" defaultValue={item.status}>
