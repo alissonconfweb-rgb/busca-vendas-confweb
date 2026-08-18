@@ -2,7 +2,7 @@ import { randomInt } from "node:crypto";
 import { db, getSetting, setSetting } from "./db.mjs";
 import {
   buildProductQuerySpec,
-  matchesProductQuery,
+  matchesMarketplaceSearchResult,
   normalizeProductSearchQuery,
   normalizedProductKey,
 } from "./product-match.mjs";
@@ -199,14 +199,14 @@ export function searchMercadoLivreCachedItems(query) {
       && Number(item.price) > 0
       && Number(item.soldQuantity) > 0
       && hasTrustedCachedPrice(item)
-      && matchesProductQuery(item.title, querySpec).ok
+      && matchesMarketplaceSearchResult(item.title, querySpec).ok
     ))
     .sort((a, b) => (
       Number(b.soldQuantity) - Number(a.soldQuantity)
       || parser.championScore(a) - parser.championScore(b)
     ));
 
-  if (verifiedSalesItems.length < 3) {
+  if (!verifiedSalesItems.length) {
     return null;
   }
 
@@ -309,7 +309,7 @@ async function executeMercadoLivreScrapeDo(query, options = {}) {
         .filter((item) => (
           item.title
           && item.price > 0
-          && matchesProductQuery(item.title, querySpec).ok
+          && matchesMarketplaceSearchResult(item.title, querySpec).ok
         )),
     );
 
@@ -373,7 +373,7 @@ async function executeMercadoLivreScrapeDo(query, options = {}) {
       item.title
       && item.price > 0
       && item.soldQuantity > 0
-      && matchesProductQuery(item.title, querySpec).ok
+      && matchesMarketplaceSearchResult(item.title, querySpec).ok
     ))
     .sort((a, b) => (
       Number(b.soldQuantity) - Number(a.soldQuantity)
@@ -400,7 +400,7 @@ async function executeMercadoLivreScrapeDo(query, options = {}) {
     .slice(0, 3)
     .map(mapItem);
 
-  if (championItems.length === 0 && emergingItems.length >= 3) {
+  if (championItems.length === 0 && emergingItems.length >= 1) {
     return buildSalesResult(emergingItems, {
       message: `Na amostra analisada, nenhum anúncio passou de ${minimumChampionSales().toLocaleString("pt-BR")} vendas públicas.`,
       exactMatches: emergingItems.length,
@@ -413,9 +413,9 @@ async function executeMercadoLivreScrapeDo(query, options = {}) {
   }
 
   const leadingItems = verifiedSalesItems.slice(0, 3).map(mapItem);
-  if (leadingItems.length >= 3) {
+  if (leadingItems.length >= 1) {
     return buildSalesResult(leadingItems, {
-      message: "Encontramos os 3 anúncios líderes com vendas públicas reais deste mercado.",
+      message: `Encontramos ${leadingItems.length} anúncio(s) líder(es) com vendas públicas reais deste mercado.`,
       exactMatches: leadingItems.length,
       totalAvailable: totalAvailable || uniqueCandidates.length,
       providerCreditsUsed: creditsUsed,
@@ -463,7 +463,7 @@ async function enrichCandidate(candidate, querySpec, sessionId, initialCookies, 
     !options.requireMetadata
     && Number(candidate.price) > 0
     && listingSales > 0
-    && matchesProductQuery(candidate.title, querySpec).ok
+    && matchesMarketplaceSearchResult(candidate.title, querySpec).ok
   ) {
     const listingItem = {
       ...candidate,
@@ -534,7 +534,7 @@ async function enrichCandidate(candidate, querySpec, sessionId, initialCookies, 
     freeShipping: parser.parseFreeShipping(combinedHtml) ?? candidate.freeShipping ?? null,
   };
 
-  const validItem = matchesProductQuery(item.title, querySpec).ok ? item : null;
+  const validItem = matchesMarketplaceSearchResult(item.title, querySpec).ok ? item : null;
   if (validItem && validItem.price > 0 && validItem.soldQuantity > 0) {
     saveMarketItemCache(candidate, validItem);
   }
@@ -567,7 +567,7 @@ function getCachedMarketItem(candidate, querySpec, options = {}) {
       && Number(item.soldQuantity) > 0
       && hasTrustedCachedPrice(item)
       && (!options.requireMetadata || Number(item.metadataVersion || 0) >= MARKET_ITEM_METADATA_VERSION)
-      && matchesProductQuery(item.title, querySpec).ok
+      && matchesMarketplaceSearchResult(item.title, querySpec).ok
     ) {
       return item;
     }
@@ -601,7 +601,7 @@ function getCachedVerifiedItems(querySpec, options = {}) {
         && Number(item.soldQuantity) > 0
         && hasTrustedCachedPrice(item)
         && (options.requireMetadata === false || Number(item.metadataVersion || 0) >= MARKET_ITEM_METADATA_VERSION)
-        && matchesProductQuery(item.title, querySpec).ok
+        && matchesMarketplaceSearchResult(item.title, querySpec).ok
       ) {
         items.push(item);
       }

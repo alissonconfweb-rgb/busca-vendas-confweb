@@ -16,7 +16,7 @@ export function isCompleteChampionResult(result) {
 
 export function isCompleteEmergingOpportunityResult(result) {
   return Boolean(
-    hasCompleteResultShape(result)
+    hasRealResultShape(result)
     && result.opportunityMode === "emerging"
     && result.items.slice(0, 3).every((item) => (
       isVerifiedSalesItem(item)
@@ -27,11 +27,14 @@ export function isCompleteEmergingOpportunityResult(result) {
 
 export function isCompleteDevelopingOpportunityResult(result) {
   return Boolean(
-    hasCompleteResultShape(result)
+    hasRealResultShape(result)
     && result.opportunityMode === "developing"
     && result.items.slice(0, 3).every(isVerifiedSalesItem)
     && result.items.slice(0, 3).some((item) => Number(item.soldQuantity) >= minimumChampionSales())
-    && result.items.slice(0, 3).some((item) => Number(item.soldQuantity) < minimumChampionSales())
+    && (
+      result.items.length < 3
+      || result.items.slice(0, 3).some((item) => Number(item.soldQuantity) < minimumChampionSales())
+    )
   );
 }
 
@@ -42,11 +45,15 @@ export function isCompleteRealSalesResult(result) {
 }
 
 function hasCompleteResultShape(result) {
+  return hasRealResultShape(result) && result.items.length >= 3;
+}
+
+function hasRealResultShape(result) {
   return Boolean(
     result?.ok
     && result?.salesAvailable === true
     && Array.isArray(result?.items)
-    && result.items.length >= 3
+    && result.items.length >= 1
     && Number(result?.totals?.demand) > 0
     && Number(result?.totals?.revenue) > 0
   );

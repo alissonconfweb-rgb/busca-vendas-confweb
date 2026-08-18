@@ -31,7 +31,12 @@ import {
   syncScrapeDoSettingsFromEnv,
   testScrapeDoConnection,
 } from "./scrapedo.mjs";
-import { buildProductQuerySpec, matchesProductQuery, normalizedProductKey, normalizeProductSearchQuery } from "./product-match.mjs";
+import {
+  buildProductQuerySpec,
+  matchesMarketplaceSearchResult,
+  normalizedProductKey,
+  normalizeProductSearchQuery,
+} from "./product-match.mjs";
 import {
   asaasWebhookUrl,
   billingBlocksSearch,
@@ -1021,7 +1026,7 @@ function staleSearchResultFromRow(row, timestamp, freshTtlMs, staleTtlMs, query)
 }
 
 function cachedResultMatchesQuery(result, query) {
-  if (!Array.isArray(result?.items) || result.items.length < 3) {
+  if (!Array.isArray(result?.items) || result.items.length < 1) {
     return false;
   }
   if (
@@ -1037,7 +1042,7 @@ function cachedResultMatchesQuery(result, query) {
     return false;
   }
   const spec = buildProductQuerySpec(query);
-  return result.items.slice(0, 3).every((item) => matchesProductQuery(item?.title || "", spec).ok);
+  return result.items.slice(0, 3).every((item) => matchesMarketplaceSearchResult(item?.title || "", spec).ok);
 }
 
 function scheduleMarketSearchRefresh(query) {

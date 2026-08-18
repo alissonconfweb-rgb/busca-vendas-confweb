@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   buildProductQuerySpec,
+  matchesMarketplaceSearchResult,
   matchesProductQuery,
   normalizeProductSearchQuery,
   normalizedProductKey,
@@ -53,4 +54,28 @@ test("rejeita tampo quando a busca pede a escrivaninha completa", () => {
     matchesProductQuery("Tampo para escrivaninha de MDF 120x80", buildProductQuerySpec("tampo escrivaninha mdf")).ok,
     true,
   );
+});
+
+test("aceita resultado relevante do marketplace mesmo quando a marca nao aparece no titulo", () => {
+  const spec = buildProductQuerySpec("conjunto feminino Blue Bay Plush");
+
+  assert.equal(
+    matchesMarketplaceSearchResult("Abrigo Feminino Plush Plus Size Veludo Agasalho De Frio", spec).ok,
+    true,
+  );
+  assert.equal(
+    matchesMarketplaceSearchResult("Conjunto Moletom Veludo Plush Blusa De Ziper E Calca", spec).ok,
+    true,
+  );
+  assert.equal(
+    matchesMarketplaceSearchResult("Conjunto infantil masculino de algodao", spec).ok,
+    false,
+  );
+});
+
+test("nao relaxa numeros de modelo informados pelo usuario", () => {
+  const spec = buildProductQuerySpec("iphone 15 pro max azul");
+
+  assert.equal(matchesMarketplaceSearchResult("Apple iPhone 15 Pro Max Azul", spec).ok, true);
+  assert.equal(matchesMarketplaceSearchResult("Apple iPhone 14 Pro Max Azul", spec).ok, false);
 });

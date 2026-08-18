@@ -1,8 +1,9 @@
 import {
   buildProductQuerySpec,
-  matchesProductQuery,
+  matchesMarketplaceSearchResult,
   normalizeProductSearchQuery,
 } from "./product-match.mjs";
+import { minimumChampionSales } from "./champion-policy.mjs";
 
 const API_ROOT = "https://api.mercadolibre.com";
 const MAX_PRODUCT_DETAILS = 24;
@@ -92,7 +93,7 @@ export async function searchMercadoLivreCatalog({ query, accessToken, siteId = "
       item.title
       && item.price > 0
       && item.soldQuantity > 0
-      && matchesProductQuery(item.title, spec).ok
+      && matchesMarketplaceSearchResult(item.title, spec).ok
     ))
     .sort((a, b) => (
       b.soldQuantity - a.soldQuantity
@@ -104,16 +105,24 @@ export async function searchMercadoLivreCatalog({ query, accessToken, siteId = "
   const demand = items.reduce((sum, item) => sum + item.soldQuantity, 0);
   const revenue = items.reduce((sum, item) => sum + item.revenue, 0);
 
-  if (items.length < 3) {
+  if (!items.length) {
     return {
       ...emptyCatalogResult(
-        `A API oficial encontrou ${items.length} produto(s) exato(s) com preço e vendas públicas para "${query}".`,
+        `A API oficial não encontrou produtos com preço e vendas públicas para "${query}".`,
       ),
       source: "mercado_livre_catalog_incomplete_sales",
       exactMatches: items.length,
       totalAvailable: candidates.size,
     };
   }
+
+  const threshold = minimumChampionSales();
+  const sales = items.map((item) => Number(item.soldQuantity || 0));
+  const opportunityMode = sales.every((quantity) => quantity < threshold)
+    ? "emerging"
+    : items.length < 3 || sales.some((quantity) => quantity < threshold)
+      ? "developing"
+      : "";
 
   return {
     ok: true,
@@ -125,6 +134,7 @@ export async function searchMercadoLivreCatalog({ query, accessToken, siteId = "
     items,
     exactMatches: items.length,
     totalAvailable: candidates.size,
+    ...(opportunityMode ? { opportunityMode, marketThreshold: threshold } : {}),
     totals: {
       demand,
       revenue,

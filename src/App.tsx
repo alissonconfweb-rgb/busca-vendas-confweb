@@ -615,15 +615,19 @@ function buildUnavailableSearchResult(query: string, message: string): SearchRes
 }
 
 function isClientCompleteChampionResult(result: SearchResult, settings: SettingsMap) {
+  const hasVerifiedItems = result.items.length >= 1 && result.items.slice(0, 3).every((item) => (
+    Number(item.soldQuantity) > 0 &&
+    Number(item.price) > 0 &&
+    Number(item.revenue) > 0
+  ));
+  const hasDeliverableShape = result.items.length >= 3
+    || ["emerging", "developing"].includes(result.opportunityMode || "");
+
   return Boolean(
     result.ok &&
     result.salesAvailable === true &&
-    result.items.length >= 3 &&
-    result.items.slice(0, 3).every((item) => (
-      Number(item.soldQuantity) > 0 &&
-      Number(item.price) > 0 &&
-      Number(item.revenue) > 0
-    )) &&
+    hasVerifiedItems &&
+    hasDeliverableShape &&
     Number(result.totals.demand) > 0 &&
     Number(result.totals.revenue) > 0,
   );
@@ -1666,15 +1670,15 @@ function SearchPage({
   );
 }
 
-function whatsappHref(contacts: Contact[], query: string, salesPotential: number, emergingMode = false) {
+function whatsappHref(contacts: Contact[], query: string, salesPotential: number, itemCount: number, emergingMode = false) {
   const contact = contacts.find((item) => /whats/i.test(item.channel)) || contacts[0];
   const digits = (contact?.value || "").replace(/\D/g, "");
   const phone = digits.startsWith("55") ? digits : digits ? `55${digits}` : "5511999999999";
   const message = [
     `Olá, Confweb! Pesquisei "${query}" no Busca Vendas.`,
     emergingMode
-      ? `Encontrei um mercado ainda pouco explorado, com ${money.format(salesPotential)} movimentados pelos 3 líderes analisados.`
-      : `Vi potencial de ${money.format(salesPotential)} nos 3 anúncios campeões.`,
+      ? `Encontrei um mercado ainda pouco explorado, com ${money.format(salesPotential)} movimentados pelos ${itemCount} anúncios analisados.`
+      : `Vi potencial de ${money.format(salesPotential)} nos ${itemCount} anúncios líderes.`,
     "Quero ajuda para vender nos marketplaces.",
   ].join(" ");
 
@@ -1754,7 +1758,7 @@ function ResultsPanel({
   const developingMode = result?.opportunityMode === "developing";
   const marketThreshold = result?.marketThreshold || 1000;
   const salesPotential = result?.totals.revenue || 0;
-  const commercialHref = whatsappHref(contacts, query, salesPotential, emergingMode || developingMode);
+  const commercialHref = whatsappHref(contacts, query, salesPotential, items.length, emergingMode || developingMode);
   const sourceText = estimateMode
     ? "Fonte: raio-x estratégico Confweb - sem API"
     : result
@@ -1804,7 +1808,7 @@ function ResultsPanel({
     <section className="market-panel">
       <div className="panel-head">
         <div>
-          <h2>{estimateMode ? "Raio-x de oportunidade" : emergingMode || developingMode ? "3 líderes deste mercado" : "Top 3 anúncios campeões"}</h2>
+          <h2>{estimateMode ? "Raio-x de oportunidade" : emergingMode || developingMode ? `${items.length} ${items.length === 1 ? "líder" : "líderes"} deste mercado` : "Top 3 anúncios campeões"}</h2>
           <p>{sourceText}</p>
         </div>
         <a href={marketUrl} target="_blank" rel="noreferrer">
@@ -2356,7 +2360,7 @@ function DemandCard({
               ? `Entre os anúncios reais analisados, nenhum passou de ${number.format(marketThreshold)} vendas. Isso pode indicar uma categoria menos consolidada e espaço para uma oferta bem posicionada.`
               : developingMode
                 ? "Encontramos vendas reais em diferentes estágios. Uma oferta bem posicionada pode disputar espaço com quem já vende neste mercado."
-              : "Somando apenas os 3 anúncios campeões encontrados."}
+              : `Somando apenas os ${championCount} anúncios campeões encontrados.`}
           </p>
         </div>
       </div>
@@ -2369,7 +2373,7 @@ function DemandCard({
         <div className="opportunity-metric revenue">
           <dt>{estimateMode ? "Receita projetada" : "Dinheiro movimentado"}</dt>
           <dd>{money.format(totalRevenue)}</dd>
-          <small>somado nos 3 anúncios</small>
+          <small>somado nos {championCount} anúncios</small>
         </div>
         <div className="opportunity-metric ticket">
           <dt>Preço médio vendido</dt>

@@ -80,3 +80,23 @@ test("aceita tres lideres reais quando o mercado mistura anuncios acima e abaixo
   assert.equal(isCompleteDevelopingOpportunityResult(result), true);
   assert.equal(isCompleteRealSalesResult(result), true);
 });
+
+test("aceita oportunidade real com menos de tres anuncios quando esse e todo o mercado encontrado", () => {
+  const result = resultWithSales([500, 25], "emerging");
+
+  assert.equal(isCompleteEmergingOpportunityResult(result), true);
+  assert.equal(isCompleteRealSalesResult(result), true);
+});
+
+test("aceita mercado em desenvolvimento com um lider real acima de mil", () => {
+  const result = resultWithSales([1_000], "developing");
+
+  assert.equal(isCompleteDevelopingOpportunityResult(result), true);
+  assert.equal(isCompleteRealSalesResult(result), true);
+});
+
+test("continua rejeitando resultado vazio", () => {
+  const result = resultWithSales([], "emerging");
+
+  assert.equal(isCompleteRealSalesResult(result), false);
+});

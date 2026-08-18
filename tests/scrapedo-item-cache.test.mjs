@@ -81,3 +81,15 @@ test("nao publica precos antigos antes de recalcular os metadados do anuncio", (
 
   assert.equal(result, null);
 });
+
+test("entrega os anuncios reais disponiveis como oportunidade quando nenhum passa de mil vendas", () => {
+  saveItem("MLB7", "Abrigo Feminino Plush Plus Size Veludo", 500, 109.9);
+  saveItem("MLB8", "Conjunto Moletom Veludo Plush Blusa E Calca", 25, 169.9);
+
+  const result = searchMercadoLivreCachedItems("conjunto feminino Blue Bay Plush");
+
+  assert.equal(result?.ok, true);
+  assert.equal(result?.opportunityMode, "emerging");
+  assert.equal(result?.items.length, 2);
+  assert.deepEqual(result?.items.map((item) => item.soldQuantity), [500, 25]);
+});

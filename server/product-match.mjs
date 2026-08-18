@@ -132,6 +132,54 @@ export function matchesProductQuery(title, specOrQuery) {
   return { ok: true, reason: "Correspondencia exata." };
 }
 
+export function matchesMarketplaceSearchResult(title, specOrQuery) {
+  const spec = typeof specOrQuery === "string" ? buildProductQuerySpec(specOrQuery) : specOrQuery;
+  const exactMatch = matchesProductQuery(title, spec);
+  if (exactMatch.ok) {
+    return { ...exactMatch, matchMode: "exact" };
+  }
+
+  const normalizedTitle = normalizeText(title);
+  const titleTokens = new Set(tokenizeProductText(title));
+  const relevantTokens = spec.tokens.filter((token) => !OPTIONAL_MODIFIER_WORDS.has(token));
+  const tokensToMatch = relevantTokens.length ? relevantTokens : spec.tokens;
+  const matchedTokens = tokensToMatch.filter((token) => tokenMatchesTitle(token, titleTokens, normalizedTitle));
+  const numericTokens = tokensToMatch.filter((token) => /\d/.test(token));
+  const minimumMatches = tokensToMatch.length <= 2 ? tokensToMatch.length : 2;
+  const minimumCoverage = tokensToMatch.length >= 4 ? 0.4 : tokensToMatch.length <= 2 ? 1 : 0.5;
+
+  if (
+    matchedTokens.length < minimumMatches
+    || matchedTokens.length / tokensToMatch.length < minimumCoverage
+    || numericTokens.some((token) => !matchedTokens.includes(token))
+  ) {
+    return { ok: false, reason: exactMatch.reason, matchMode: "rejected" };
+  }
+
+  if (isUnrequestedComponent(title, spec)) {
+    return { ok: false, reason: "Resultado parece uma peca, nao o produto completo.", matchMode: "rejected" };
+  }
+
+  if (spec.measures.length && !hasCompatibleMeasures(title, spec.measures)) {
+    return { ok: false, reason: "Medida/peso diferente da busca.", matchMode: "rejected" };
+  }
+
+  if (!spec.allowsBundle && hasBundleSignal(title)) {
+    return { ok: false, reason: "Resultado parece kit/combo, mas a busca não pediu kit.", matchMode: "rejected" };
+  }
+
+  if (spec.isCreatineQuery && hasUnrequestedSupplementTerms(title, spec.normalized)) {
+    return { ok: false, reason: "Resultado mistura outro suplemento ao produto buscado.", matchMode: "rejected" };
+  }
+
+  return {
+    ok: true,
+    reason: "Correspondencia relevante retornada pela busca do marketplace.",
+    matchMode: "marketplace",
+    matchedTokens,
+  };
+}
+
 export function normalizedProductKey(text) {
   return normalizeText(text).replace(/\s+/g, "-");
 }

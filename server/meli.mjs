@@ -7,7 +7,11 @@ import { isOxylabsConfigured, searchMercadoLivreOxylabs } from "./oxylabs.mjs";
 import { isProxyConfigured, isProxyEnabled, proxyPlaywrightConfig } from "./proxy.mjs";
 import { isScrapeDoEnabled, searchMercadoLivreScrapeDo } from "./scrapedo.mjs";
 import { isZyteConfigured, isZyteSearchEnabled, searchMercadoLivreZyte } from "./zyte.mjs";
-import { buildProductQuerySpec, matchesProductQuery, normalizeProductSearchQuery } from "./product-match.mjs";
+import {
+  buildProductQuerySpec,
+  matchesMarketplaceSearchResult,
+  normalizeProductSearchQuery,
+} from "./product-match.mjs";
 import { isCompleteRealSalesResult } from "./search-result-policy.mjs";
 import { minimumChampionSales } from "./champion-policy.mjs";
 import { searchProviderPlan } from "./search-provider.mjs";
@@ -186,21 +190,21 @@ async function searchMercadoLivreOfficialSearch(query, initialAccessToken, siteI
       && item.title
       && item.price > 0
       && item.soldQuantity > 0
-      && matchesProductQuery(item.title, querySpec).ok
+      && matchesMarketplaceSearchResult(item.title, querySpec).ok
     ))
     .sort((a, b) => b.soldQuantity - a.soldQuantity)
     .slice(0, 3);
   const demand = items.reduce((sum, item) => sum + item.soldQuantity, 0);
   const revenue = items.reduce((sum, item) => sum + item.revenue, 0);
   const result = addOpportunityMode({
-    ok: items.length >= 3,
+    ok: items.length >= 1,
     source: "mercado_livre",
     metricsMode: "sales",
-    salesAvailable: items.length >= 3,
+    salesAvailable: items.length >= 1,
     strictRealOnly: true,
-    message: items.length >= 3
+    message: items.length >= 1
       ? `Dados reais retornados pelo Mercado Livre. Receita estimada: ${currencyFormatter.format(revenue)}.`
-      : "Mercado Livre respondeu, mas não trouxe 3 anúncios completos com vendas.",
+      : "Mercado Livre respondeu, mas não trouxe anúncios com vendas públicas.",
     items,
     exactMatches: items.length,
     totalAvailable: data.paging?.total ?? items.length,
@@ -222,7 +226,7 @@ async function searchMercadoLivreOfficialSearch(query, initialAccessToken, siteI
 }
 
 function addOpportunityMode(result) {
-  if (!result?.ok || !Array.isArray(result.items) || result.items.length < 3) {
+  if (!result?.ok || !Array.isArray(result.items) || result.items.length < 1) {
     return result;
   }
   const threshold = minimumChampionSales();
@@ -230,7 +234,7 @@ function addOpportunityMode(result) {
   if (sales.every((quantity) => quantity > 0 && quantity < threshold)) {
     return { ...result, opportunityMode: "emerging" };
   }
-  if (sales.some((quantity) => quantity > 0 && quantity < threshold)) {
+  if (sales.length < 3 || sales.some((quantity) => quantity > 0 && quantity < threshold)) {
     return { ...result, opportunityMode: "developing" };
   }
   return result;
@@ -450,7 +454,7 @@ async function searchMercadoLivreLegacy(query) {
   const querySpec = buildProductQuerySpec(query);
   const items = (data.results || [])
     .map(mapItem)
-    .filter((item) => item.id && item.title && item.price > 0 && item.soldQuantity > 0 && matchesProductQuery(item.title, querySpec).ok)
+    .filter((item) => item.id && item.title && item.price > 0 && item.soldQuantity > 0 && matchesMarketplaceSearchResult(item.title, querySpec).ok)
     .sort((a, b) => b.soldQuantity - a.soldQuantity)
     .slice(0, 3);
   const demand = items.reduce((sum, item) => sum + item.soldQuantity, 0);
@@ -684,7 +688,7 @@ function makeStrictFailure(query, message, source = "market_data_pending") {
     strictRealOnly: true,
     metricsMode: "sales",
     salesAvailable: false,
-    message: `${safeMessage} O Busca Vendas só exibe demanda quando encontra 3 anúncios reais com quantidade de vendas pública.`,
+    message: `${safeMessage} O Busca Vendas só exibe métricas confirmadas em anúncios reais com quantidade de vendas pública.`,
     items: [],
     exactMatches: 0,
     totalAvailable: 0,
