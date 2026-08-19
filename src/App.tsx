@@ -12,6 +12,7 @@ import {
   Database,
   Eye,
   EyeOff,
+  FileSpreadsheet,
   Headphones,
   HelpCircle,
   LayoutDashboard,
@@ -21,6 +22,8 @@ import {
   LogOut,
   MessageCircle,
   PackageSearch,
+  Pencil,
+  Plus,
   ReceiptText,
   RefreshCw,
   Rocket,
@@ -36,7 +39,7 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { Dispatch, FormEvent, ReactNode, SetStateAction, useEffect, useMemo, useRef, useState } from "react";
 import confwebLogoUrl from "./assets/confweb-logo.webp";
 
 type Role = "admin" | "user";
@@ -75,6 +78,7 @@ type User = {
   plan: Plan;
   search_limit: number | null;
   searches_used: number;
+  created_at?: string;
   billing_status?: "none" | "active" | "past_due" | "canceling" | "canceled" | string;
   billing_cycle?: PlanCycle | null;
   billing_payment_url?: string | null;
@@ -4334,22 +4338,77 @@ function AdminUsers({
   afterSave: (message?: string) => void | Promise<void>;
 }) {
   const creator = isCreator(currentUser);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [expandedIds, setExpandedIds] = useState<Set<number>>(() => new Set());
+  const [editingIds, setEditingIds] = useState<Set<number>>(() => new Set());
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(() => new Set());
+  const [sortOrder, setSortOrder] = useState<"recent" | "oldest">("recent");
+  const [savingId, setSavingId] = useState<number | null>(null);
   const [deletingId, setDeletingId] = useState<number | null>(null);
-  const [deleteError, setDeleteError] = useState("");
+  const [deletingSelected, setDeletingSelected] = useState(false);
+  const [actionError, setActionError] = useState("");
+
+  const canDeleteUser = (item: User) => item.id !== currentUser.id && (creator || item.role !== "admin");
+
+  const sortedUsers = useMemo(() => [...users].sort((left, right) => {
+    const leftTime = left.created_at ? Date.parse(left.created_at.replace(" ", "T") + (left.created_at.includes("T") ? "" : "Z")) : left.id;
+    const rightTime = right.created_at ? Date.parse(right.created_at.replace(" ", "T") + (right.created_at.includes("T") ? "" : "Z")) : right.id;
+    const difference = (Number.isNaN(rightTime) ? right.id : rightTime) - (Number.isNaN(leftTime) ? left.id : leftTime);
+    return sortOrder === "recent" ? difference : -difference;
+  }), [sortOrder, users]);
+
+  const selectableUsers = sortedUsers.filter(canDeleteUser);
+  const allSelected = selectableUsers.length > 0 && selectableUsers.every((item) => selectedIds.has(item.id));
+
+  useEffect(() => {
+    const userIds = new Set(users.map((item) => item.id));
+    setSelectedIds((current) => new Set([...current].filter((id) => userIds.has(id))));
+    setExpandedIds((current) => new Set([...current].filter((id) => userIds.has(id))));
+    setEditingIds((current) => new Set([...current].filter((id) => userIds.has(id))));
+  }, [users]);
+
+  const toggleSetValue = (setter: Dispatch<SetStateAction<Set<number>>>, id: number, force?: boolean) => {
+    setter((current) => {
+      const next = new Set(current);
+      const shouldAdd = force ?? !next.has(id);
+      if (shouldAdd) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  };
 
   const create = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const form = event.currentTarget;
-    await api("/api/admin/users", { method: "POST", body: JSON.stringify(formJson(form)) });
-    form.reset();
-    afterSave();
+    setActionError("");
+    setCreating(true);
+    try {
+      await api("/api/admin/users", { method: "POST", body: JSON.stringify(formJson(form)) });
+      form.reset();
+      setCreateOpen(false);
+      await afterSave("Usuário criado.");
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Não foi possível criar o usuário.");
+    } finally {
+      setCreating(false);
+    }
   };
 
   const update = async (event: FormEvent<HTMLFormElement>, userId: number) => {
     event.preventDefault();
     const form = event.currentTarget;
-    await api(`/api/admin/users/${userId}`, { method: "PATCH", body: JSON.stringify(formJson(form)) });
-    afterSave();
+    setActionError("");
+    setSavingId(userId);
+    try {
+      await api(`/api/admin/users/${userId}`, { method: "PATCH", body: JSON.stringify(formJson(form)) });
+      toggleSetValue(setEditingIds, userId, false);
+      await afterSave("Usuário atualizado.");
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Não foi possível atualizar o usuário.");
+    } finally {
+      setSavingId(null);
+    }
   };
 
   const remove = async (item: User) => {
@@ -4357,110 +4416,223 @@ function AdminUsers({
       return;
     }
 
-    setDeleteError("");
+    setActionError("");
     setDeletingId(item.id);
     try {
       await api(`/api/admin/users/${item.id}`, { method: "DELETE" });
       await afterSave("Usuário excluído.");
     } catch (error) {
-      setDeleteError(error instanceof Error ? error.message : "Não foi possível excluir o usuário.");
+      setActionError(error instanceof Error ? error.message : "Não foi possível excluir o usuário.");
     } finally {
       setDeletingId(null);
     }
   };
 
+  const removeSelected = async () => {
+    const selected = users.filter((item) => selectedIds.has(item.id) && canDeleteUser(item));
+    if (!selected.length || !window.confirm(`Excluir ${selected.length} usuário(s) selecionado(s)? O acesso e o histórico dessas contas serão removidos.`)) {
+      return;
+    }
+
+    setActionError("");
+    setDeletingSelected(true);
+    const results = await Promise.allSettled(selected.map((item) => api(`/api/admin/users/${item.id}`, { method: "DELETE" })));
+    const removedIds = selected.filter((_, index) => results[index].status === "fulfilled").map((item) => item.id);
+    const failed = results.length - removedIds.length;
+    setSelectedIds((current) => new Set([...current].filter((id) => !removedIds.includes(id))));
+    if (failed) {
+      setActionError(`${removedIds.length} usuário(s) excluído(s), mas ${failed} não puderam ser removidos.`);
+    }
+    if (removedIds.length) {
+      await afterSave(`${removedIds.length} usuário(s) excluído(s).`);
+    }
+    setDeletingSelected(false);
+  };
+
+  const exportUsers = () => {
+    const selected = selectedIds.size ? users.filter((item) => selectedIds.has(item.id)) : users;
+    const safeCell = (value: unknown) => {
+      const raw = String(value ?? "");
+      const protectedValue = /^[=+\-@]/.test(raw) ? `'${raw}` : raw;
+      return `"${protectedValue.replace(/"/g, '""')}"`;
+    };
+    const rows = selected.map((item) => [
+      item.name,
+      item.email,
+      item.phone || "",
+      businessModelLabel(item.business_model),
+      marketplaceExperienceLabel(item.marketplace_experience),
+      userPlanInfo(item).planLabel,
+      item.status === "active" ? "Ativo" : "Bloqueado",
+    ]);
+    const csv = [
+      ["Nome", "Email", "Telefone", "Modelo de Negócio", "Experiência", "Plano", "Situação"],
+      ...rows,
+    ].map((row) => row.map(safeCell).join(";")).join("\r\n");
+    const url = URL.createObjectURL(new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `usuarios-busca-vendas-${new Date().toISOString().slice(0, 10)}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
-    <div className="admin-section">
-      <form className="admin-form" onSubmit={create}>
-        <input name="name" placeholder="Nome" required />
-        <input name="email" type="email" placeholder="E-mail" required />
-        <input name="phone" type="tel" placeholder="Telefone" />
-        <select name="business_model" defaultValue="">
-          <option value="">Modelo de negócio (opcional)</option>
-          {Object.entries(BUSINESS_MODEL_LABELS).map(([value, label]) => (
-            <option key={value} value={value}>{label}</option>
-          ))}
-        </select>
-        <select name="marketplace_experience" defaultValue="">
-          <option value="">Experiência (opcional)</option>
-          {Object.entries(MARKETPLACE_EXPERIENCE_LABELS).map(([value, label]) => (
-            <option key={value} value={value}>{label}</option>
-          ))}
-        </select>
-        <input name="password" type="password" placeholder="Senha inicial" required />
-        <select name="plan" defaultValue="free">
-          <option value="free">Grátis</option>
-          <option value="starter">10 pesquisas</option>
-          <option value="scale">Ilimitado</option>
-        </select>
-        {creator && (
-          <select name="role" defaultValue="user">
-            <option value="user">Cliente</option>
-            <option value="admin">Admin autorizado</option>
+    <div className="admin-section admin-users-section">
+      <div className="admin-users-toolbar">
+        <label className="users-select-all">
+          <input
+            type="checkbox"
+            checked={allSelected}
+            onChange={() => setSelectedIds(allSelected ? new Set() : new Set(selectableUsers.map((item) => item.id)))}
+          />
+          <span>Selecionar todos</span>
+        </label>
+        <label className="users-sort-control">
+          <span>Ordenar cadastros</span>
+          <select value={sortOrder} onChange={(event) => setSortOrder(event.target.value as "recent" | "oldest")}>
+            <option value="recent">Mais recentes</option>
+            <option value="oldest">Mais antigos</option>
           </select>
-        )}
-        <input name="search_limit" type="number" placeholder="Limite" />
-        <button type="submit">Criar usuário</button>
-      </form>
-      {deleteError && <p className="form-error">{deleteError}</p>}
-      <div className="table-list">
-        {users.map((item) => {
+        </label>
+        <div className="admin-users-toolbar-actions">
+          {selectedIds.size > 0 && (
+            <button className="danger-button users-bulk-delete" type="button" onClick={removeSelected} disabled={deletingSelected}>
+              <Trash2 size={17} />
+              {deletingSelected ? "Excluindo..." : `Excluir ${selectedIds.size}`}
+            </button>
+          )}
+          <button className="secondary-action" type="button" onClick={exportUsers} disabled={!users.length}>
+            <FileSpreadsheet size={18} />
+            {selectedIds.size ? `Exportar ${selectedIds.size}` : "Exportar Excel"}
+          </button>
+          <button className="primary-action" type="button" onClick={() => setCreateOpen((open) => !open)} aria-expanded={createOpen}>
+            <Plus size={18} />
+            Cadastrar usuário
+            <ChevronDown className={createOpen ? "is-open" : ""} size={18} />
+          </button>
+        </div>
+      </div>
+
+      {createOpen && (
+        <form className="admin-form admin-user-create-form" onSubmit={create}>
+          <div className="form-section-title">
+            <strong>Novo usuário</strong>
+            <span>Preencha os dados de acesso e o perfil comercial.</span>
+          </div>
+          <label><span>Nome</span><input name="name" placeholder="Nome completo" required /></label>
+          <label><span>E-mail</span><input name="email" type="email" placeholder="usuario@email.com" required /></label>
+          <label><span>Telefone</span><input name="phone" type="tel" placeholder="(11) 99999-9999" required /></label>
+          <label>
+            <span>Modelo de negócio</span>
+            <select name="business_model" defaultValue="">
+              <option value="">Não informado</option>
+              {Object.entries(BUSINESS_MODEL_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+            </select>
+          </label>
+          <label>
+            <span>Experiência</span>
+            <select name="marketplace_experience" defaultValue="">
+              <option value="">Não informada</option>
+              {Object.entries(MARKETPLACE_EXPERIENCE_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+            </select>
+          </label>
+          <label><span>Senha inicial</span><input name="password" type="password" minLength={10} placeholder="Mínimo de 10 caracteres" required /></label>
+          <label>
+            <span>Plano</span>
+            <select name="plan" defaultValue="free">
+              <option value="free">Grátis</option><option value="starter">10 pesquisas</option><option value="scale">Ilimitado</option>
+            </select>
+          </label>
+          {creator && (
+            <label><span>Permissão</span><select name="role" defaultValue="user"><option value="user">Cliente</option><option value="admin">Admin autorizado</option></select></label>
+          )}
+          <label><span>Limite de pesquisas</span><input name="search_limit" type="number" min="0" placeholder="Automático pelo plano" /></label>
+          <button className="primary-action" type="submit" disabled={creating}>{creating ? "Criando..." : "Criar usuário"}</button>
+        </form>
+      )}
+
+      {actionError && <p className="form-error">{actionError}</p>}
+      <div className="admin-users-list">
+        {sortedUsers.map((item) => {
           const itemIsCreator = creator && item.email.toLowerCase() === currentUser.email.toLowerCase();
-          const canDelete = item.id !== currentUser.id && (creator || item.role !== "admin");
+          const canDelete = canDeleteUser(item);
+          const expanded = expandedIds.has(item.id);
+          const editing = editingIds.has(item.id);
+          const planLabel = userPlanInfo(item).planLabel;
 
           return (
-            <form className="table-row" key={item.id} onSubmit={(event) => update(event, item.id)}>
-              <input name="name" defaultValue={item.name} />
-              <div className="user-contact-cell">
-                <strong>{item.email}</strong>
-                <small>{item.phone || "Sem telefone"}</small>
-                <small>{businessModelLabel(item.business_model)}</small>
-                <small>{marketplaceExperienceLabel(item.marketplace_experience)}</small>
+            <article className={`admin-user-card${expanded ? " is-expanded" : ""}`} key={item.id}>
+              <div className="admin-user-card-summary">
+                <input
+                  className="admin-user-checkbox"
+                  type="checkbox"
+                  aria-label={`Selecionar ${item.name}`}
+                  checked={selectedIds.has(item.id)}
+                  disabled={!canDelete}
+                  onChange={(event) => toggleSetValue(setSelectedIds, item.id, event.target.checked)}
+                />
+                <button className="admin-user-toggle" type="button" onClick={() => toggleSetValue(setExpandedIds, item.id)} aria-expanded={expanded}>
+                  <span className="admin-user-name"><strong>{item.name}</strong>{itemIsCreator && <small>Criador</small>}</span>
+                  <span className={`user-plan-badge is-${item.plan}`}>{planLabel}</span>
+                  <span className={`user-status-badge is-${item.status}`}>{item.status === "active" ? "Ativo" : "Bloqueado"}</span>
+                  <ChevronDown className={expanded ? "is-open" : ""} size={20} />
+                </button>
               </div>
-              <input name="phone" type="tel" defaultValue={item.phone || ""} placeholder="Telefone" />
-              <select name="status" defaultValue={item.status}>
-                <option value="active">Ativo</option>
-                <option value="blocked">Bloqueado</option>
-              </select>
-              <select name="plan" defaultValue={item.plan}>
-                <option value="free">Grátis</option>
-                <option value="starter">10 pesquisas</option>
-                <option value="scale">Ilimitado</option>
-              </select>
-              {creator ? (
-                <select name="role" defaultValue={item.role} disabled={itemIsCreator}>
-                  <option value="user">Cliente</option>
-                  <option value="admin">Admin autorizado</option>
-                </select>
+
+              {expanded && (editing ? (
+                <form className="admin-user-edit-form" onSubmit={(event) => update(event, item.id)}>
+                  <label><span>Nome</span><input name="name" defaultValue={item.name} required /></label>
+                  <label><span>E-mail</span><input name="email" type="email" defaultValue={item.email} disabled={itemIsCreator} required /></label>
+                  <label><span>Telefone</span><input name="phone" type="tel" defaultValue={item.phone || ""} required /></label>
+                  <label>
+                    <span>Modelo de negócio</span>
+                    <select name="business_model" defaultValue={item.business_model || ""}>
+                      <option value="">Não informado</option>
+                      {Object.entries(BUSINESS_MODEL_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                    </select>
+                  </label>
+                  <label>
+                    <span>Experiência</span>
+                    <select name="marketplace_experience" defaultValue={item.marketplace_experience || ""}>
+                      <option value="">Não informada</option>
+                      {Object.entries(MARKETPLACE_EXPERIENCE_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                    </select>
+                  </label>
+                  <label><span>Situação</span><select name="status" defaultValue={item.status}><option value="active">Ativo</option><option value="blocked">Bloqueado</option></select></label>
+                  <label><span>Plano</span><select name="plan" defaultValue={item.plan}><option value="free">Grátis</option><option value="starter">10 pesquisas</option><option value="scale">Ilimitado</option></select></label>
+                  {creator ? (
+                    <label><span>Permissão</span><select name="role" defaultValue={item.role} disabled={itemIsCreator}><option value="user">Cliente</option><option value="admin">Admin autorizado</option></select></label>
+                  ) : <input type="hidden" name="role" value={item.role} />}
+                  <label><span>Limite de pesquisas</span><input name="search_limit" type="number" min="0" defaultValue={item.search_limit ?? ""} placeholder="Ilimitado" /></label>
+                  <label><span>Nova senha</span><input name="new_password" type="password" minLength={10} autoComplete="new-password" placeholder="Opcional" /></label>
+                  <div className="admin-user-edit-actions">
+                    <button className="secondary-action" type="button" onClick={() => toggleSetValue(setEditingIds, item.id, false)}>Cancelar</button>
+                    <button className="primary-action" type="submit" disabled={savingId === item.id}>{savingId === item.id ? "Salvando..." : "Salvar alterações"}</button>
+                  </div>
+                </form>
               ) : (
-                <span>{item.role === "admin" ? "Admin autorizado" : "Cliente"}</span>
-              )}
-              <input name="search_limit" type="number" defaultValue={item.search_limit ?? ""} placeholder="Ilimitado" />
-              <input
-                name="new_password"
-                type="password"
-                minLength={10}
-                autoComplete="new-password"
-                placeholder="Nova senha (opcional)"
-                title="Use para definir uma senha temporária após confirmar a identidade do usuário."
-              />
-              <span>{itemIsCreator ? "Criador" : `${item.searches_used} usadas`}</span>
-              <div className="user-row-actions">
-                <button type="submit">Salvar</button>
-                {canDelete && (
-                  <button
-                    className="danger-button"
-                    type="button"
-                    disabled={deletingId === item.id}
-                    onClick={() => remove(item)}
-                    title="Excluir usuário"
-                  >
-                    <Trash2 size={17} />
-                    {deletingId === item.id ? "Excluindo..." : "Excluir"}
-                  </button>
-                )}
-              </div>
-            </form>
+                <div className="admin-user-details">
+                  <dl>
+                    <div><dt>E-mail</dt><dd>{item.email}</dd></div>
+                    <div><dt>Telefone</dt><dd>{item.phone || "Não informado"}</dd></div>
+                    <div><dt>Modelo de negócio</dt><dd>{businessModelLabel(item.business_model)}</dd></div>
+                    <div><dt>Experiência</dt><dd>{marketplaceExperienceLabel(item.marketplace_experience)}</dd></div>
+                    <div><dt>Cadastro</dt><dd>{item.created_at ? formatCacheDate(item.created_at) : "Data não informada"}</dd></div>
+                    <div><dt>Uso</dt><dd>{item.searches_used} pesquisa(s) utilizada(s)</dd></div>
+                    <div><dt>Permissão</dt><dd>{item.role === "admin" ? "Admin autorizado" : "Cliente"}</dd></div>
+                  </dl>
+                  <div className="admin-user-details-actions">
+                    <button className="secondary-action" type="button" onClick={() => toggleSetValue(setEditingIds, item.id, true)}><Pencil size={17} /> Editar usuário</button>
+                    {canDelete && (
+                      <button className="danger-button" type="button" disabled={deletingId === item.id} onClick={() => remove(item)}>
+                        <Trash2 size={17} />{deletingId === item.id ? "Excluindo..." : "Excluir usuário"}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </article>
           );
         })}
       </div>

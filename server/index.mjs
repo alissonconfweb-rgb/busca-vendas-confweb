@@ -1992,6 +1992,29 @@ async function handleAdmin(req, res, url, currentUser) {
     if (!target) {
       return json(res, 404, { error: "Usuário não encontrado." });
     }
+    const name = required(body.name).slice(0, 100);
+    const email = target.email.toLowerCase() === CREATOR_EMAIL
+      ? target.email
+      : normalizeEmail(required(body.email));
+    const phone = normalizePhone(required(body.phone));
+    const status = oneOf(body.status, ["active", "blocked"], "Situação do usuário inválida.");
+    const plan = oneOf(body.plan, ["free", "starter", "scale"], "Plano inválido.");
+    const businessModel = body.business_model
+      ? oneOf(body.business_model, BUSINESS_MODELS, "Modelo de negócio inválido.")
+      : null;
+    const marketplaceExperience = body.marketplace_experience
+      ? oneOf(body.marketplace_experience, MARKETPLACE_EXPERIENCES, "Experiência em marketplace inválida.")
+      : null;
+    if (!isValidEmail(email)) {
+      return json(res, 400, { error: "Informe um e-mail válido." });
+    }
+    if (phone.length < 10 || phone.length > 13) {
+      return json(res, 400, { error: "Informe um telefone válido com DDD." });
+    }
+    const existingUser = findUserByEmail(email);
+    if (existingUser && existingUser.id !== target.id) {
+      return json(res, 409, { error: "Esse e-mail já está cadastrado." });
+    }
     const newPassword = String(body.new_password || "");
     if (newPassword) {
       const passwordError = validateNewPassword(newPassword);
@@ -2007,7 +2030,10 @@ async function handleAdmin(req, res, url, currentUser) {
     db.prepare(`
       UPDATE users
       SET name = ?,
+          email = ?,
           phone = ?,
+          business_model = ?,
+          marketplace_experience = ?,
           status = ?,
           plan = ?,
           search_limit = ?,
@@ -2020,16 +2046,19 @@ async function handleAdmin(req, res, url, currentUser) {
           updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `).run(
-      body.name,
-      String(body.phone || "").trim(),
-      body.status,
-      body.plan,
+      name,
+      email,
+      phone,
+      businessModel,
+      marketplaceExperience,
+      status,
+      plan,
       nullableNumber(body.search_limit),
       role,
-      body.plan,
-      body.plan,
-      body.plan,
-      body.plan,
+      plan,
+      plan,
+      plan,
+      plan,
       Number(userMatch[1]),
     );
     if (newPassword) {
