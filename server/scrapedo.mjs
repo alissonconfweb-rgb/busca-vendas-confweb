@@ -7,7 +7,10 @@ import {
   normalizeProductSearchQuery,
   normalizedProductKey,
 } from "./product-match.mjs";
-import { mercadoLivreHtmlParser as parser } from "./zyte.mjs";
+import {
+  MERCADO_LIVRE_SALES_PARSER_VERSION,
+  mercadoLivreHtmlParser as parser,
+} from "./zyte.mjs";
 import { minimumChampionSales } from "./champion-policy.mjs";
 
 const DEFAULT_ENDPOINT = "https://api.scrape.do/";
@@ -18,6 +21,7 @@ const EMERGING_MARKET_SAMPLE_SIZE = 12;
 const DEFAULT_DETAIL_CONCURRENCY = 4;
 const MARKET_ITEM_METADATA_VERSION = 4;
 export const SCRAPEDO_PRICE_PARSER_VERSION = 2;
+export const SCRAPEDO_SALES_PARSER_VERSION = MERCADO_LIVRE_SALES_PARSER_VERSION;
 const SALES_RANKING_STRATEGY = "visible_sales_v3";
 const activeSearches = new Map();
 const providerQueue = [];
@@ -201,6 +205,7 @@ export function searchMercadoLivreCachedItems(query) {
       && Number(item.price) > 0
       && Number(item.soldQuantity) > 0
       && hasTrustedCachedPrice(item)
+      && hasTrustedCachedSales(item)
       && matchesMarketplaceSearchResult(item.title, querySpec).ok
     ))
     .sort((a, b) => (
@@ -543,6 +548,7 @@ async function enrichCandidate(candidate, querySpec, sessionId, initialCookies, 
         image: candidate.image || cachedItem.image,
         price: Number(candidate.price || 0) || cachedItem.price,
         soldQuantity: Number(candidate.soldQuantity || 0) || cachedItem.soldQuantity,
+        salesParserVersion: SCRAPEDO_SALES_PARSER_VERSION,
         position: candidate.position || cachedItem.position,
         bestSeller: candidate.bestSeller ?? cachedItem.bestSeller,
         isAd: candidate.isAd ?? cachedItem.isAd,
@@ -563,6 +569,7 @@ async function enrichCandidate(candidate, querySpec, sessionId, initialCookies, 
       ...candidate,
       href: parser.productDetailUrls(candidate)[0] || candidate.href,
       soldQuantity: listingSales,
+      salesParserVersion: SCRAPEDO_SALES_PARSER_VERSION,
     };
     saveMarketItemCache(candidate, listingItem);
     return { item: listingItem, creditsUsed: 0, cacheHit: false };
@@ -617,6 +624,7 @@ async function enrichCandidate(candidate, querySpec, sessionId, initialCookies, 
     image: parser.parseImage(combinedHtml) || candidate.image,
     price: parser.parsePrice(combinedHtml) || candidate.price,
     soldQuantity: parser.parseSalesFromText(combinedHtml) || candidate.soldQuantity || 0,
+    salesParserVersion: SCRAPEDO_SALES_PARSER_VERSION,
     categoryId: parser.parseCategoryId(combinedHtml) || candidate.categoryId || "",
     categoryName: parser.parseCategoryName(combinedHtml) || candidate.categoryName || "",
     weightKg: parser.parseWeightKg(`${title} ${combinedHtml}`) || candidate.weightKg || null,
@@ -660,6 +668,7 @@ function getCachedMarketItem(candidate, querySpec, options = {}) {
       && Number(item.price) > 0
       && Number(item.soldQuantity) > 0
       && hasTrustedCachedPrice(item)
+      && hasTrustedCachedSales(item)
       && (!options.requireMetadata || Number(item.metadataVersion || 0) >= MARKET_ITEM_METADATA_VERSION)
       && matchesMarketplaceSearchResult(item.title, querySpec).ok
     ) {
@@ -694,6 +703,7 @@ function getCachedVerifiedItems(querySpec, options = {}) {
         && Number(item.price) > 0
         && Number(item.soldQuantity) > 0
         && hasTrustedCachedPrice(item)
+        && hasTrustedCachedSales(item)
         && (options.requireMetadata === false || Number(item.metadataVersion || 0) >= MARKET_ITEM_METADATA_VERSION)
         && matchesMarketplaceSearchResult(item.title, querySpec).ok
       ) {
@@ -715,6 +725,7 @@ function buildSalesResult(items, metadata = {}) {
     source: "scrapedo_mercado_livre",
     rankingStrategy: SALES_RANKING_STRATEGY,
     priceParserVersion: SCRAPEDO_PRICE_PARSER_VERSION,
+    salesParserVersion: SCRAPEDO_SALES_PARSER_VERSION,
     strictRealOnly: true,
     metricsMode: "sales",
     salesAvailable: true,
@@ -753,12 +764,17 @@ function saveMarketItemCache(candidate, item) {
       ...item,
       metadataVersion: MARKET_ITEM_METADATA_VERSION,
       priceParserVersion: SCRAPEDO_PRICE_PARSER_VERSION,
+      salesParserVersion: SCRAPEDO_SALES_PARSER_VERSION,
     }),
   );
 }
 
 function hasTrustedCachedPrice(item) {
   return Number(item?.priceParserVersion || 0) >= SCRAPEDO_PRICE_PARSER_VERSION;
+}
+
+function hasTrustedCachedSales(item) {
+  return Number(item?.salesParserVersion || 0) >= SCRAPEDO_SALES_PARSER_VERSION;
 }
 
 function marketItemCacheKey(candidate) {
@@ -892,6 +908,7 @@ function mapItem(item) {
     logisticType: item.logisticType || "",
     shippingDimensions: item.shippingDimensions || "",
     freeShipping: item.freeShipping ?? null,
+    salesParserVersion: SCRAPEDO_SALES_PARSER_VERSION,
   };
 }
 

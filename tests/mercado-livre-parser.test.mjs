@@ -136,3 +136,38 @@ test("le o peso fisico sem confundir com a capacidade suportada", () => {
 test("converte o selo publico de mais de 50 mil vendidos", () => {
   assert.equal(parser.parseSalesFromText("4.8 | +50 mil vendidos"), 50_000);
 });
+
+test("nao confunde as vendas totais do vendedor com vendas do anuncio", () => {
+  const html = `
+    <main class="ui-pdp-container">
+      <h1>2pcs Porta Crachá Vertical Retrátil Com Cordão Extensível</h1>
+      <aside>Vendido por VE20260323142145 MercadoLíder | +5 mil vendas</aside>
+    </main>
+  `;
+
+  assert.equal(parser.parseSalesFromText(html), null);
+});
+
+test("le o selo de vendas do proprio produto perto do titulo", () => {
+  const html = `
+    <main class="ui-pdp-container">
+      <span class="ui-pdp-subtitle">Novo | +5 mil vendidos</span>
+      <h1>Produto com vendas públicas</h1>
+      <aside>Vendido por Loja Exemplo MercadoLíder | +100 mil vendas</aside>
+    </main>
+  `;
+
+  assert.equal(parser.parseSalesFromText(html), 5_000);
+});
+
+test("nao herda vendas de produtos relacionados em uma pagina sem vendas", () => {
+  const html = `
+    <main class="ui-pdp-container">
+      <h1>Produto novo sem vendas públicas</h1>
+      ${"Detalhes do produto ".repeat(700)}
+      <section class="recommendations">Produto relacionado | +50 mil vendidos</section>
+    </main>
+  `;
+
+  assert.equal(parser.parseSalesFromText(html), null);
+});

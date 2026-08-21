@@ -8,7 +8,10 @@ const tempDir = mkdtempSync(join(tmpdir(), "busca-vendas-item-cache-"));
 process.env.DB_PATH = join(tempDir, "item-cache.sqlite");
 
 const { db, initDatabase, setSetting } = await import("../server/db.mjs");
-const { searchMercadoLivreCachedItems } = await import("../server/scrapedo.mjs");
+const {
+  SCRAPEDO_SALES_PARSER_VERSION,
+  searchMercadoLivreCachedItems,
+} = await import("../server/scrapedo.mjs");
 
 initDatabase();
 setSetting("min_champion_sales", "1000");
@@ -29,6 +32,7 @@ function saveItem(id, title, soldQuantity, price) {
     revenue: soldQuantity * price,
     metadataVersion: 4,
     priceParserVersion: 2,
+    salesParserVersion: SCRAPEDO_SALES_PARSER_VERSION,
   };
   db.prepare(`
     INSERT INTO market_item_cache (key, title, permalink, payload, updated_at)
@@ -100,4 +104,12 @@ test("nao publica cache parcial com apenas dois anuncios", () => {
   saveItem("MLB11", "Copo Termico Inox 700ml B", 100, 69.9);
 
   assert.equal(searchMercadoLivreCachedItems("copo termico inox 700ml"), null);
+});
+
+test("nao reaproveita vendas salvas antes da separacao entre produto e vendedor", () => {
+  saveLegacyItem("MLB12", "Porta Cracha Retratil Com Cordao A", 5_000, 39.1);
+  saveLegacyItem("MLB13", "Porta Cracha Retratil Com Cordao B", 1_000, 29.9);
+  saveLegacyItem("MLB14", "Porta Cracha Retratil Com Cordao C", 1_000, 19.9);
+
+  assert.equal(searchMercadoLivreCachedItems("cordao para cracha"), null);
 });

@@ -11,7 +11,7 @@ import {
 } from "./product-match.mjs";
 
 const ZYTE_ENDPOINT = "https://api.zyte.com/v1/extract";
-const CACHE_VERSION = "zyte-sales-v3";
+const CACHE_VERSION = "zyte-sales-v4";
 const CACHE_FILE = resolve(process.cwd(), "data", "zyte-cache.json");
 const CACHE_TTL_MS = Number(process.env.ZYTE_CACHE_MS || 12 * 60 * 60 * 1000);
 const STALE_CACHE_TTL_MS = Number(process.env.ZYTE_STALE_CACHE_MS || 36 * 60 * 60 * 1000);
@@ -19,6 +19,8 @@ const STALE_CACHE_TTL_MS = Number(process.env.ZYTE_STALE_CACHE_MS || 36 * 60 * 6
 const cache = new Map();
 const inFlight = new Map();
 let diskCacheLoaded = false;
+
+export const MERCADO_LIVRE_SALES_PARSER_VERSION = 1;
 
 export function isZyteConfigured() {
   return Boolean(zyteApiKey());
@@ -151,6 +153,7 @@ async function runZyteSearch(query, cacheKey) {
     return {
       ok: true,
       source: "zyte_mercado_livre",
+      salesParserVersion: MERCADO_LIVRE_SALES_PARSER_VERSION,
       metricsMode: "sales",
       salesAvailable: true,
       message: "Dados reais extraídos via Zyte das páginas públicas do Mercado Livre. Anúncios sem vendas públicas foram ignorados.",
@@ -327,6 +330,7 @@ function extractSearchItems(html) {
         href,
         price: parsePrice(block),
         soldQuantity: parseSalesFromText(block),
+        salesParserVersion: MERCADO_LIVRE_SALES_PARSER_VERSION,
         categoryId: parseCategoryId(block),
         categoryName: parseCategoryName(block),
         weightKg: parseWeightKg(`${title} ${block}`),
@@ -367,6 +371,7 @@ function extractStructuredProducts(productList) {
         href,
         price,
         soldQuantity: null,
+        salesParserVersion: MERCADO_LIVRE_SALES_PARSER_VERSION,
         categoryId: "",
         categoryName: productList?.categoryName || "",
         weightKg: parseWeightKg(`${title} ${JSON.stringify(product.additionalProperties || [])}`),
@@ -422,6 +427,7 @@ function mapZyteItem(item) {
     image: String(item.image || "").replace("http://", "https://"),
     price: item.price,
     soldQuantity: item.soldQuantity,
+    salesParserVersion: MERCADO_LIVRE_SALES_PARSER_VERSION,
     estimatedSoldQuantity: null,
     revenue: Number((item.price * item.soldQuantity).toFixed(2)),
     estimatedRevenue: null,
@@ -570,16 +576,30 @@ function moneyPartsToNumber(reais, cents) {
 }
 
 function parseSalesFromText(text) {
-  const rawText = normalizeHtmlText(text);
-  const normalized = normalizedProductKey(rawText);
+  const source = decodeText(text);
+  const looksLikeHtml = /<\/?(?:html|body|main|h1|li|div|span)\b/i.test(source);
+
+  // Structured API responses expose the item's own sold_quantity. Do not scan
+  // arbitrary page scripts because they may contain seller or related-item data.
+  if (!looksLikeHtml) {
+    const structured = source.match(
+      /"(?:(?:sold_quantity)|(?:soldQuantity)|(?:quantity_sold)|(?:units_sold))"\s*:\s*(\d+)/i,
+    );
+    const structuredQuantity = Number(structured?.[1] || 0);
+    if (Number.isFinite(structuredQuantity) && structuredQuantity > 0) {
+      return Math.round(structuredQuantity);
+    }
+  }
+
+  const visibleText = productSalesVisibleText(source);
+  const normalized = normalizedProductKey(visibleText);
   const patterns = [
-    /"(?:(?:sold_quantity)|(?:soldQuantity)|(?:quantity_sold)|(?:units_sold))"\s*:\s*(\d+)/i,
-    /\+?\s*(\d+(?:[.,]\d+)?)\s*(mil|mi|milhao|milhoes)?\s*(?:vendido|vendidos|venda|vendas|comprado|comprados)/i,
     /mais\s+de\s+\+?\s*(\d+(?:[.,]\d+)?)\s*(mil|mi|milhao|milhoes)?\s*(?:comprado|comprados|vendido|vendidos)/i,
+    /\+?\s*(\d+(?:[.,]\d+)?)\s*(mil|mi|milhao|milhoes)?\s*(?:vendido|vendidos|comprado|comprados)/i,
   ];
 
   for (const pattern of patterns) {
-    const match = normalized.match(pattern) || rawText.match(pattern);
+    const match = normalized.match(pattern) || visibleText.match(pattern);
     if (!match) {
       continue;
     }
@@ -591,6 +611,30 @@ function parseSalesFromText(text) {
   }
 
   return null;
+}
+
+function productSalesVisibleText(source) {
+  const visibleHtml = String(source || "")
+    .replace(/<script\b[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style\b[\s\S]*?<\/style>/gi, " ")
+    .replace(/<noscript\b[\s\S]*?<\/noscript>/gi, " ");
+  const isProductPage = /<h1\b|ui-pdp-(?:header|title|subtitle)/i.test(visibleHtml);
+
+  if (!isProductPage) {
+    return cleanText(visibleHtml);
+  }
+
+  const headingIndex = visibleHtml.search(/<h1\b|ui-pdp-title/i);
+  const headerIndex = visibleHtml.search(/ui-pdp-(?:header|subtitle)/i);
+  const anchorIndex = headingIndex >= 0 ? headingIndex : headerIndex;
+  if (anchorIndex < 0) {
+    return cleanText(visibleHtml.slice(0, 12_000));
+  }
+
+  // The public sales badge belongs to the PDP header, close to the H1. Limiting
+  // this scope prevents carousels and recommendations from lending their sales
+  // count to the advertised product.
+  return cleanText(visibleHtml.slice(Math.max(0, anchorIndex - 5_000), anchorIndex + 8_000));
 }
 
 function salesUnitMultiplier(unit) {

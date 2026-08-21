@@ -27,6 +27,7 @@ import {
   normalizeScrapeDoToken,
   scrapeDoUsageSummary,
   SCRAPEDO_PRICE_PARSER_VERSION,
+  SCRAPEDO_SALES_PARSER_VERSION,
   searchMercadoLivreCachedItems,
   syncScrapeDoSettingsFromEnv,
   testScrapeDoConnection,
@@ -112,6 +113,7 @@ syncAsaasSettingsFromEnv();
 migrateMarketSearchCacheKeys();
 pruneInvalidChampionCaches();
 pruneInvalidPriceCaches();
+pruneInvalidSalesCaches();
 seedMarketItemCacheFromSearches();
 db.prepare("DELETE FROM search_requests WHERE updated_at < datetime('now', '-7 days')").run();
 if (isZyteConfigured() && isZyteSearchEnabled() && process.env.MELI_LOCAL_BROWSER_ENABLED !== "true") {
@@ -1097,6 +1099,12 @@ function cachedResultMatchesQuery(result, query) {
   ) {
     return false;
   }
+  if (
+    ["scrapedo_mercado_livre", "zyte_mercado_livre", "confweb_cache"].includes(result.source)
+    && Number(result.salesParserVersion || 0) < SCRAPEDO_SALES_PARSER_VERSION
+  ) {
+    return false;
+  }
   const spec = buildProductQuerySpec(query);
   return result.items.slice(0, 3).every((item) => matchesMarketplaceSearchResult(item?.title || "", spec).ok);
 }
@@ -1268,15 +1276,58 @@ function pruneInvalidPriceCaches() {
   prune();
 }
 
+function pruneInvalidSalesCaches() {
+  const policyVersion = String(SCRAPEDO_SALES_PARSER_VERSION);
+  if (getSetting("sales_cache_policy_version") === policyVersion) {
+    return;
+  }
+
+  const removeItem = db.prepare("DELETE FROM market_item_cache WHERE key = ?");
+  const removeSearch = db.prepare("DELETE FROM market_search_cache WHERE key = ?");
+  const removeHistory = db.prepare("DELETE FROM search_history WHERE id = ?");
+  const removeRequest = db.prepare("DELETE FROM search_requests WHERE id = ?");
+  const prune = db.transaction(() => {
+    for (const row of db.prepare("SELECT key, payload FROM market_item_cache").all()) {
+      const item = parseSearchPayload(row.payload);
+      if (Number(item?.salesParserVersion || 0) < SCRAPEDO_SALES_PARSER_VERSION) {
+        removeItem.run(row.key);
+      }
+    }
+    for (const row of db.prepare("SELECT key, query, payload FROM market_search_cache").all()) {
+      const result = parseSearchPayload(row.payload);
+      if (!cachedResultMatchesQuery(result, row.query)) {
+        removeSearch.run(row.key);
+      }
+    }
+    for (const row of db.prepare("SELECT id, query, payload FROM search_history").all()) {
+      const result = parseSearchPayload(row.payload);
+      if (!cachedResultMatchesQuery(result, row.query)) {
+        removeHistory.run(row.id);
+      }
+    }
+    for (const row of db.prepare("SELECT id, query, payload FROM search_requests WHERE status = 'ready'").all()) {
+      const result = parseSearchPayload(row.payload);
+      if (!cachedResultMatchesQuery(result, row.query)) {
+        removeRequest.run(row.id);
+      }
+    }
+    setSetting("sales_cache_policy_version", policyVersion);
+  });
+  prune();
+}
+
 function seedMarketItemCacheFromSearches() {
-  if (getSetting("market_item_cache_seed_version") === "1") {
+  if (getSetting("market_item_cache_seed_version") === "2") {
     return;
   }
 
   const rows = db.prepare("SELECT payload FROM market_search_cache").all();
   for (const row of rows) {
     const result = parseSearchPayload(row.payload);
-    if (!isBillableSearchResult(result)) {
+    if (
+      !isBillableSearchResult(result)
+      || Number(result.salesParserVersion || 0) < SCRAPEDO_SALES_PARSER_VERSION
+    ) {
       continue;
     }
     for (const item of result.items.slice(0, 3)) {
@@ -1292,7 +1343,7 @@ function seedMarketItemCacheFromSearches() {
       `).run(key, item.title, href, JSON.stringify(cachedItem));
     }
   }
-  setSetting("market_item_cache_seed_version", "1");
+  setSetting("market_item_cache_seed_version", "2");
 }
 
 function marketCacheTtlMs() {
