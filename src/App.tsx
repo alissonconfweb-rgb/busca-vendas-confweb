@@ -1425,7 +1425,8 @@ function SearchPage({
   const resultsRef = useRef<HTMLDivElement>(null);
   const searchRunRef = useRef(0);
 
-  const canSeeMargin = canUseAdmin(user) || (user?.plan && user.plan !== "free");
+  const canSeeMargin = Boolean(user);
+  const shouldOfferPaidPlan = Boolean(user?.plan === "free" && !canUseAdmin(user));
 
   useEffect(() => {
     if (!restoredSearch) {
@@ -1660,7 +1661,7 @@ function SearchPage({
               canSeeMargin={Boolean(canSeeMargin)}
               onPlans={onPlans}
             />
-            {Boolean(result?.ok && result.items.length && !canSeeMargin) && (
+            {Boolean(result?.ok && result.items.length && shouldOfferPaidPlan) && (
               <PlansPreview settings={settings} onSelectPlan={onCheckout} />
             )}
             <LearnPreview tips={tips} onTip={onTip} />
@@ -1861,7 +1862,7 @@ function ResultsPanel({
                 Ver anúncio no Mercado Livre
               </a>
               </div>
-              <ProductMarginCard item={item} locked={!canSeeMargin} onPlans={onPlans} />
+              <ProductMarginCard item={item} defaultExpanded={index === 0} locked={!canSeeMargin} onPlans={onPlans} />
             </article>
           ))}
           <div className={`market-cta ${emergingMode ? "emerging-market-cta" : ""}`}>
@@ -1939,8 +1940,18 @@ function SearchProgress({ query, elapsedMs }: { query: string; elapsedMs: number
   );
 }
 
-function ProductMarginCard({ item, locked, onPlans }: { item: MarketplaceItem; locked: boolean; onPlans: () => void }) {
-  const [expanded, setExpanded] = useState(false);
+function ProductMarginCard({
+  item,
+  defaultExpanded = false,
+  locked,
+  onPlans,
+}: {
+  item: MarketplaceItem;
+  defaultExpanded?: boolean;
+  locked: boolean;
+  onPlans: () => void;
+}) {
+  const [expanded, setExpanded] = useState(defaultExpanded);
   const [costInput, setCostInput] = useState("");
   const [manualCost, setManualCost] = useState(0);
   const [calculated, setCalculated] = useState(false);
@@ -1949,6 +1960,14 @@ function ProductMarginCard({ item, locked, onPlans }: { item: MarketplaceItem; l
     () => buildProductMarginEstimate(item, manualCost, listingType),
     [item, listingType, manualCost],
   );
+
+  useEffect(() => {
+    setExpanded(defaultExpanded);
+    setCostInput("");
+    setManualCost(0);
+    setCalculated(false);
+    setListingType("classic");
+  }, [defaultExpanded, item.id]);
 
   const calculate = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -2602,8 +2621,9 @@ function PlansPage({
           items={[
             "1 pesquisa completa",
             "Top 3 anúncios campeões",
-            "Quantidade de vendas e preço médio",
-            "Prévia do dinheiro movimentado",
+            "Vendas, preço e dinheiro movimentado",
+            "Quanto ganho neste produto, com taxas",
+            "Simulação com seu preço de custo",
           ]}
           current={currentPlan === "free"}
           actionLabel={currentPlan === "free" ? "Seu plano atual" : user ? "Incluído no seu plano" : "Criar conta grátis"}
