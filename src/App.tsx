@@ -5108,8 +5108,8 @@ function AdminSettings({ settings, afterSave }: { settings: SettingsMap; afterSa
     const payload = formJson(form);
     payload.scrapedo_enabled = "true";
     payload.scrapedo_endpoint = "https://api.scrape.do/";
-    payload.scrapedo_search_pages = "4";
-    payload.scrapedo_detail_limit = "36";
+    payload.scrapedo_search_pages = "1";
+    payload.scrapedo_detail_limit = "12";
     payload.zyte_search_enabled = "false";
     payload.zyte_mode = "browser_html";
     payload.zyte_endpoint = "https://api.zyte.com/v1/extract";

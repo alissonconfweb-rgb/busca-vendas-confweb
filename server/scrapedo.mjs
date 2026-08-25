@@ -14,11 +14,15 @@ import {
 import { minimumChampionSales } from "./champion-policy.mjs";
 
 const DEFAULT_ENDPOINT = "https://api.scrape.do/";
-const DEFAULT_DETAIL_LIMIT = 36;
-const DEFAULT_SEARCH_PAGES = 4;
-const SUPPLEMENTAL_SEARCH_PAGES = 3;
-const EMERGING_MARKET_SAMPLE_SIZE = 12;
-const DEFAULT_DETAIL_CONCURRENCY = 4;
+const DEFAULT_DETAIL_LIMIT = 12;
+const DEFAULT_SEARCH_PAGES = 1;
+const SUPPLEMENTAL_SEARCH_PAGES = 1;
+const SUPPLEMENTAL_QUERY_VARIANTS = 2;
+const EMERGING_MARKET_SAMPLE_SIZE = 6;
+const DEFAULT_DETAIL_CONCURRENCY = 3;
+const DEFAULT_SEARCH_DEADLINE_MS = 55_000;
+const DEFAULT_REQUEST_TIMEOUT_MS = 18_000;
+const MINIMUM_REQUEST_BUDGET_MS = 1_500;
 const MARKET_ITEM_METADATA_VERSION = 4;
 export const SCRAPEDO_PRICE_PARSER_VERSION = 2;
 export const SCRAPEDO_SALES_PARSER_VERSION = MERCADO_LIVRE_SALES_PARSER_VERSION;
@@ -150,21 +154,14 @@ export function scrapeDoUsageSummary() {
 }
 
 export function ensureScrapeDoSearchDepth() {
-  const configuredPages = Number(
-    getSetting("scrapedo_search_pages") || process.env.SCRAPEDO_SEARCH_PAGES || DEFAULT_SEARCH_PAGES,
-  );
-  const configuredDetailLimit = Number(
-    getSetting("scrapedo_detail_limit") || process.env.SCRAPEDO_DETAIL_LIMIT || DEFAULT_DETAIL_LIMIT,
-  );
-  const pages = Number.isFinite(configuredPages)
-    ? Math.max(DEFAULT_SEARCH_PAGES, configuredPages)
-    : DEFAULT_SEARCH_PAGES;
-  const details = Number.isFinite(configuredDetailLimit)
-    ? Math.max(DEFAULT_DETAIL_LIMIT, configuredDetailLimit)
-    : DEFAULT_DETAIL_LIMIT;
-
-  setSetting("scrapedo_search_pages", String(Math.min(4, pages)));
-  setSetting("scrapedo_detail_limit", String(Math.min(48, details)));
+  if (getSetting("scrapedo_latency_policy_version") !== "2") {
+    setSetting("scrapedo_search_pages", String(DEFAULT_SEARCH_PAGES));
+    setSetting("scrapedo_detail_limit", String(DEFAULT_DETAIL_LIMIT));
+    setSetting("scrapedo_candidate_target", String(EMERGING_MARKET_SAMPLE_SIZE));
+    setSetting("scrapedo_detail_concurrency", String(DEFAULT_DETAIL_CONCURRENCY));
+    setSetting("scrapedo_timeout_ms", String(DEFAULT_REQUEST_TIMEOUT_MS));
+    setSetting("scrapedo_latency_policy_version", "2");
+  }
 }
 
 export function scrapeDoSearchPolicy() {
@@ -177,7 +174,7 @@ export function scrapeDoSearchPolicy() {
 }
 
 export function hasEnoughInspectedCandidates({ championCount, verifiedCount, inspectedCount, sampleTarget }) {
-  return verifiedCount >= 3 && inspectedCount >= sampleTarget;
+  return championCount >= 3 || verifiedCount >= 3;
 }
 
 export function isUsableMercadoLivreHtml(status, html) {
@@ -255,6 +252,9 @@ async function executeMercadoLivreScrapeDo(query, options = {}) {
   const querySpec = buildProductQuerySpec(query);
   const searchQuery = normalizeProductSearchQuery(query);
   const sessionId = createSessionId();
+  const deadlineAt = Number(options.deadlineAt) > Date.now()
+    ? Number(options.deadlineAt)
+    : Date.now() + searchDeadlineMs();
   const candidates = [];
   let totalAvailable = 0;
   let cookies = "";
@@ -263,6 +263,9 @@ async function executeMercadoLivreScrapeDo(query, options = {}) {
   let lastPageError = null;
 
   for (let page = 1; page <= searchPages(); page += 1) {
+    if (!hasRequestBudget(deadlineAt)) {
+      break;
+    }
     let pageResponse;
     let usedRenderedResponse = false;
     try {
@@ -270,6 +273,7 @@ async function executeMercadoLivreScrapeDo(query, options = {}) {
         sessionId,
         cookies,
         render: false,
+        deadlineAt,
       });
     } catch (error) {
       lastPageError = error;
@@ -277,6 +281,7 @@ async function executeMercadoLivreScrapeDo(query, options = {}) {
         sessionId,
         cookies,
         render: true,
+        deadlineAt,
       }).catch(() => null);
       usedRenderedResponse = Boolean(pageResponse);
       if (!pageResponse) {
@@ -293,6 +298,7 @@ async function executeMercadoLivreScrapeDo(query, options = {}) {
           sessionId,
           cookies,
           render: true,
+          deadlineAt,
         });
         cookies = renderedResponse.cookies || cookies;
         creditsUsed += renderedResponse.cost;
@@ -330,14 +336,14 @@ async function executeMercadoLivreScrapeDo(query, options = {}) {
   if (!uniqueCandidates.length && lastPageError) {
     throw lastPageError;
   }
-  const listingHasCompleteRanking = uniqueCandidates.filter((item) => Number(item.soldQuantity || 0) > 0).length >= 3;
   const enriched = [];
   const batchSize = detailConcurrency();
   for (let offset = 0; offset < uniqueCandidates.length; offset += batchSize) {
     const batch = await mapWithConcurrency(uniqueCandidates.slice(offset, offset + batchSize), batchSize, async (candidate) => (
       enrichCandidate(candidate, querySpec, sessionId, cookies, {
         ...options,
-        requireMetadata: listingHasCompleteRanking,
+        requireMetadata: false,
+        deadlineAt,
       })
     ));
     for (const result of batch) {
@@ -352,16 +358,15 @@ async function executeMercadoLivreScrapeDo(query, options = {}) {
     )).length;
     const inspectedCount = Math.min(offset + batchSize, uniqueCandidates.length);
     const verifiedCount = enriched.filter((item) => item.price > 0 && item.soldQuantity > 0).length;
-    const minimumInspectionTarget = Math.min(
-      Math.max(candidateTarget(), EMERGING_MARKET_SAMPLE_SIZE),
-      uniqueCandidates.length,
-    );
     if (hasEnoughInspectedCandidates({
       championCount,
       verifiedCount,
       inspectedCount,
-      sampleTarget: minimumInspectionTarget,
+      sampleTarget: Math.min(candidateTarget(), uniqueCandidates.length),
     })) {
+      break;
+    }
+    if (!hasRequestBudget(deadlineAt)) {
       break;
     }
   }
@@ -371,7 +376,7 @@ async function executeMercadoLivreScrapeDo(query, options = {}) {
   )).length;
   const cachedVerifiedItems = currentChampionCount >= 3 || !shouldUseScrapeDoItemCache(options)
     ? []
-    : getCachedVerifiedItems(querySpec);
+    : getCachedVerifiedItems(querySpec, { requireMetadata: false });
   itemCacheHits += cachedVerifiedItems.length;
   let enrichedPool = dedupe([...enriched, ...cachedVerifiedItems]);
   const verifiedBeforeSupplement = enrichedPool.filter((item) => (
@@ -387,6 +392,7 @@ async function executeMercadoLivreScrapeDo(query, options = {}) {
       cookies,
       existingItems: enrichedPool,
       options,
+      deadlineAt,
     });
     creditsUsed += supplemental.creditsUsed;
     itemCacheHits += supplemental.itemCacheHits;
@@ -464,7 +470,7 @@ async function executeMercadoLivreScrapeDo(query, options = {}) {
 }
 
 async function collectSupplementalVerifiedItems(query, querySpec, context) {
-  const variants = buildMarketplaceSearchQueries(query).slice(1);
+  const variants = buildMarketplaceSearchQueries(query).slice(1, 1 + SUPPLEMENTAL_QUERY_VARIANTS);
   const collected = [];
   let cookies = context.cookies || "";
   let creditsUsed = 0;
@@ -473,10 +479,14 @@ async function collectSupplementalVerifiedItems(query, querySpec, context) {
 
   for (const variant of variants) {
     for (let page = 1; page <= SUPPLEMENTAL_SEARCH_PAGES; page += 1) {
+      if (!hasRequestBudget(context.deadlineAt)) {
+        return { items: collected, creditsUsed, itemCacheHits, totalAvailable };
+      }
       let response = await requestPage(parser.searchUrlFor(variant, page), {
         sessionId: context.sessionId,
         cookies,
         render: false,
+        deadlineAt: context.deadlineAt,
       }).catch(() => null);
       if (!response) {
         continue;
@@ -490,6 +500,7 @@ async function collectSupplementalVerifiedItems(query, querySpec, context) {
           sessionId: context.sessionId,
           cookies,
           render: true,
+          deadlineAt: context.deadlineAt,
         }).catch(() => null);
         if (rendered) {
           cookies = rendered.cookies || cookies;
@@ -511,6 +522,9 @@ async function collectSupplementalVerifiedItems(query, querySpec, context) {
         ));
 
       for (const candidate of rankedCandidates) {
+        if (!hasRequestBudget(context.deadlineAt)) {
+          return { items: collected, creditsUsed, itemCacheHits, totalAvailable };
+        }
         const currentPool = dedupe([...context.existingItems, ...collected]);
         if (currentPool.some((item) => marketItemCacheKey(item) === marketItemCacheKey(candidate))) {
           continue;
@@ -518,6 +532,7 @@ async function collectSupplementalVerifiedItems(query, querySpec, context) {
         const result = await enrichCandidate(candidate, querySpec, context.sessionId, cookies, {
           ...context.options,
           requireMetadata: false,
+          deadlineAt: context.deadlineAt,
         });
         creditsUsed += result.creditsUsed;
         itemCacheHits += result.cacheHit ? 1 : 0;
@@ -581,10 +596,14 @@ async function enrichCandidate(candidate, querySpec, sessionId, initialCookies, 
   let creditsUsed = 0;
 
   for (const url of parser.productDetailUrls(candidate)) {
+    if (!hasRequestBudget(options.deadlineAt)) {
+      break;
+    }
     let response = await requestPage(url, {
       sessionId,
       cookies,
       render: options.requireMetadata === true,
+      deadlineAt: options.deadlineAt,
     }).catch(() => null);
     if (!response) {
       continue;
@@ -599,6 +618,7 @@ async function enrichCandidate(candidate, querySpec, sessionId, initialCookies, 
         sessionId,
         cookies,
         render: true,
+        deadlineAt: options.deadlineAt,
       }).catch(() => null);
       if (response) {
         cookies = response.cookies || cookies;
@@ -803,6 +823,9 @@ export function shouldUseScrapeDoItemCache(options = {}) {
 }
 
 async function requestPage(targetUrl, options = {}) {
+  if (!hasRequestBudget(options.deadlineAt)) {
+    throw new Error("A pesquisa atingiu o prazo máximo de coleta.");
+  }
   const params = new URLSearchParams({
     token: scrapeDoToken(),
     url: targetUrl,
@@ -813,7 +836,7 @@ async function requestPage(targetUrl, options = {}) {
   });
   if (options.render) {
     params.set("render", "true");
-    params.set("customWait", "1500");
+    params.set("customWait", "800");
   }
   if (options.cookies) {
     params.set("setCookies", options.cookies);
@@ -821,7 +844,9 @@ async function requestPage(targetUrl, options = {}) {
 
   const requestUrl = `${scrapeDoEndpoint()}?${params.toString()}`;
   const startedAt = Date.now();
-  const response = await fetchScrapeDoPageWithRetry(requestUrl);
+  const response = await fetchScrapeDoPageWithRetry(requestUrl, {
+    deadlineAt: options.deadlineAt,
+  });
   const html = await response.text();
   if (!isUsableMercadoLivreHtml(response.status, html)) {
     throw new Error(describeError(response.status, html));
@@ -842,11 +867,14 @@ async function requestPage(targetUrl, options = {}) {
   return result;
 }
 
-async function fetchScrapeDoPageWithRetry(url) {
+async function fetchScrapeDoPageWithRetry(url, options = {}) {
   let lastError;
   for (let attempt = 0; attempt < 2; attempt += 1) {
+    if (!hasRequestBudget(options.deadlineAt)) {
+      break;
+    }
     try {
-      const response = await fetchScrapeDoPage(url);
+      const response = await fetchScrapeDoPage(url, requestTimeoutMs(options.deadlineAt));
       if (![502, 503, 504].includes(response.status) || attempt === 1) {
         return response;
       }
@@ -857,7 +885,9 @@ async function fetchScrapeDoPageWithRetry(url) {
         throw error;
       }
     }
-    await delay(700 + randomInt(100, 500));
+    if (hasRequestBudget(options.deadlineAt, 2_500)) {
+      await delay(450 + randomInt(50, 250));
+    }
   }
   throw lastError || new Error("A fonte de dados não respondeu.");
 }
@@ -874,13 +904,13 @@ function isTransientFetchError(error) {
   );
 }
 
-function fetchScrapeDoPage(url) {
+function fetchScrapeDoPage(url, requestTimeout) {
   return fetch(url, {
     headers: {
       Accept: "text/html,application/xhtml+xml",
       "User-Agent": "BuscaVendasConfweb/1.0",
     },
-    signal: AbortSignal.timeout(timeoutMs()),
+    signal: AbortSignal.timeout(requestTimeout),
   });
 }
 
@@ -989,7 +1019,7 @@ function scrapeDoEndpoint() {
 }
 
 function detailLimit() {
-  return Math.min(48, Math.max(12, Number(
+  return Math.min(18, Math.max(6, Number(
     getSetting("scrapedo_detail_limit") || process.env.SCRAPEDO_DETAIL_LIMIT || DEFAULT_DETAIL_LIMIT,
   )));
 }
@@ -998,7 +1028,7 @@ function candidateTarget() {
   const configured = Number(
     getSetting("scrapedo_candidate_target") || process.env.SCRAPEDO_CANDIDATE_TARGET || EMERGING_MARKET_SAMPLE_SIZE,
   );
-  return Math.min(detailLimit(), Math.max(EMERGING_MARKET_SAMPLE_SIZE, Number.isFinite(configured) ? configured : EMERGING_MARKET_SAMPLE_SIZE));
+  return Math.min(detailLimit(), Math.max(3, Number.isFinite(configured) ? configured : EMERGING_MARKET_SAMPLE_SIZE));
 }
 
 function detailConcurrency() {
@@ -1009,13 +1039,29 @@ function detailConcurrency() {
 }
 
 function searchPages() {
-  return Math.min(4, Math.max(1, Number(
+  return Math.min(2, Math.max(1, Number(
     getSetting("scrapedo_search_pages") || process.env.SCRAPEDO_SEARCH_PAGES || DEFAULT_SEARCH_PAGES,
   )));
 }
 
 function timeoutMs() {
-  return Math.max(10_000, Number(getSetting("scrapedo_timeout_ms") || process.env.SCRAPEDO_TIMEOUT_MS || 45_000));
+  return Math.min(25_000, Math.max(8_000, Number(
+    getSetting("scrapedo_timeout_ms") || process.env.SCRAPEDO_TIMEOUT_MS || DEFAULT_REQUEST_TIMEOUT_MS,
+  )));
+}
+
+function searchDeadlineMs() {
+  const configured = Number(process.env.SCRAPEDO_SEARCH_DEADLINE_MS || DEFAULT_SEARCH_DEADLINE_MS);
+  return Math.min(75_000, Math.max(30_000, Number.isFinite(configured) ? configured : DEFAULT_SEARCH_DEADLINE_MS));
+}
+
+function hasRequestBudget(deadlineAt, minimumMs = MINIMUM_REQUEST_BUDGET_MS) {
+  return !Number(deadlineAt) || Number(deadlineAt) - Date.now() >= minimumMs;
+}
+
+function requestTimeoutMs(deadlineAt) {
+  const remaining = Number(deadlineAt) ? Number(deadlineAt) - Date.now() - 250 : timeoutMs();
+  return Math.max(1_000, Math.min(timeoutMs(), remaining));
 }
 
 function monthlyCreditBudget() {

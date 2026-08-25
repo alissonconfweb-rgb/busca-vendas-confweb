@@ -24,47 +24,48 @@ after(() => {
   rmSync(tempDir, { recursive: true, force: true });
 });
 
-test("migra a varredura curta que deixava buscas novas sem Top 3", () => {
+test("migra a varredura antiga para a politica de baixa latencia", () => {
   setSetting("scrapedo_search_pages", "2");
   setSetting("scrapedo_detail_limit", "9");
 
   ensureScrapeDoSearchDepth();
 
   assert.deepEqual(scrapeDoSearchPolicy(), {
-    pages: 4,
-    detailLimit: 36,
-    candidateTarget: 12,
-    detailConcurrency: 4,
+    pages: 1,
+    detailLimit: 12,
+    candidateTarget: 6,
+    detailConcurrency: 3,
   });
 });
 
-test("preserva uma profundidade maior configurada para a fonte", () => {
+test("preserva a politica otimizada depois da migracao", () => {
+  setSetting("scrapedo_latency_policy_version", "2");
   setSetting("scrapedo_search_pages", "4");
   setSetting("scrapedo_detail_limit", "48");
 
   ensureScrapeDoSearchDepth();
 
   assert.deepEqual(scrapeDoSearchPolicy(), {
-    pages: 4,
-    detailLimit: 48,
-    candidateTarget: 12,
-    detailConcurrency: 4,
+    pages: 2,
+    detailLimit: 18,
+    candidateTarget: 6,
+    detailConcurrency: 3,
   });
 });
 
-test("compara a amostra inteira antes de fechar os tres campeoes", () => {
+test("encerra imediatamente quando tres resultados reais estao prontos", () => {
   assert.equal(hasEnoughInspectedCandidates({
     championCount: 3,
     verifiedCount: 3,
     inspectedCount: 4,
     sampleTarget: 12,
-  }), false);
+  }), true);
   assert.equal(hasEnoughInspectedCandidates({
     championCount: 2,
     verifiedCount: 4,
     inspectedCount: 4,
     sampleTarget: 12,
-  }), false);
+  }), true);
   assert.equal(hasEnoughInspectedCandidates({
     championCount: 0,
     verifiedCount: 8,

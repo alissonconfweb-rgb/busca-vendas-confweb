@@ -67,8 +67,8 @@ const LEGACY_COOKIES = ["bv_session"];
 const CREATOR_EMAIL = (process.env.CREATOR_EMAIL || process.env.ADMIN_EMAIL || "").trim().toLowerCase();
 const DIST_DIR = resolve(process.cwd(), "dist");
 const MELI_OAUTH_STATE_TTL_MS = 15 * 60 * 1000;
-const SEARCH_RESPONSE_TIMEOUT_MS = Number(process.env.SEARCH_RESPONSE_TIMEOUT_MS || 120_000);
-const SEARCH_JOB_STALE_MS = Number(process.env.SEARCH_JOB_STALE_MS || 15 * 60_000);
+const SEARCH_RESPONSE_TIMEOUT_MS = Number(process.env.SEARCH_RESPONSE_TIMEOUT_MS || 75_000);
+const SEARCH_JOB_STALE_MS = Number(process.env.SEARCH_JOB_STALE_MS || 90_000);
 const SEARCH_JOB_POLL_AFTER_MS = Number(process.env.SEARCH_JOB_POLL_AFTER_MS || 1_500);
 const MARKET_CACHE_REFRESH_INTERVAL_MS = Number(process.env.MARKET_CACHE_REFRESH_INTERVAL_MS || 6 * 60 * 60_000);
 const marketRefreshFlights = new Map();
@@ -1721,9 +1721,11 @@ async function handleAdmin(req, res, url, currentUser) {
     }
     setSetting("scrapedo_enabled", "true");
     setSetting("scrapedo_endpoint", "https://api.scrape.do/");
-    setSetting("scrapedo_search_pages", "4");
-    setSetting("scrapedo_detail_limit", "36");
-    setSetting("scrapedo_timeout_ms", "45000");
+    setSetting("scrapedo_search_pages", "1");
+    setSetting("scrapedo_detail_limit", "12");
+    setSetting("scrapedo_candidate_target", "6");
+    setSetting("scrapedo_detail_concurrency", "3");
+    setSetting("scrapedo_timeout_ms", "18000");
     const requestedCacheTtl = Number(body.cacheTtlDays || getSetting("market_cache_ttl_days") || 7);
     const cacheTtlDays = Number.isFinite(requestedCacheTtl)
       ? Math.min(30, Math.max(1, requestedCacheTtl))
@@ -2368,9 +2370,9 @@ function safeSettings(user) {
     settings.zyte_api_key = "";
     settings.scrapedo_enabled = settings.scrapedo_enabled || process.env.SCRAPEDO_ENABLED || "true";
     settings.scrapedo_endpoint = settings.scrapedo_endpoint || process.env.SCRAPEDO_ENDPOINT || "https://api.scrape.do/";
-    settings.scrapedo_search_pages = settings.scrapedo_search_pages || process.env.SCRAPEDO_SEARCH_PAGES || "4";
-    settings.scrapedo_detail_limit = settings.scrapedo_detail_limit || process.env.SCRAPEDO_DETAIL_LIMIT || "36";
-    settings.scrapedo_timeout_ms = settings.scrapedo_timeout_ms || process.env.SCRAPEDO_TIMEOUT_MS || "45000";
+    settings.scrapedo_search_pages = settings.scrapedo_search_pages || process.env.SCRAPEDO_SEARCH_PAGES || "1";
+    settings.scrapedo_detail_limit = settings.scrapedo_detail_limit || process.env.SCRAPEDO_DETAIL_LIMIT || "12";
+    settings.scrapedo_timeout_ms = settings.scrapedo_timeout_ms || process.env.SCRAPEDO_TIMEOUT_MS || "18000";
     settings.scrapedo_api_token_configured = settings.scrapedo_api_token || process.env.SCRAPEDO_API_TOKEN ? "true" : "";
     settings.scrapedo_connected = isScrapeDoConfigured() && settings.scrapedo_verified === "true" ? "true" : "";
     settings.scrapedo_available = settings.scrapedo_connected

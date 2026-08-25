@@ -71,24 +71,6 @@ export async function searchMercadoLivre(query, options = {}) {
         "mercado_livre_not_connected",
       );
     } else {
-      try {
-        const catalog = addOpportunityMode(
-          await searchMercadoLivreCatalog({ query, accessToken, siteId }),
-        );
-        if (hasCompleteSalesTop3(catalog)) {
-          setSetting("meli_last_error", "");
-          return enrichMercadoLivreCosts(catalog, { accessToken, siteId });
-        }
-        strictFailure = catalog;
-        setSetting("meli_last_error", catalog.message || "O catálogo oficial não completou o Top 3 com vendas.");
-      } catch (error) {
-        const message = sanitizeSearchError(
-          error instanceof Error ? error.message : "Falha ao consultar o catálogo oficial.",
-        );
-        strictFailure = makeStrictFailure(query, message, "mercado_livre_catalog_error");
-        setSetting("meli_last_error", message);
-      }
-
       const officialSearch = await searchMercadoLivreOfficialSearch(query, accessToken, siteId);
       accessToken = officialSearch.accessToken || accessToken;
       if (hasCompleteSalesTop3(officialSearch.result)) {
@@ -100,6 +82,28 @@ export async function searchMercadoLivre(query, options = {}) {
         "meli_last_error",
         officialSearch.result?.message || "A API oficial não completou o Top 3 com vendas.",
       );
+
+      // O catálogo é uma alternativa oficial mais pesada. Em modo automático,
+      // o Scrape.do já é o fallback de anúncios e deve começar imediatamente.
+      if (!provider.useScrapeDo) {
+        try {
+          const catalog = addOpportunityMode(
+            await searchMercadoLivreCatalog({ query, accessToken, siteId }),
+          );
+          if (hasCompleteSalesTop3(catalog)) {
+            setSetting("meli_last_error", "");
+            return enrichMercadoLivreCosts(catalog, { accessToken, siteId });
+          }
+          strictFailure = catalog;
+          setSetting("meli_last_error", catalog.message || "O catálogo oficial não completou o Top 3 com vendas.");
+        } catch (error) {
+          const message = sanitizeSearchError(
+            error instanceof Error ? error.message : "Falha ao consultar o catálogo oficial.",
+          );
+          strictFailure = makeStrictFailure(query, message, "mercado_livre_catalog_error");
+          setSetting("meli_last_error", message);
+        }
+      }
     }
   }
 
@@ -722,6 +726,7 @@ function searchWithToken(siteId, params, accessToken) {
       Authorization: `Bearer ${accessToken}`,
       "User-Agent": "BuscaVendasConfweb/1.0",
     },
+    signal: AbortSignal.timeout(8_000),
   });
 }
 
