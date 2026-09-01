@@ -76,7 +76,7 @@ export async function searchMercadoLivre(query, options = {}) {
       if (!hasOptionalCostCredentials) {
         return result;
       }
-      const accessToken = await getValidAccessToken().catch(() => null);
+      const accessToken = await getValidMeliAccessToken().catch(() => null);
       return accessToken
         ? enrichMercadoLivreCosts(result, { accessToken, siteId: getSetting("meli_site_id") || "MLB" })
         : result;
