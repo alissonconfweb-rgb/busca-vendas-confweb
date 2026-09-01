@@ -355,10 +355,12 @@ type AdminData = {
 
 class ApiError extends Error {
   status: number;
+  code: string;
 
-  constructor(message: string, status: number) {
+  constructor(message: string, status: number, code = "") {
     super(message);
     this.status = status;
+    this.code = code;
   }
 }
 
@@ -515,7 +517,7 @@ async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   }
 
   if (!response.ok) {
-    throw new ApiError(data?.error || data?.message || "Erro na requisição.", response.status);
+    throw new ApiError(data?.error || data?.message || "Erro na requisição.", response.status, data?.code || "");
   }
 
   return data as T;
@@ -677,6 +679,14 @@ function formJson(form: HTMLFormElement) {
   return Object.fromEntries(new FormData(form).entries());
 }
 
+function newCheckoutIdempotencyKey() {
+  if (typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID().replace(/-/g, "_");
+  }
+  const bytes = crypto.getRandomValues(new Uint8Array(24));
+  return Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");
+}
+
 function digitsOnly(value: unknown) {
   return String(value || "").replace(/\D/g, "");
 }
@@ -760,7 +770,7 @@ function App() {
 
   useEffect(() => {
     const controller = new AbortController();
-    const timer = window.setTimeout(() => controller.abort(), 2500);
+    const timer = window.setTimeout(() => controller.abort(), 10_000);
 
     api<{ user: User | null }>("/api/auth/me", { signal: controller.signal })
       .then((data) => setUser(data.user))
@@ -2808,6 +2818,7 @@ function CheckoutPage({
   const [postalCodeError, setPostalCodeError] = useState("");
   const [checkingPostalCode, setCheckingPostalCode] = useState(false);
   const resultRef = useRef<HTMLDivElement>(null);
+  const checkoutAttemptRef = useRef(newCheckoutIdempotencyKey());
   const offer = checkoutOffer(settings, selection);
   const pricing = planPricing(settings, selection.plan);
   const billingType: BillingType = selection.cycle === "yearly" ? annualBillingType : "CREDIT_CARD";
@@ -2824,6 +2835,21 @@ function CheckoutPage({
     : billingType === "PIX"
       ? `Pagamento único de ${money.format(offer.value)} no Pix.`
       : `Parcelado em até 12 vezes sem juros, total de ${money.format(offer.value)}.`;
+  const checkoutAttemptStorageKey = user
+    ? `bv_checkout_attempt_v1_${user.id}_${selection.plan}_${selection.cycle}_${billingType}`
+    : "";
+
+  useEffect(() => {
+    if (!checkoutAttemptStorageKey) {
+      checkoutAttemptRef.current = newCheckoutIdempotencyKey();
+      return;
+    }
+    const stored = sessionStorage.getItem(checkoutAttemptStorageKey);
+    checkoutAttemptRef.current = stored && /^[A-Za-z0-9_-]{20,100}$/.test(stored)
+      ? stored
+      : newCheckoutIdempotencyKey();
+    sessionStorage.setItem(checkoutAttemptStorageKey, checkoutAttemptRef.current);
+  }, [checkoutAttemptStorageKey]);
 
   useEffect(() => {
     if (!result?.financeId || isPaidCheckoutStatus(result.status) || isFailedCheckoutStatus(result.status)) {
@@ -2883,6 +2909,16 @@ function CheckoutPage({
   }, [result?.financeId, result?.status]);
 
   useEffect(() => {
+    if (
+      checkoutAttemptStorageKey
+      && result?.status
+      && (isPaidCheckoutStatus(result.status) || isFailedCheckoutStatus(result.status))
+    ) {
+      sessionStorage.removeItem(checkoutAttemptStorageKey);
+    }
+  }, [checkoutAttemptStorageKey, result?.status]);
+
+  useEffect(() => {
     if (!result?.financeId) {
       return;
     }
@@ -2894,6 +2930,7 @@ function CheckoutPage({
 
   const selectCycle = (cycle: PlanCycle) => {
     onSelection({ ...selection, cycle });
+    checkoutAttemptRef.current = newCheckoutIdempotencyKey();
     setResult(null);
     setPixCopied(false);
     setError("");
@@ -2979,6 +3016,7 @@ function CheckoutPage({
         await validatePostalCode(data.postal_code);
       }
       const payload = {
+        idempotencyKey: checkoutAttemptRef.current,
         plan: selection.plan,
         cycle: selection.cycle,
         billingType,
@@ -3003,16 +3041,35 @@ function CheckoutPage({
           phone: data.phone,
         } : undefined,
       };
-      const checkout = await api<CheckoutResult>("/api/checkout/start", {
-        method: "POST",
-        body: JSON.stringify(payload),
-      });
+      const checkoutController = new AbortController();
+      const checkoutTimeout = window.setTimeout(() => checkoutController.abort(), 45_000);
+      let checkout: CheckoutResult;
+      try {
+        checkout = await api<CheckoutResult>("/api/checkout/start", {
+          method: "POST",
+          body: JSON.stringify(payload),
+          signal: checkoutController.signal,
+        });
+      } finally {
+        window.clearTimeout(checkoutTimeout);
+      }
       setResult(checkout);
       if (checkout.user) {
         onUserChange(checkout.user);
       }
       onDone();
     } catch (apiError) {
+      if (
+        apiError instanceof ApiError
+        && apiError.status >= 400
+        && apiError.status < 500
+        && apiError.code !== "CHECKOUT_IN_PROGRESS"
+      ) {
+        checkoutAttemptRef.current = newCheckoutIdempotencyKey();
+        if (checkoutAttemptStorageKey) {
+          sessionStorage.setItem(checkoutAttemptStorageKey, checkoutAttemptRef.current);
+        }
+      }
       setError(apiError instanceof Error ? apiError.message : "Nao foi possivel criar o pagamento.");
     } finally {
       setSubmitting(false);

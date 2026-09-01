@@ -1,7 +1,7 @@
 import { db, getSetting, setSetting } from "./db.mjs";
 import { lookupBrazilianPostalCode } from "./postal-code.mjs";
 import { randomToken } from "./security.mjs";
-import { timingSafeEqual } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 
 const SANDBOX_URL = "https://api-sandbox.asaas.com/v3";
 const PRODUCTION_URL = "https://api.asaas.com/v3";
@@ -155,6 +155,7 @@ export async function setupAsaasIntegration({ email, publicUrl }) {
       "PAYMENT_OVERDUE",
       "PAYMENT_DELETED",
       "PAYMENT_REFUNDED",
+      "PAYMENT_CHARGEBACK_REQUESTED",
       "PAYMENT_CREDIT_CARD_CAPTURE_REFUSED",
       "SUBSCRIPTION_CREATED",
       "SUBSCRIPTION_UPDATED",
@@ -208,97 +209,138 @@ export async function createAsaasCheckout({ user, body, settings, remoteIp }) {
   const checkoutBody = billingType === "CREDIT_CARD"
     ? await normalizeCreditCardCheckoutBody(body)
     : body;
-  const customerId = await ensureAsaasCustomer(user, checkoutBody);
+  const idempotencyKey = normalizeCheckoutIdempotencyKey(body.idempotencyKey);
+  const fingerprint = checkoutFingerprint({
+    user,
+    offer,
+    billingType,
+    chargeMode,
+    customerDocument,
+    checkoutBody,
+  });
   const externalReference = [
     "bv",
     user.id,
     offer.plan,
     offer.cycle,
     chargeMode,
-    Date.now(),
+    createHash("sha256").update(idempotencyKey).digest("hex").slice(0, 20),
   ].join(":");
-
-  const basePayload = {
-    customer: customerId,
-    billingType,
-    description: offer.description,
-    externalReference,
-  };
-
-  let providerResult;
-  let firstPayment = null;
-  let pixQrCode = null;
-
-  if (chargeMode === "single") {
-    providerResult = await asaasRequest("/payments", {
-      method: "POST",
-      body: {
-        ...basePayload,
-        dueDate: isoDate(),
-        ...(billingType === "CREDIT_CARD" && offer.cycle === "yearly"
-          ? { installmentCount: 12, totalValue: offer.value }
-          : { value: offer.value }),
-        ...(billingType === "CREDIT_CARD" ? creditCardPayload(checkoutBody, remoteIp) : {}),
-      },
-    });
-    firstPayment = providerResult;
-  } else {
-    providerResult = await asaasRequest("/subscriptions", {
-      method: "POST",
-      body: {
-        ...basePayload,
-        value: offer.value,
-        cycle: offer.cycle === "yearly" ? "YEARLY" : "MONTHLY",
-        nextDueDate: isoDate(),
-        ...(billingType === "CREDIT_CARD" ? creditCardPayload(checkoutBody, remoteIp) : {}),
-      },
-    });
-    firstPayment = await findFirstSubscriptionPayment(providerResult.id);
-  }
-
-  if (billingType === "PIX" && firstPayment?.id) {
-    pixQrCode = await getPaymentPixQrCode(firstPayment.id, 6);
-  }
-
-  const status = firstPayment?.status || providerResult.status || "PENDING";
-  const invoiceUrl = firstPayment?.invoiceUrl || providerResult.invoiceUrl || providerResult.bankSlipUrl || "";
-  const financeId = saveFinanceRecord({
-    user,
-    offer,
-    billingType,
-    chargeMode,
-    status,
-    providerResult,
-    firstPayment,
-    invoiceUrl,
-    pixQrCode,
+  const attempt = claimCheckoutAttempt({
+    idempotencyKey,
+    userId: user.id,
+    fingerprint,
     externalReference,
   });
-
-  if (PAID_STATUSES.has(status)) {
-    activateUserPlan(user.id, offer, {
-      subscriptionId: chargeMode === "subscription" ? providerResult.id : "",
-      paymentUrl: invoiceUrl,
-      resetUsage: true,
-    });
+  if (!attempt.claimed) {
+    if (attempt.row.fingerprint !== fingerprint) {
+      throw new CheckoutAttemptError(
+        "Esta tentativa de pagamento já foi usada com outros dados.",
+        409,
+        "IDEMPOTENCY_CONFLICT",
+      );
+    }
+    if (attempt.row.status === "completed" && attempt.row.response_payload) {
+      return { ...safeJson(attempt.row.response_payload), idempotentReplay: true };
+    }
+    throw new CheckoutAttemptError(
+      attempt.row.status === "failed"
+        ? "Esta tentativa não foi autorizada. Revise os dados e envie novamente."
+        : "Este pagamento já está sendo processado. Aguarde a confirmação antes de tentar novamente.",
+      409,
+      attempt.row.status === "failed" ? "CHECKOUT_ATTEMPT_FAILED" : "CHECKOUT_IN_PROGRESS",
+    );
   }
-  setSetting("asaas_last_error", "");
 
-  return {
-    ok: true,
-    financeId,
-    plan: offer.plan,
-    cycle: offer.cycle,
-    chargeMode,
-    billingType,
-    value: offer.value,
-    status,
-    providerId: providerResult.id,
-    paymentId: firstPayment?.id || null,
-    invoiceUrl,
-    pixQrCode,
-    message: checkoutMessage({ billingType, status, invoiceUrl, pixQrCode }),
-  };
+  try {
+    const customerId = await ensureAsaasCustomer(user, checkoutBody);
+    const basePayload = {
+      customer: customerId,
+      billingType,
+      description: offer.description,
+      externalReference,
+    };
+    let providerResult;
+    let firstPayment = null;
+    let pixQrCode = null;
+
+    if (chargeMode === "single") {
+      providerResult = await asaasRequest("/payments", {
+        method: "POST",
+        body: {
+          ...basePayload,
+          dueDate: isoDate(),
+          ...(billingType === "CREDIT_CARD" && offer.cycle === "yearly"
+            ? { installmentCount: 12, totalValue: offer.value }
+            : { value: offer.value }),
+          ...(billingType === "CREDIT_CARD" ? creditCardPayload(checkoutBody, remoteIp) : {}),
+        },
+      });
+      firstPayment = providerResult;
+    } else {
+      providerResult = await asaasRequest("/subscriptions", {
+        method: "POST",
+        body: {
+          ...basePayload,
+          value: offer.value,
+          cycle: offer.cycle === "yearly" ? "YEARLY" : "MONTHLY",
+          nextDueDate: isoDate(),
+          ...(billingType === "CREDIT_CARD" ? creditCardPayload(checkoutBody, remoteIp) : {}),
+        },
+      });
+      firstPayment = await findFirstSubscriptionPayment(providerResult.id);
+    }
+
+    if (billingType === "PIX" && firstPayment?.id) {
+      pixQrCode = await getPaymentPixQrCode(firstPayment.id, 6);
+    }
+
+    const status = firstPayment?.status || providerResult.status || "PENDING";
+    const invoiceUrl = firstPayment?.invoiceUrl || providerResult.invoiceUrl || providerResult.bankSlipUrl || "";
+    const financeId = saveFinanceRecord({
+      user,
+      offer,
+      billingType,
+      chargeMode,
+      status,
+      providerResult,
+      firstPayment,
+      invoiceUrl,
+      pixQrCode,
+      externalReference,
+      idempotencyKey,
+    });
+
+    if (PAID_STATUSES.has(status)) {
+      activateUserPlan(user.id, offer, {
+        subscriptionId: chargeMode === "subscription" ? providerResult.id : "",
+        paymentUrl: invoiceUrl,
+        resetUsage: true,
+      });
+    }
+    setSetting("asaas_last_error", "");
+
+    const response = {
+      ok: true,
+      financeId,
+      plan: offer.plan,
+      cycle: offer.cycle,
+      chargeMode,
+      billingType,
+      value: offer.value,
+      status,
+      providerId: providerResult.id,
+      paymentId: firstPayment?.id || null,
+      invoiceUrl,
+      pixQrCode,
+      message: checkoutMessage({ billingType, status, invoiceUrl, pixQrCode }),
+    };
+    completeCheckoutAttempt(idempotencyKey, financeId, response);
+    return response;
+  } catch (error) {
+    failCheckoutAttempt(idempotencyKey, error);
+    throw error;
+  }
 }
 
 export async function refreshAsaasCheckoutStatus({ user, financeId }) {
@@ -402,6 +444,43 @@ export async function handleAsaasWebhook(req, publicUrl) {
   }
 
   const event = await readJsonFromRequest(req);
+  const eventId = String(event.id || "").trim();
+  const eventName = String(event.event || "").trim().toUpperCase();
+  if (!eventId) {
+    return { ok: false, status: 400, body: { error: "Evento da Asaas sem identificador." } };
+  }
+  const payloadHash = createHash("sha256").update(stableJson(event)).digest("hex");
+  const claim = claimAsaasWebhookEvent({ eventId, eventName, payloadHash });
+  if (!claim.claimed) {
+    if (claim.row.payload_hash !== payloadHash) {
+      return { ok: false, status: 409, body: { error: "Identificador de webhook reutilizado com outro conteúdo." } };
+    }
+    if (claim.row.status === "processed") {
+      return { ok: true, status: 200, body: { ok: true, duplicate: true } };
+    }
+    return { ok: false, status: 503, body: { error: "Evento já está em processamento." } };
+  }
+
+  try {
+    processAsaasWebhookEvent(event, publicUrl);
+    db.prepare(`
+      UPDATE asaas_webhook_events
+      SET status = 'processed', processed_at = CURRENT_TIMESTAMP, error = NULL,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE event_id = ?
+    `).run(eventId);
+    return { ok: true, status: 200, body: { ok: true } };
+  } catch (error) {
+    db.prepare(`
+      UPDATE asaas_webhook_events
+      SET status = 'failed', error = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE event_id = ?
+    `).run(String(error?.message || "Falha ao processar webhook.").slice(0, 500), eventId);
+    throw error;
+  }
+}
+
+function processAsaasWebhookEvent(event, publicUrl) {
   const eventName = String(event.event || "").trim().toUpperCase();
   const isSubscriptionEvent = Boolean(event.subscription);
   const resource = event.payment || event.subscription || {};
@@ -448,6 +527,7 @@ export async function handleAsaasWebhook(req, publicUrl) {
       resource,
       eventName,
     });
+    completeCheckoutAttemptFromWebhook(externalReference, row, status, paymentUrl);
   }
 
   if (userId && offer && PAID_STATUSES.has(status)) {
@@ -456,15 +536,17 @@ export async function handleAsaasWebhook(req, publicUrl) {
       paymentUrl: paymentUrl || row?.payment_url || "",
       resetUsage: isNewPaidCycle,
     });
-  } else if (
-    userId
-    && (PAYMENT_FAILURE_EVENTS.has(eventName) || FAILED_STATUSES.has(status))
-    && (subscriptionId || referenceInfo.chargeMode === "subscription" || row?.provider_subscription_id)
-  ) {
-    suspendRecurringPlan(userId, {
-      subscriptionId: subscriptionId || row?.provider_subscription_id || "",
-      paymentUrl: paymentUrl || row?.payment_url || "",
-    });
+  } else if (userId && (PAYMENT_FAILURE_EVENTS.has(eventName) || FAILED_STATUSES.has(status))) {
+    if (["PAYMENT_REFUNDED", "PAYMENT_DELETED"].includes(eventName) || status === "REFUNDED") {
+      revokePlanAccess(userId, {
+        subscriptionId: subscriptionId || row?.provider_subscription_id || "",
+      });
+    } else if (subscriptionId || referenceInfo.chargeMode === "subscription" || row?.provider_subscription_id) {
+      suspendRecurringPlan(userId, {
+        subscriptionId: subscriptionId || row?.provider_subscription_id || "",
+        paymentUrl: paymentUrl || row?.payment_url || "",
+      });
+    }
   }
 
   if (userId && SUBSCRIPTION_CANCELED_EVENTS.has(eventName)) {
@@ -477,7 +559,29 @@ export async function handleAsaasWebhook(req, publicUrl) {
   setSetting("asaas_last_event", `${eventName || "evento"} ${status || ""}`.trim());
   setSetting("asaas_last_webhook_url", asaasWebhookUrl(publicUrl));
   setSetting("asaas_last_error", "");
-  return { ok: true, status: 200, body: { ok: true } };
+}
+
+const claimAsaasWebhookEventTransaction = db.transaction(({ eventId, eventName, payloadHash }) => {
+  const inserted = db.prepare(`
+    INSERT OR IGNORE INTO asaas_webhook_events (event_id, event_name, payload_hash, status)
+    VALUES (?, ?, ?, 'processing')
+  `).run(eventId, eventName || "UNKNOWN", payloadHash);
+  const row = db.prepare("SELECT * FROM asaas_webhook_events WHERE event_id = ?").get(eventId);
+  if (!inserted.changes && row?.status === "failed") {
+    const reclaimed = db.prepare(`
+      UPDATE asaas_webhook_events
+      SET status = 'processing', error = NULL, updated_at = CURRENT_TIMESTAMP
+      WHERE event_id = ? AND status = 'failed' AND payload_hash = ?
+    `).run(eventId, payloadHash);
+    if (reclaimed.changes) {
+      return { claimed: true, row: { ...row, status: "processing" } };
+    }
+  }
+  return { claimed: inserted.changes === 1, row };
+});
+
+function claimAsaasWebhookEvent(input) {
+  return claimAsaasWebhookEventTransaction(input);
 }
 
 export function billingBlocksSearch(user) {
@@ -736,14 +840,40 @@ function secureTokenMatches(received, expected) {
     && timingSafeEqual(receivedBuffer, expectedBuffer);
 }
 
-function saveFinanceRecord({ user, offer, billingType, chargeMode, status, providerResult, firstPayment, invoiceUrl, pixQrCode, externalReference }) {
+function saveFinanceRecord({ user, offer, billingType, chargeMode, status, providerResult, firstPayment, invoiceUrl, pixQrCode, externalReference, idempotencyKey }) {
+  const existing = findFinanceRecord({ externalReference });
+  if (existing) {
+    db.prepare(`
+      UPDATE finance_records
+      SET external_id = COALESCE(NULLIF(?, ''), external_id),
+          provider_payment_id = COALESCE(NULLIF(?, ''), provider_payment_id),
+          provider_subscription_id = COALESCE(NULLIF(?, ''), provider_subscription_id),
+          payment_url = COALESCE(NULLIF(?, ''), payment_url),
+          pix_payload = COALESCE(NULLIF(?, ''), pix_payload),
+          status = ?,
+          idempotency_key = COALESCE(NULLIF(?, ''), idempotency_key),
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(
+      firstPayment?.id || providerResult.id || "",
+      firstPayment?.id || "",
+      chargeMode === "subscription" ? providerResult.id : "",
+      invoiceUrl || "",
+      pixQrCode?.payload || pixQrCode?.encodedImage || "",
+      financeStatusFromAsaas(status),
+      idempotencyKey || "",
+      existing.id,
+    );
+    return existing.id;
+  }
   const result = db.prepare(`
     INSERT INTO finance_records (
       user_id, type, description, amount, status, due_date, paid_at,
       provider, external_id, provider_payment_id, provider_subscription_id,
-      external_reference, payment_url, pix_payload, plan, billing_cycle, billing_type
+      external_reference, payment_url, pix_payload, plan, billing_cycle, billing_type,
+      idempotency_key
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     user.id,
     chargeMode === "single" ? "asaas_payment" : "asaas_subscription",
@@ -762,8 +892,126 @@ function saveFinanceRecord({ user, offer, billingType, chargeMode, status, provi
     offer.plan,
     offer.cycle,
     billingType,
+    idempotencyKey,
   );
   return result.lastInsertRowid;
+}
+
+function normalizeCheckoutIdempotencyKey(value) {
+  const key = String(value || "").trim();
+  if (!/^[A-Za-z0-9_-]{20,100}$/.test(key)) {
+    throw new CheckoutAttemptError(
+      "Não foi possível identificar esta tentativa de pagamento. Atualize a página e tente novamente.",
+      400,
+      "INVALID_IDEMPOTENCY_KEY",
+    );
+  }
+  return key;
+}
+
+function checkoutFingerprint({ user, offer, billingType, chargeMode, customerDocument, checkoutBody }) {
+  const lastFour = digits(checkoutBody?.creditCard?.number || "").slice(-4);
+  return createHash("sha256").update(JSON.stringify([
+    user.id,
+    offer.plan,
+    offer.cycle,
+    Number(offer.value).toFixed(2),
+    billingType,
+    chargeMode,
+    customerDocument,
+    lastFour,
+  ])).digest("hex");
+}
+
+const claimCheckoutAttemptTransaction = db.transaction(({
+  idempotencyKey,
+  userId,
+  fingerprint,
+  externalReference,
+}) => {
+  const equivalentAttempt = db.prepare(`
+    SELECT *
+    FROM checkout_attempts
+    WHERE user_id = ?
+      AND fingerprint = ?
+      AND (
+        (status IN ('processing', 'uncertain') AND updated_at >= datetime('now', '-24 hours'))
+        OR (status = 'completed' AND updated_at >= datetime('now', '-30 minutes'))
+      )
+    ORDER BY idempotency_key = ? DESC, updated_at DESC
+    LIMIT 1
+  `).get(userId, fingerprint, idempotencyKey);
+  if (equivalentAttempt) {
+    return { claimed: false, row: equivalentAttempt };
+  }
+  const inserted = db.prepare(`
+    INSERT OR IGNORE INTO checkout_attempts (
+      idempotency_key, user_id, fingerprint, external_reference, status
+    ) VALUES (?, ?, ?, ?, 'processing')
+  `).run(idempotencyKey, userId, fingerprint, externalReference);
+  return {
+    claimed: inserted.changes === 1,
+    row: db.prepare("SELECT * FROM checkout_attempts WHERE idempotency_key = ?").get(idempotencyKey),
+  };
+});
+
+function claimCheckoutAttempt(input) {
+  return claimCheckoutAttemptTransaction(input);
+}
+
+function completeCheckoutAttempt(idempotencyKey, financeId, response) {
+  db.prepare(`
+    UPDATE checkout_attempts
+    SET status = 'completed', finance_id = ?, response_payload = ?, error = NULL,
+        updated_at = CURRENT_TIMESTAMP
+    WHERE idempotency_key = ?
+  `).run(financeId, JSON.stringify(response), idempotencyKey);
+}
+
+function failCheckoutAttempt(idempotencyKey, error) {
+  const knownFailure = error?.name === "AsaasRequestError"
+    ? Number(error.statusCode || 0) >= 400 && Number(error.statusCode || 0) < 500
+    : error?.name === "CheckoutAttemptError";
+  db.prepare(`
+    UPDATE checkout_attempts
+    SET status = ?, error = ?, updated_at = CURRENT_TIMESTAMP
+    WHERE idempotency_key = ? AND status = 'processing'
+  `).run(
+    knownFailure ? "failed" : "uncertain",
+    String(error?.message || "Falha inconclusiva no checkout.").slice(0, 500),
+    idempotencyKey,
+  );
+}
+
+function completeCheckoutAttemptFromWebhook(externalReference, row, status, paymentUrl) {
+  const attempt = db.prepare(`
+    SELECT * FROM checkout_attempts WHERE external_reference = ? LIMIT 1
+  `).get(externalReference);
+  if (!attempt || !row) {
+    return;
+  }
+  const reference = parseExternalReference(externalReference);
+  const response = {
+    ok: true,
+    financeId: row.id,
+    plan: row.plan || reference.plan,
+    cycle: row.billing_cycle || reference.cycle,
+    chargeMode: reference.chargeMode || (row.provider_subscription_id ? "subscription" : "single"),
+    billingType: row.billing_type || "",
+    value: Number(row.amount || 0),
+    status,
+    providerId: row.provider_subscription_id || row.provider_payment_id || row.external_id || null,
+    paymentId: row.provider_payment_id || null,
+    invoiceUrl: paymentUrl || row.payment_url || "",
+    pixQrCode: null,
+    message: checkoutMessage({
+      billingType: row.billing_type || "",
+      status,
+      invoiceUrl: paymentUrl || row.payment_url || "",
+      pixQrCode: null,
+    }),
+  };
+  completeCheckoutAttempt(attempt.idempotency_key, row.id, response);
 }
 
 function findFinanceRecord({ providerId = "", subscriptionId = "", externalReference = "" } = {}) {
@@ -954,6 +1202,28 @@ function suspendRecurringPlan(userId, { subscriptionId = "", paymentUrl = "" } =
   );
 }
 
+function revokePlanAccess(userId, { subscriptionId = "" } = {}) {
+  const user = db.prepare("SELECT * FROM users WHERE id = ?").get(userId);
+  if (!user || !["starter", "scale"].includes(user.plan)) {
+    return;
+  }
+  if (
+    user.billing_provider_subscription_id
+    && subscriptionId
+    && user.billing_provider_subscription_id !== subscriptionId
+  ) {
+    return;
+  }
+  db.prepare(`
+    UPDATE users
+    SET billing_status = 'canceled',
+        billing_access_until = CURRENT_TIMESTAMP,
+        billing_payment_url = NULL,
+        updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(userId);
+}
+
 function scheduleSubscriptionCancellation(userId, { subscriptionId = "", nextDueDate = "" } = {}) {
   const user = db.prepare("SELECT * FROM users WHERE id = ?").get(userId);
   if (!user || !["starter", "scale"].includes(user.plan)) {
@@ -1103,6 +1373,15 @@ class AsaasRequestError extends Error {
   }
 }
 
+class CheckoutAttemptError extends Error {
+  constructor(message, statusCode, code) {
+    super(message);
+    this.name = "CheckoutAttemptError";
+    this.statusCode = statusCode;
+    this.code = code;
+  }
+}
+
 async function readJsonFromRequest(req) {
   const chunks = [];
   let totalBytes = 0;
@@ -1126,6 +1405,16 @@ function safeJson(text) {
   } catch {
     return { raw: text };
   }
+}
+
+function stableJson(value) {
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableJson(item)).join(",")}]`;
+  }
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
 }
 
 function stripEmpty(value) {

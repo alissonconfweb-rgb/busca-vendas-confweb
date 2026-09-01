@@ -47,6 +47,7 @@ test("anexa comissao e frete retornados pelos endpoints oficiais", async () => {
       logisticType: "drop_off",
       freeShipping: true,
       weightKg: 5.9,
+      shippingDimensions: "45x90x76,5900",
     }],
   }, { accessToken: "token", siteId: "MLB" });
 
@@ -59,7 +60,7 @@ test("anexa comissao e frete retornados pelos endpoints oficiais", async () => {
   assert.equal(result.items[0].shippingQuote.calculationMode, "sale_simulation");
   assert.equal(requested.length, 2);
   assert.match(requested[1], /item_price=138.81/);
-  assert.match(requested[1], /dimensions=1x1x1%2C5900/);
+  assert.match(requested[1], /dimensions=45x90x76%2C5900/);
 });
 
 test("preserva o resultado quando nao ha token oficial", async () => {
@@ -95,9 +96,9 @@ test("calcula cada anuncio com os proprios dados sem valores especificos por pro
   };
 
   const products = [
-    { id: "MLB100", categoryId: "MLB-A", price: 49.9, sellerId: 10, weightKg: 0.3 },
-    { id: "MLB200", categoryId: "MLB-B", price: 138.81, sellerId: 20, weightKg: 5.9 },
-    { id: "MLB300", categoryId: "MLB-C", price: 899, sellerId: 30, weightKg: 15 },
+    { id: "MLB100", categoryId: "MLB-A", price: 49.9, sellerId: 10, weightKg: 0.3, shippingDimensions: "10x20x30,300" },
+    { id: "MLB200", categoryId: "MLB-B", price: 138.81, sellerId: 20, weightKg: 5.9, shippingDimensions: "45x90x76,5900" },
+    { id: "MLB300", categoryId: "MLB-C", price: 899, sellerId: 30, weightKg: 15, shippingDimensions: "60x70x80,15000" },
   ].map((item) => ({
     ...item,
     shippingMode: "me2",
@@ -126,6 +127,36 @@ test("calcula cada anuncio com os proprios dados sem valores especificos por pro
   assert.deepEqual(
     requested.filter((url) => url.pathname.endsWith("/shipping_options/free"))
       .map((url) => url.searchParams.get("dimensions")),
-    ["1x1x1,300", "1x1x1,5900", "1x1x1,15000"],
+    ["10x20x30,300", "45x90x76,5900", "60x70x80,15000"],
   );
+});
+
+test("sem dimensoes usa a cotacao do item e nao inventa pacote ou frete gratis", async () => {
+  let shippingUrl = null;
+  globalThis.fetch = async (url) => {
+    const requestUrl = new URL(String(url));
+    if (requestUrl.pathname.endsWith("/listing_prices")) {
+      return Response.json([]);
+    }
+    shippingUrl = requestUrl;
+    return Response.json({
+      coverage: { all_country: { list_cost: 22.5, currency_id: "BRL", billable_weight: 1200 } },
+    });
+  };
+
+  const result = await enrichMercadoLivreCosts({
+    ok: true,
+    items: [{
+      id: "MLB999",
+      price: 200,
+      sellerId: 99,
+      weightKg: 5.9,
+      freeShipping: null,
+    }],
+  }, { accessToken: "token" });
+
+  assert.equal(shippingUrl.searchParams.get("item_id"), "MLB999");
+  assert.equal(shippingUrl.searchParams.has("dimensions"), false);
+  assert.equal(shippingUrl.searchParams.get("free_shipping"), "false");
+  assert.equal(result.items[0].shippingQuote.calculationMode, "item_quote");
 });

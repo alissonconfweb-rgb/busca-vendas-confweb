@@ -26,10 +26,12 @@ const MINIMUM_REQUEST_BUDGET_MS = 1_500;
 export const SCRAPEDO_ITEM_METADATA_VERSION = 5;
 export const SCRAPEDO_PRICE_PARSER_VERSION = 3;
 export const SCRAPEDO_SALES_PARSER_VERSION = MERCADO_LIVRE_SALES_PARSER_VERSION;
-const SALES_RANKING_STRATEGY = "visible_sales_v4";
+const SALES_RANKING_STRATEGY = "visible_sales_v5";
 const activeSearches = new Map();
 const providerQueue = [];
+const providerInstanceId = `${process.pid}-${Date.now()}-${randomInt(100_000, 999_999)}`;
 let activeProviderSearches = 0;
+let providerQueueRetryTimer = null;
 
 export function isScrapeDoConfigured() {
   return Boolean(scrapeDoToken());
@@ -123,7 +125,11 @@ export function searchMercadoLivreScrapeDo(query, options = {}) {
   const searchOptions = { ...options, deadlineAt };
   const search = withScrapeDoProviderSlot(
     () => executeMercadoLivreScrapeDo(query, searchOptions),
-    { deadlineAt },
+    {
+      deadlineAt,
+      queryKey,
+      reuseResult: () => searchMercadoLivreCachedItems(query),
+    },
   )
     .then((result) => {
       recordProviderUsage(queryKey, Number(result?.providerCreditsUsed || 0), result?.ok ? "completed" : "incomplete");
@@ -139,6 +145,7 @@ export function searchMercadoLivreScrapeDo(query, options = {}) {
 }
 
 export function scrapeDoUsageSummary() {
+  pruneExpiredProviderLeases();
   const row = db.prepare(`
     SELECT
       COALESCE(SUM(credits), 0) AS used,
@@ -156,7 +163,7 @@ export function scrapeDoUsageSummary() {
     remaining: budget > 0 ? Math.max(0, budget - used) : null,
     searches: Number(row?.searches || 0),
     failures: Number(row?.failures || 0),
-    active: activeProviderSearches,
+    active: Number(db.prepare("SELECT COUNT(*) AS total FROM provider_search_leases").get()?.total || 0),
     queued: providerQueue.length,
   };
 }
@@ -1099,6 +1106,11 @@ export function withScrapeDoProviderSlot(task, options = {}) {
       started: false,
       settled: false,
       timer: null,
+      queryKey: String(options.queryKey || `anonymous-${providerInstanceId}-${Date.now()}-${randomInt(1000, 9999)}`),
+      leaseOwner: `${providerInstanceId}-${Date.now()}-${randomInt(100_000, 999_999)}`,
+      leaseHeartbeat: null,
+      waitedForDuplicate: false,
+      reuseResult: typeof options.reuseResult === "function" ? options.reuseResult : null,
     };
     if (deadlineAt) {
       const waitMs = deadlineAt - Date.now();
@@ -1124,13 +1136,10 @@ export function withScrapeDoProviderSlot(task, options = {}) {
 }
 
 function drainProviderQueue() {
-  const configuredLimit = Math.min(10, Math.max(1, Number(process.env.SCRAPEDO_MAX_CONCURRENCY || 4)));
-  const providerConcurrency = Number(getSetting("scrapedo_provider_concurrency") || 0);
-  const accountSearchLimit = providerConcurrency > 0
-    ? Math.max(1, Math.floor(providerConcurrency / detailConcurrency()))
-    : configuredLimit;
-  const limit = Math.min(configuredLimit, accountSearchLimit);
-  while (activeProviderSearches < limit && providerQueue.length) {
+  const limit = maximumConcurrentSearches();
+  let remainingToInspect = providerQueue.length;
+  while (activeProviderSearches < limit && providerQueue.length && remainingToInspect > 0) {
+    remainingToInspect -= 1;
     const entry = providerQueue.shift();
     if (entry.settled) {
       continue;
@@ -1141,11 +1150,27 @@ function drainProviderQueue() {
       entry.reject(new Error("A pesquisa expirou antes de entrar na fonte de dados."));
       continue;
     }
+    const leaseResult = tryAcquireProviderLease(entry, limit);
+    if (leaseResult !== "acquired") {
+      entry.waitedForDuplicate ||= leaseResult === "duplicate";
+      providerQueue.push(entry);
+      continue;
+    }
     entry.started = true;
     clearTimeout(entry.timer);
     activeProviderSearches += 1;
+    entry.leaseHeartbeat = setInterval(() => renewProviderLease(entry), 5_000);
+    entry.leaseHeartbeat.unref?.();
     Promise.resolve()
-      .then(entry.task)
+      .then(() => {
+        if (entry.waitedForDuplicate && entry.reuseResult) {
+          const reused = entry.reuseResult();
+          if (reused?.ok && Array.isArray(reused.items) && reused.items.length === 3) {
+            return reused;
+          }
+        }
+        return entry.task();
+      })
       .then(
         (value) => {
           if (!entry.settled) {
@@ -1161,10 +1186,73 @@ function drainProviderQueue() {
         },
       )
       .finally(() => {
+        clearInterval(entry.leaseHeartbeat);
+        releaseProviderLease(entry);
         activeProviderSearches -= 1;
         drainProviderQueue();
       });
   }
+  if (providerQueue.length && !providerQueueRetryTimer) {
+    providerQueueRetryTimer = setTimeout(() => {
+      providerQueueRetryTimer = null;
+      drainProviderQueue();
+    }, 250);
+    providerQueueRetryTimer.unref?.();
+  }
+}
+
+function maximumConcurrentSearches() {
+  const configuredLimit = Math.min(10, Math.max(1, Number(process.env.SCRAPEDO_MAX_CONCURRENCY || 4)));
+  const providerConcurrency = Number(getSetting("scrapedo_provider_concurrency") || 0);
+  const accountSearchLimit = providerConcurrency > 0
+    ? Math.max(1, Math.floor(providerConcurrency / detailConcurrency()))
+    : configuredLimit;
+  return Math.min(configuredLimit, accountSearchLimit);
+}
+
+const acquireProviderLeaseTransaction = db.transaction((entry, limit) => {
+  const now = Date.now();
+  db.prepare("DELETE FROM provider_search_leases WHERE lease_until <= ?").run(sqliteUtc(now));
+  const duplicate = db.prepare("SELECT owner_id FROM provider_search_leases WHERE query_key = ?").get(entry.queryKey);
+  if (duplicate) {
+    return "duplicate";
+  }
+  const active = Number(db.prepare("SELECT COUNT(*) AS total FROM provider_search_leases").get()?.total || 0);
+  if (active >= limit) {
+    return "capacity";
+  }
+  const inserted = db.prepare(`
+    INSERT OR IGNORE INTO provider_search_leases (
+      query_key, owner_id, lease_until, updated_at
+    ) VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+  `).run(entry.queryKey, entry.leaseOwner, sqliteUtc(now + 65_000));
+  return inserted.changes === 1 ? "acquired" : "duplicate";
+});
+
+function tryAcquireProviderLease(entry, limit) {
+  return acquireProviderLeaseTransaction(entry, limit);
+}
+
+function renewProviderLease(entry) {
+  db.prepare(`
+    UPDATE provider_search_leases
+    SET lease_until = ?, updated_at = CURRENT_TIMESTAMP
+    WHERE query_key = ? AND owner_id = ?
+  `).run(sqliteUtc(Date.now() + 65_000), entry.queryKey, entry.leaseOwner);
+}
+
+function releaseProviderLease(entry) {
+  db.prepare(`
+    DELETE FROM provider_search_leases WHERE query_key = ? AND owner_id = ?
+  `).run(entry.queryKey, entry.leaseOwner);
+}
+
+function pruneExpiredProviderLeases() {
+  db.prepare("DELETE FROM provider_search_leases WHERE lease_until <= ?").run(sqliteUtc(Date.now()));
+}
+
+function sqliteUtc(timestamp) {
+  return new Date(timestamp).toISOString().slice(0, 19).replace("T", " ");
 }
 
 function delay(milliseconds) {

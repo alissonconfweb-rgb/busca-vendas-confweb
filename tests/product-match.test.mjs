@@ -57,21 +57,32 @@ test("rejeita tampo quando a busca pede a escrivaninha completa", () => {
   );
 });
 
-test("aceita resultado relevante do marketplace mesmo quando a marca nao aparece no titulo", () => {
+test("exige cobertura suficiente e nao aceita apenas dois termos de uma busca longa", () => {
   const spec = buildProductQuerySpec("conjunto feminino Blue Bay Plush");
 
   assert.equal(
     matchesMarketplaceSearchResult("Abrigo Feminino Plush Plus Size Veludo Agasalho De Frio", spec).ok,
-    true,
+    false,
   );
   assert.equal(
     matchesMarketplaceSearchResult("Conjunto Moletom Veludo Plush Blusa De Ziper E Calca", spec).ok,
+    false,
+  );
+  assert.equal(
+    matchesMarketplaceSearchResult("Conjunto Feminino Liso Moletom Plush Plus Size", spec).ok,
     true,
   );
   assert.equal(
     matchesMarketplaceSearchResult("Conjunto infantil masculino de algodao", spec).ok,
     false,
   );
+});
+
+test("nao aceita termo curto apenas como substring de outra palavra", () => {
+  const spec = buildProductQuerySpec("kit sol");
+
+  assert.equal(matchesMarketplaceSearchResult("Kit escolar infantil", spec).ok, false);
+  assert.equal(matchesMarketplaceSearchResult("Kit proteção para sol", spec).ok, true);
 });
 
 test("amplia uma busca com marca sem perder o produto principal", () => {

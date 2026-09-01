@@ -73,19 +73,17 @@ export async function fetchOfficialShippingQuote(item, { accessToken } = {}) {
 
   const physicalWeightKg = Number(item?.weightKg || 0);
   const shippingDimensions = normalizedShippingDimensions(item?.shippingDimensions);
-  const simulationDimensions = shippingDimensions
-    || (physicalWeightKg > 0 ? `1x1x1,${Math.round(physicalWeightKg * 1000)}` : "");
   let response = null;
   let calculationMode = "item_quote";
-  if (simulationDimensions && Number(item.price) > 0) {
+  if (shippingDimensions && Number(item.price) > 0) {
     const simulationParams = new URLSearchParams({
-      dimensions: simulationDimensions,
+      dimensions: shippingDimensions,
       item_price: String(Number(item.price)),
       listing_type_id: String(item.listingTypeId || LISTING_TYPES.classic),
       mode: String(item.shippingMode || "me2"),
       condition: "new",
       logistic_type: String(item.logisticType || "drop_off"),
-      free_shipping: String(item.freeShipping ?? Number(item.price) >= 79),
+      free_shipping: String(item.freeShipping === true),
       verbose: "true",
     });
     response = await mercadoLivreFetch(
@@ -97,7 +95,7 @@ export async function fetchOfficialShippingQuote(item, { accessToken } = {}) {
   if (!response) {
     const itemParams = new URLSearchParams({
       item_id: itemId,
-      free_shipping: String(item.freeShipping ?? Number(item.price) >= 79),
+      free_shipping: String(item.freeShipping === true),
       verbose: "true",
     });
     response = await mercadoLivreFetch(

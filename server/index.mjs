@@ -52,7 +52,7 @@ import {
 } from "./asaas.mjs";
 import { lookupBrazilianPostalCode } from "./postal-code.mjs";
 import { hashPassword, hashToken, randomToken, verifyPassword } from "./security.mjs";
-import { applyRateLimit, MemoryRateLimiter } from "./rate-limit.mjs";
+import { applyRateLimit, SqliteRateLimiter } from "./rate-limit.mjs";
 import { minimumChampionSales } from "./champion-policy.mjs";
 import { isCompleteRealSalesResult } from "./search-result-policy.mjs";
 
@@ -72,12 +72,16 @@ const SEARCH_RESPONSE_TIMEOUT_MS = Math.min(75_000, Math.max(
 ));
 const SEARCH_JOB_STALE_MS = Number(process.env.SEARCH_JOB_STALE_MS || 90_000);
 const SEARCH_JOB_POLL_AFTER_MS = Number(process.env.SEARCH_JOB_POLL_AFTER_MS || 1_500);
-const MARKET_CACHE_REFRESH_INTERVAL_MS = Number(process.env.MARKET_CACHE_REFRESH_INTERVAL_MS || 6 * 60 * 60_000);
+const MARKET_CACHE_REFRESH_INTERVAL_MS = Number(process.env.MARKET_CACHE_REFRESH_INTERVAL_MS || 60 * 60_000);
+const MARKET_CACHE_REFRESH_BATCH_SIZE = Math.min(5, Math.max(
+  1,
+  Number(process.env.MARKET_CACHE_REFRESH_BATCH_SIZE || 2),
+));
 const marketRefreshFlights = new Map();
 const marketSearchRequestFlights = new Map();
 const marketBackgroundRefreshAttempts = new Map();
 let marketCacheRefreshTimer = null;
-const rateLimiter = new MemoryRateLimiter();
+const rateLimiter = new SqliteRateLimiter(db);
 const PUBLIC_SETTING_KEYS = new Set([
   "app_name",
   "starter_monthly",
@@ -582,9 +586,9 @@ async function route(req, res) {
         providerStatus: Number(error?.statusCode || 0) || null,
         providerCode: String(error?.providerCode || "") || null,
       });
-      return json(res, 400, {
+      return json(res, Number(error?.statusCode || 400), {
         error: publicMessage,
-        code: error?.name === "AsaasRequestError" ? "PAYMENT_NOT_AUTHORIZED" : "CHECKOUT_VALIDATION_ERROR",
+        code: error?.code || (error?.name === "AsaasRequestError" ? "PAYMENT_NOT_AUTHORIZED" : "CHECKOUT_VALIDATION_ERROR"),
       });
     }
   }
@@ -1086,7 +1090,7 @@ function cachedResultMatchesQuery(result, query) {
   }
   if (
     result.source === "scrapedo_mercado_livre"
-    && result.rankingStrategy !== "visible_sales_v4"
+    && result.rankingStrategy !== "visible_sales_v5"
   ) {
     return false;
   }
@@ -1393,7 +1397,7 @@ function startMarketCacheRefreshWorker() {
   const scheduleNext = (delay) => {
     marketCacheRefreshTimer = setTimeout(async () => {
       try {
-        await refreshOneRecentlyUsedMarketCache();
+        await refreshRecentlyUsedMarketCaches();
       } catch (error) {
         console.error("Falha na atualização automática da base de pesquisas:", error);
       } finally {
@@ -1408,7 +1412,7 @@ function startMarketCacheRefreshWorker() {
   scheduleNext(Math.min(60_000, MARKET_CACHE_REFRESH_INTERVAL_MS));
 }
 
-async function refreshOneRecentlyUsedMarketCache() {
+async function refreshRecentlyUsedMarketCaches() {
   const usage = scrapeDoUsageSummary();
   if (usage.active > 0 || usage.queued > 0 || usage.remaining === 0) {
     return;
@@ -1425,29 +1429,35 @@ async function refreshOneRecentlyUsedMarketCache() {
   const useByKey = new Map(recentQueries.map((row) => [marketCacheKey(row.query), Number(row.uses || 0)]));
   const now = Date.now();
   const retryAfterMs = Math.max(MARKET_CACHE_REFRESH_INTERVAL_MS, 60 * 60_000);
-  const candidate = db.prepare(`
+  const candidates = db.prepare(`
     SELECT key, query, updated_at
     FROM market_search_cache
     ORDER BY updated_at ASC
     LIMIT 250
-  `).all().find((row) => {
+  `).all().filter((row) => {
     const updatedAt = Date.parse(`${String(row.updated_at).replace(" ", "T")}Z`);
     const lastAttempt = marketBackgroundRefreshAttempts.get(row.key) || 0;
     return useByKey.has(row.key)
       && Number.isFinite(updatedAt)
       && now - updatedAt > marketCacheTtlMs()
       && now - lastAttempt >= retryAfterMs;
-  });
+  }).slice(0, MARKET_CACHE_REFRESH_BATCH_SIZE);
 
-  if (!candidate) {
+  if (!candidates.length) {
     return;
   }
 
-  marketBackgroundRefreshAttempts.set(candidate.key, now);
-  const refreshed = enforceChampionThreshold(candidate.query, await scheduleMarketSearchRefresh(candidate.query));
-  if (isBillableSearchResult(refreshed)) {
-    marketBackgroundRefreshAttempts.delete(candidate.key);
-    console.log(`Base interna atualizada automaticamente: "${candidate.query}".`);
+  for (const candidate of candidates) {
+    const currentUsage = scrapeDoUsageSummary();
+    if (currentUsage.active > 0 || currentUsage.queued > 0 || currentUsage.remaining === 0) {
+      break;
+    }
+    marketBackgroundRefreshAttempts.set(candidate.key, Date.now());
+    const refreshed = enforceChampionThreshold(candidate.query, await scheduleMarketSearchRefresh(candidate.query));
+    if (isBillableSearchResult(refreshed)) {
+      marketBackgroundRefreshAttempts.delete(candidate.key);
+      console.log(`Base interna atualizada automaticamente: "${candidate.query}".`);
+    }
   }
 }
 
@@ -2021,7 +2031,7 @@ async function handleAdmin(req, res, url, currentUser) {
   const userMatch = path.match(/^users\/(\d+)$/);
   if (userMatch && method === "PATCH") {
     const body = await readJson(req);
-    const target = db.prepare("SELECT id, email, role FROM users WHERE id = ?").get(Number(userMatch[1]));
+    const target = db.prepare("SELECT * FROM users WHERE id = ?").get(Number(userMatch[1]));
     if (!target) {
       return json(res, 404, { error: "Usuário não encontrado." });
     }
@@ -2060,6 +2070,15 @@ async function handleAdmin(req, res, url, currentUser) {
       : isCreator(currentUser) && (body.role === "admin" || body.role === "user")
         ? body.role
         : target.role;
+    const paidPlan = ["starter", "scale"].includes(plan);
+    const previouslyPaidPlan = ["starter", "scale"].includes(target.plan);
+    const billingStatus = paidPlan
+      ? previouslyPaidPlan ? target.billing_status || "active" : "active"
+      : "none";
+    const billingCycle = paidPlan ? target.billing_cycle || "monthly" : null;
+    const providerSubscriptionId = paidPlan ? target.billing_provider_subscription_id : null;
+    const billingPaymentUrl = paidPlan ? target.billing_payment_url : null;
+    const billingAccessUntil = paidPlan && previouslyPaidPlan ? target.billing_access_until : null;
     db.prepare(`
       UPDATE users
       SET name = ?,
@@ -2071,11 +2090,11 @@ async function handleAdmin(req, res, url, currentUser) {
           plan = ?,
           search_limit = ?,
           role = ?,
-          billing_status = CASE WHEN ? IN ('starter', 'scale') THEN 'active' ELSE 'none' END,
-          billing_cycle = CASE WHEN ? IN ('starter', 'scale') THEN COALESCE(billing_cycle, 'monthly') ELSE NULL END,
-          billing_provider_subscription_id = CASE WHEN ? IN ('starter', 'scale') THEN billing_provider_subscription_id ELSE NULL END,
-          billing_payment_url = CASE WHEN ? IN ('starter', 'scale') THEN billing_payment_url ELSE NULL END,
-          billing_access_until = NULL,
+          billing_status = ?,
+          billing_cycle = ?,
+          billing_provider_subscription_id = ?,
+          billing_payment_url = ?,
+          billing_access_until = ?,
           updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `).run(
@@ -2088,10 +2107,11 @@ async function handleAdmin(req, res, url, currentUser) {
       plan,
       nullableNumber(body.search_limit),
       role,
-      plan,
-      plan,
-      plan,
-      plan,
+      billingStatus,
+      billingCycle,
+      providerSubscriptionId,
+      billingPaymentUrl,
+      billingAccessUntil,
       Number(userMatch[1]),
     );
     if (newPassword) {

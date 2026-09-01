@@ -39,6 +39,50 @@ export class MemoryRateLimiter {
   }
 }
 
+export class SqliteRateLimiter {
+  constructor(db) {
+    this.db = db;
+    this.consumeTransaction = db.transaction((key, limit, windowMs, now) => {
+      const current = db.prepare("SELECT count, reset_at FROM rate_limit_buckets WHERE key = ?").get(key);
+      const resetAt = !current || Number(current.reset_at) <= now
+        ? now + windowMs
+        : Number(current.reset_at);
+      const count = !current || Number(current.reset_at) <= now
+        ? 1
+        : Number(current.count || 0) + 1;
+      db.prepare(`
+        INSERT INTO rate_limit_buckets (key, count, reset_at, updated_at)
+        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(key) DO UPDATE SET
+          count = excluded.count,
+          reset_at = excluded.reset_at,
+          updated_at = CURRENT_TIMESTAMP
+      `).run(key, count, resetAt);
+      return { count, resetAt };
+    });
+    this.cleanupTimer = setInterval(() => this.cleanup(), CLEANUP_INTERVAL_MS);
+    this.cleanupTimer.unref?.();
+  }
+
+  consume(key, { limit, windowMs }) {
+    const now = Date.now();
+    const normalizedLimit = Math.max(1, Number(limit) || 1);
+    const normalizedWindow = Math.max(1_000, Number(windowMs) || 60_000);
+    const bucket = this.consumeTransaction(key, normalizedLimit, normalizedWindow, now);
+    return {
+      allowed: bucket.count <= normalizedLimit,
+      limit: normalizedLimit,
+      remaining: Math.max(0, normalizedLimit - bucket.count),
+      retryAfterSeconds: Math.max(1, Math.ceil((bucket.resetAt - now) / 1_000)),
+      resetAt: bucket.resetAt,
+    };
+  }
+
+  cleanup() {
+    this.db.prepare("DELETE FROM rate_limit_buckets WHERE reset_at <= ?").run(Date.now());
+  }
+}
+
 export function applyRateLimit({ limiter, req, res, scope, identity, limit, windowMs }) {
   const result = limiter.consume(`${scope}:${identity}`, { limit, windowMs });
   res.setHeader("RateLimit-Limit", String(result.limit));

@@ -126,6 +126,25 @@ export function initDatabase() {
     CREATE INDEX IF NOT EXISTS idx_provider_usage_month
       ON provider_usage(provider, created_at);
 
+    CREATE TABLE IF NOT EXISTS provider_search_leases (
+      query_key TEXT PRIMARY KEY,
+      owner_id TEXT NOT NULL,
+      lease_until TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_provider_search_leases_expiry
+      ON provider_search_leases(lease_until);
+
+    CREATE TABLE IF NOT EXISTS rate_limit_buckets (
+      key TEXT PRIMARY KEY,
+      count INTEGER NOT NULL DEFAULT 0,
+      reset_at INTEGER NOT NULL,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_rate_limit_buckets_reset
+      ON rate_limit_buckets(reset_at);
+
     CREATE TABLE IF NOT EXISTS settings (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
@@ -166,6 +185,34 @@ export function initDatabase() {
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE TABLE IF NOT EXISTS checkout_attempts (
+      idempotency_key TEXT PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      fingerprint TEXT NOT NULL,
+      external_reference TEXT NOT NULL UNIQUE,
+      status TEXT NOT NULL DEFAULT 'processing',
+      finance_id INTEGER REFERENCES finance_records(id) ON DELETE SET NULL,
+      response_payload TEXT,
+      error TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_checkout_attempts_user_status
+      ON checkout_attempts(user_id, status, updated_at);
+
+    CREATE TABLE IF NOT EXISTS asaas_webhook_events (
+      event_id TEXT PRIMARY KEY,
+      event_name TEXT NOT NULL,
+      payload_hash TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'processing',
+      error TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      processed_at TEXT,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_asaas_webhook_events_status
+      ON asaas_webhook_events(status, updated_at);
+
     CREATE TABLE IF NOT EXISTS commercial_contacts (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
@@ -202,6 +249,12 @@ export function initDatabase() {
   ensureColumn("finance_records", "plan", "TEXT");
   ensureColumn("finance_records", "billing_cycle", "TEXT");
   ensureColumn("finance_records", "billing_type", "TEXT");
+  ensureColumn("finance_records", "idempotency_key", "TEXT");
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_finance_records_idempotency
+      ON finance_records(idempotency_key)
+      WHERE idempotency_key IS NOT NULL AND idempotency_key != '';
+  `);
   db.prepare(`
     UPDATE users
     SET billing_status = 'active'

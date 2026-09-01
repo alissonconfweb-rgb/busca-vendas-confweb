@@ -93,7 +93,7 @@ test("entrega uma coleta concluída depois da resposta inicial sem cobrar duas v
   const result = {
     ok: true,
     source: "scrapedo_mercado_livre",
-    rankingStrategy: "visible_sales_v4",
+    rankingStrategy: "visible_sales_v5",
     priceParserVersion: 3,
     salesParserVersion: 2,
     metricsMode: "sales",
@@ -171,5 +171,35 @@ test("entrega uma coleta concluída depois da resposta inicial sem cobrar duas v
   });
   assert.equal((await migrated.json()).user.email, "admin-search-job@teste.local");
   assert.match(migrated.headers.get("set-cookie") || "", /bv_session_v2=/);
+
+  const paidUserId = database.prepare(`
+    INSERT INTO users (
+      name, email, phone, password_hash, status, plan, search_limit,
+      billing_status, billing_cycle, billing_provider_subscription_id,
+      billing_payment_url, billing_access_until
+    ) VALUES (
+      'Cliente cancelado', 'cliente-cancelado@teste.local', '11999999996', 'hash',
+      'active', 'scale', NULL, 'canceled', 'monthly', 'sub_cancelada',
+      'https://asaas.test/pagamento', CURRENT_TIMESTAMP
+    )
+  `).run().lastInsertRowid;
+  const edited = await fetch(`${baseUrl}/api/admin/users/${paidUserId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", Cookie: cookie, Origin: origin },
+    body: JSON.stringify({
+      name: "Cliente com nome editado",
+      email: "cliente-cancelado@teste.local",
+      phone: "11999999996",
+      status: "active",
+      plan: "scale",
+      role: "user",
+      search_limit: null,
+    }),
+  });
+  assert.equal(edited.status, 200);
+  const editedUser = database.prepare("SELECT * FROM users WHERE id = ?").get(paidUserId);
+  assert.equal(editedUser.name, "Cliente com nome editado");
+  assert.equal(editedUser.billing_status, "canceled");
+  assert.equal(editedUser.billing_provider_subscription_id, "sub_cancelada");
   database.close();
 });

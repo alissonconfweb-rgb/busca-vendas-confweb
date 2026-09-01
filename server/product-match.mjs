@@ -145,8 +145,8 @@ export function matchesMarketplaceSearchResult(title, specOrQuery) {
   const tokensToMatch = relevantTokens.length ? relevantTokens : spec.tokens;
   const matchedTokens = tokensToMatch.filter((token) => tokenMatchesTitle(token, titleTokens, normalizedTitle));
   const numericTokens = tokensToMatch.filter((token) => /\d/.test(token));
-  const minimumMatches = tokensToMatch.length <= 2 ? tokensToMatch.length : 2;
-  const minimumCoverage = tokensToMatch.length >= 4 ? 0.4 : tokensToMatch.length <= 2 ? 1 : 0.5;
+  const minimumCoverage = tokensToMatch.length <= 2 ? 1 : 0.6;
+  const minimumMatches = Math.ceil(tokensToMatch.length * minimumCoverage);
 
   if (
     matchedTokens.length < minimumMatches
@@ -315,7 +315,7 @@ function hasUnrequestedSupplementTerms(title, normalizedQuery) {
 }
 
 function tokenMatchesTitle(token, titleTokens, normalizedTitle) {
-  if (titleTokens.has(token) || normalizedTitle.includes(token)) {
+  if (titleTokens.has(token)) {
     return true;
   }
 

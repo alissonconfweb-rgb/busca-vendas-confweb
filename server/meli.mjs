@@ -67,7 +67,19 @@ export async function searchMercadoLivre(query, options = {}) {
     if (hasCompleteSalesTop3(result)) {
       setSetting("market_search_provider", "scrapedo_only");
       setSetting("scrapedo_last_error", "");
-      return result;
+      const hasOptionalCostCredentials = Boolean(
+        getSetting("meli_access_token")
+        || getSetting("meli_refresh_token")
+        || process.env.MELI_ACCESS_TOKEN
+        || process.env.MELI_REFRESH_TOKEN,
+      );
+      if (!hasOptionalCostCredentials) {
+        return result;
+      }
+      const accessToken = await getValidAccessToken().catch(() => null);
+      return accessToken
+        ? enrichMercadoLivreCosts(result, { accessToken, siteId: getSetting("meli_site_id") || "MLB" })
+        : result;
     }
     setSetting("scrapedo_last_error", result?.message || "A Scrape.do não completou três anúncios reais.");
     return result;

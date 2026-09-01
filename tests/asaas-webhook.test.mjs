@@ -14,8 +14,13 @@ const { billingBlocksSearch, handleAsaasWebhook } = await import("../server/asaa
 initDatabase();
 setSetting("asaas_webhook_token", "token-seguro-de-teste-asaas-confweb");
 
+let webhookSequence = 0;
+
 function webhookRequest(payload) {
-  const request = Readable.from([Buffer.from(JSON.stringify(payload))]);
+  const normalizedPayload = payload.id
+    ? payload
+    : { id: `evt_test_${++webhookSequence}`, ...payload };
+  const request = Readable.from([Buffer.from(JSON.stringify(normalizedPayload))]);
   request.headers = { "asaas-access-token": "token-seguro-de-teste-asaas-confweb" };
   return request;
 }
@@ -134,6 +139,74 @@ test("uma primeira tentativa recusada mantém o plano grátis disponível", asyn
   assert.equal(freeUser.plan, "free");
   assert.equal(freeUser.billing_status, "none");
   assert.equal(billingBlocksSearch(freeUser), false);
+});
+
+test("reembolso anual bloqueia o acesso mesmo sem assinatura recorrente e é idempotente", async () => {
+  const userResult = db.prepare(`
+    INSERT INTO users (
+      name, email, phone, password_hash, role, status, plan, search_limit,
+      searches_used, billing_status, billing_cycle
+    )
+    VALUES (?, ?, ?, ?, 'user', 'active', 'scale', NULL, 3, 'active', 'yearly')
+  `).run("Cliente Anual", "cliente-anual@teste.local", "11999999997", "hash");
+  const userId = userResult.lastInsertRowid;
+  const externalReference = `bv:${userId}:scale:yearly:single:teste`;
+  db.prepare(`
+    INSERT INTO finance_records (
+      user_id, type, description, amount, status, provider,
+      external_id, provider_payment_id, external_reference,
+      plan, billing_cycle, billing_type
+    ) VALUES (?, 'asaas_payment', 'Plano anual', 359.1, 'paid', 'asaas',
+      'pay_yearly', 'pay_yearly', ?, 'scale', 'yearly', 'PIX')
+  `).run(userId, externalReference);
+
+  const payload = {
+    id: "evt_refund_yearly",
+    event: "PAYMENT_REFUNDED",
+    payment: {
+      id: "pay_yearly",
+      status: "REFUNDED",
+      value: 359.1,
+      externalReference,
+    },
+  };
+  const first = await handleAsaasWebhook(
+    webhookRequest(payload),
+    "https://buscavendas.confweb.com.br",
+  );
+  const duplicate = await handleAsaasWebhook(
+    webhookRequest(payload),
+    "https://buscavendas.confweb.com.br",
+  );
+  const reorderedDuplicate = await handleAsaasWebhook(
+    webhookRequest({
+      payment: {
+        externalReference,
+        value: 359.1,
+        status: "REFUNDED",
+        id: "pay_yearly",
+      },
+      event: "PAYMENT_REFUNDED",
+      id: "evt_refund_yearly",
+    }),
+    "https://buscavendas.confweb.com.br",
+  );
+  const conflictingDuplicate = await handleAsaasWebhook(
+    webhookRequest({ ...payload, payment: { ...payload.payment, value: 1 } }),
+    "https://buscavendas.confweb.com.br",
+  );
+
+  const refundedUser = db.prepare("SELECT * FROM users WHERE id = ?").get(userId);
+  assert.equal(first.status, 200);
+  assert.equal(duplicate.body.duplicate, true);
+  assert.equal(reorderedDuplicate.body.duplicate, true);
+  assert.equal(conflictingDuplicate.status, 409);
+  assert.equal(refundedUser.billing_status, "canceled");
+  assert.equal(billingBlocksSearch(refundedUser), true);
+  assert.equal(
+    db.prepare("SELECT COUNT(*) AS total FROM asaas_webhook_events WHERE event_id = ?").get(payload.id).total,
+    1,
+  );
 });
 
 test.after(() => {
