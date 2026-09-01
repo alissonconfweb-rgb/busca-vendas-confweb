@@ -76,17 +76,13 @@ CREATOR_EMAIL=alisson.confweb@gmail.com
 ADMIN_EMAIL=alisson.confweb@gmail.com
 SESSION_TTL_DAYS=365
 DB_PATH=/home/confwe06/data/busca-vendas-confweb/busca-vendas.sqlite
-SEARCH_RESPONSE_TIMEOUT_MS=120000
+SEARCH_RESPONSE_TIMEOUT_MS=75000
 MARKET_CACHE_REFRESH_INTERVAL_MS=21600000
 PLAYWRIGHT_BROWSERS_PATH=0
-OXYLABS_MODE=web_unblocker
-OXYLABS_ENDPOINT=https://unblock.oxylabs.io:60000
-OXYLABS_GEO_LOCATION=Brazil
-OXYLABS_TIMEOUT_MS=120000
-OXYLABS_RENDER_WAIT_SECONDS=5
-OXYLABS_PRODUCT_LIMIT=3
-MELI_SITE_ID=MLB
-MELI_SCRAPER_ENABLED=true
+SCRAPEDO_ENABLED=true
+SCRAPEDO_SEARCH_DEADLINE_MS=55000
+SCRAPEDO_MAX_CONCURRENCY=4
+MELI_SCRAPER_ENABLED=false
 ```
 
 Tambem configure como segredos:
@@ -94,8 +90,8 @@ Tambem configure como segredos:
 ```env
 ADMIN_PASSWORD=sua-senha-admin
 SESSION_SECRET=uma-string-longa-aleatoria
-OXYLABS_USERNAME=seu-usuario-oxylabs
-OXYLABS_PASSWORD=sua-senha-oxylabs
+SETTINGS_ENCRYPTION_KEY=outra-string-longa-aleatoria
+SCRAPEDO_API_TOKEN=seu-token-scrapedo
 ```
 
 Gere `SESSION_SECRET` com:

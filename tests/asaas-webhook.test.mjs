@@ -8,16 +8,24 @@ import test from "node:test";
 const databasePath = join(tmpdir(), `busca-vendas-webhook-${process.pid}.sqlite`);
 process.env.DB_PATH = databasePath;
 
-const { db, initDatabase } = await import("../server/db.mjs");
+const { db, initDatabase, setSetting } = await import("../server/db.mjs");
 const { billingBlocksSearch, handleAsaasWebhook } = await import("../server/asaas.mjs");
 
 initDatabase();
+setSetting("asaas_webhook_token", "token-seguro-de-teste-asaas-confweb");
 
 function webhookRequest(payload) {
   const request = Readable.from([Buffer.from(JSON.stringify(payload))]);
-  request.headers = {};
+  request.headers = { "asaas-access-token": "token-seguro-de-teste-asaas-confweb" };
   return request;
 }
+
+test("rejeita webhook sem o token correto", async () => {
+  const request = webhookRequest({ event: "PAYMENT_CONFIRMED" });
+  request.headers = { "asaas-access-token": "token-incorreto" };
+  const result = await handleAsaasWebhook(request, "https://buscavendas.confweb.com.br");
+  assert.equal(result.status, 401);
+});
 
 test("bloqueia renovação recusada e reativa após confirmação", async () => {
   const userResult = db.prepare(`

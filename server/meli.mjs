@@ -14,7 +14,6 @@ import {
 } from "./product-match.mjs";
 import { isCompleteRealSalesResult } from "./search-result-policy.mjs";
 import { minimumChampionSales } from "./champion-policy.mjs";
-import { searchProviderPlan } from "./search-provider.mjs";
 
 const currencyFormatter = new Intl.NumberFormat("pt-BR", {
   currency: "BRL",
@@ -55,92 +54,28 @@ function mapItem(item) {
 }
 
 export async function searchMercadoLivre(query, options = {}) {
-  const provider = searchProviderPlan(
-    getSetting("market_search_provider") || process.env.MARKET_SEARCH_PROVIDER || "auto",
-  );
-  const siteId = process.env.MELI_SITE_ID || getSetting("meli_site_id") || "MLB";
-  let strictFailure = null;
-  let accessToken = null;
+  if (!isScrapeDoEnabled()) {
+    return makeStrictFailure(
+      query,
+      "A Scrape.do não está configurada ou está inativa no painel administrativo.",
+      "scrapedo_not_configured",
+    );
+  }
 
-  if (provider.useMercadoLivre) {
-    accessToken = await getValidMeliAccessToken();
-    if (!accessToken) {
-      strictFailure = makeStrictFailure(
-        query,
-        "A API oficial do Mercado Livre ainda não está conectada.",
-        "mercado_livre_not_connected",
-      );
-    } else {
-      const officialSearch = await searchMercadoLivreOfficialSearch(query, accessToken, siteId);
-      accessToken = officialSearch.accessToken || accessToken;
-      if (hasCompleteSalesTop3(officialSearch.result)) {
-        setSetting("meli_last_error", "");
-        return enrichMercadoLivreCosts(officialSearch.result, { accessToken, siteId });
-      }
-      strictFailure = officialSearch.result || strictFailure;
-      setSetting(
-        "meli_last_error",
-        officialSearch.result?.message || "A API oficial não completou o Top 3 com vendas.",
-      );
-
-      // O catálogo é uma alternativa oficial mais pesada. Em modo automático,
-      // o Scrape.do já é o fallback de anúncios e deve começar imediatamente.
-      if (!provider.useScrapeDo) {
-        try {
-          const catalog = addOpportunityMode(
-            await searchMercadoLivreCatalog({ query, accessToken, siteId }),
-          );
-          if (hasCompleteSalesTop3(catalog)) {
-            setSetting("meli_last_error", "");
-            return enrichMercadoLivreCosts(catalog, { accessToken, siteId });
-          }
-          strictFailure = catalog;
-          setSetting("meli_last_error", catalog.message || "O catálogo oficial não completou o Top 3 com vendas.");
-        } catch (error) {
-          const message = sanitizeSearchError(
-            error instanceof Error ? error.message : "Falha ao consultar o catálogo oficial.",
-          );
-          strictFailure = makeStrictFailure(query, message, "mercado_livre_catalog_error");
-          setSetting("meli_last_error", message);
-        }
-      }
+  try {
+    const result = await searchMercadoLivreScrapeDo(query, options);
+    if (hasCompleteSalesTop3(result)) {
+      setSetting("market_search_provider", "scrapedo_only");
+      setSetting("scrapedo_last_error", "");
+      return result;
     }
+    setSetting("scrapedo_last_error", result?.message || "A Scrape.do não completou três anúncios reais.");
+    return result;
+  } catch (error) {
+    const message = sanitizeSearchError(error instanceof Error ? error.message : "Falha ao consultar Scrape.do.");
+    setSetting("scrapedo_last_error", message);
+    return makeStrictFailure(query, message, "scrapedo_error");
   }
-
-  if (provider.useScrapeDo) {
-    if (isScrapeDoEnabled()) {
-      try {
-        const scrapeDo = await searchMercadoLivreScrapeDo(query, options);
-        if (hasCompleteSalesTop3(scrapeDo)) {
-          setSetting("scrapedo_last_error", "");
-          accessToken ||= await getValidMeliAccessToken();
-          return enrichMercadoLivreCosts(scrapeDo, { accessToken, siteId });
-        }
-        strictFailure = scrapeDo;
-        setSetting("scrapedo_last_error", scrapeDo.message || "Scrape.do não completou o Top 3 com vendas públicas.");
-      } catch (error) {
-        const message = sanitizeSearchError(error instanceof Error ? error.message : "Falha ao consultar Scrape.do.");
-        strictFailure = makeStrictFailure(query, message, "scrapedo_error");
-        setSetting("scrapedo_last_error", message);
-      }
-    } else if (provider.mode === "scrapedo_only") {
-      strictFailure = makeStrictFailure(
-        query,
-        "A Scrape.do foi selecionada, mas o token não está configurado ou ativo.",
-        "scrapedo_not_configured",
-      );
-    }
-  }
-
-  if (strictFailure) {
-    return strictFailure;
-  }
-
-  return makeStrictFailure(
-    query,
-    "Nenhuma fonte de pesquisa está configurada no painel admin.",
-    "market_source_not_configured",
-  );
 }
 
 async function searchMercadoLivreOfficialSearch(query, initialAccessToken, siteId) {

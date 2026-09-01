@@ -44,7 +44,7 @@ test("entrega uma coleta concluída depois da resposta inicial sem cobrar duas v
       DB_PATH: databasePath,
       FRONTEND_ORIGIN: origin,
       HOST: "127.0.0.1",
-      MARKET_SEARCH_PROVIDER: "meli_only",
+      MARKET_SEARCH_PROVIDER: "scrapedo_only",
       NODE_ENV: "test",
       PORT: String(port),
     },
@@ -92,7 +92,10 @@ test("entrega uma coleta concluída depois da resposta inicial sem cobrar duas v
   const revenue = items.reduce((sum, item) => sum + item.revenue, 0);
   const result = {
     ok: true,
-    source: "mercado_livre",
+    source: "scrapedo_mercado_livre",
+    rankingStrategy: "visible_sales_v4",
+    priceParserVersion: 3,
+    salesParserVersion: 2,
     metricsMode: "sales",
     salesAvailable: true,
     message: "Dados reais retornados pelo Mercado Livre.",

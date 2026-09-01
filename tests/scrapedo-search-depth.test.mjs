@@ -53,19 +53,19 @@ test("preserva a politica otimizada depois da migracao", () => {
   });
 });
 
-test("encerra imediatamente quando tres resultados reais estao prontos", () => {
+test("inspeciona a amostra planejada antes de fechar o ranking", () => {
   assert.equal(hasEnoughInspectedCandidates({
     championCount: 3,
     verifiedCount: 3,
     inspectedCount: 4,
     sampleTarget: 12,
-  }), true);
+  }), false);
   assert.equal(hasEnoughInspectedCandidates({
     championCount: 2,
     verifiedCount: 4,
     inspectedCount: 4,
     sampleTarget: 12,
-  }), true);
+  }), false);
   assert.equal(hasEnoughInspectedCandidates({
     championCount: 0,
     verifiedCount: 8,

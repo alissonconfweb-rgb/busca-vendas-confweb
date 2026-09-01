@@ -29,9 +29,11 @@ test("persiste a sessao com token protegido e permite revogacao", () => {
 
   const session = createSession(result.lastInsertRowid);
   const stored = db.prepare("SELECT token_hash FROM sessions WHERE user_id = ?").get(result.lastInsertRowid);
+  const storedSession = db.prepare("SELECT expires_at FROM sessions WHERE user_id = ?").get(result.lastInsertRowid);
 
   assert.ok(session.token.length >= 40);
   assert.notEqual(stored.token_hash, session.token);
+  assert.match(storedSession.expires_at, /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
   assert.equal(userFromSession(session.token)?.email, "cliente-sessao@teste.local");
 
   deleteSession(session.token);

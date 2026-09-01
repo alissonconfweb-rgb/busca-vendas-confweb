@@ -4,7 +4,7 @@ services:
     runtime: node
     plan: free
     region: oregon
-    buildCommand: npm install --include=dev && npx playwright install chromium && npm run build
+    buildCommand: npm install --include=dev && npm run build
     startCommand: npm start
     healthCheckPath: /api/health
     envVars:
@@ -20,12 +20,20 @@ services:
         sync: false
       - key: SESSION_SECRET
         sync: false
+      - key: SETTINGS_ENCRYPTION_KEY
+        sync: false
       - key: SESSION_TTL_DAYS
         value: "365"
       - key: DB_PATH
         sync: false
       - key: SEARCH_RESPONSE_TIMEOUT_MS
-        value: "85000"
+        value: "75000"
+      - key: SCRAPEDO_API_TOKEN
+        sync: false
+      - key: SCRAPEDO_ENABLED
+        value: "true"
+      - key: SCRAPEDO_SEARCH_DEADLINE_MS
+        value: "55000"
       - key: PLAYWRIGHT_BROWSERS_PATH
         value: "0"
       - key: MELI_REFRESH_TOKEN

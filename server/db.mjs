@@ -208,6 +208,16 @@ export function initDatabase() {
     WHERE plan IN ('starter', 'scale')
       AND (billing_status IS NULL OR billing_status = 'none')
   `).run();
+  db.prepare(`
+    UPDATE sessions
+    SET expires_at = replace(substr(expires_at, 1, 19), 'T', ' ')
+    WHERE instr(expires_at, 'T') > 0
+  `).run();
+  db.prepare(`
+    UPDATE account_tokens
+    SET expires_at = replace(substr(expires_at, 1, 19), 'T', ' ')
+    WHERE instr(expires_at, 'T') > 0
+  `).run();
   seedDefaults();
   migrateSensitiveSettings();
 }
@@ -252,6 +262,7 @@ function seedDefaults() {
     scrapedo_detail_limit: "12",
     scrapedo_timeout_ms: "18000",
     scrapedo_verified: "false",
+    market_search_provider: "scrapedo_only",
     meli_scraper_enabled: "false",
     proxy_enabled: "false",
     proxy_url: "",
@@ -371,12 +382,13 @@ export function publicUser(user) {
 export function createSession(userId) {
   const expiresAt = Date.now() + SESSION_TTL_MS;
   const expires = new Date(expiresAt).toISOString();
+  const databaseExpires = sqliteTimestamp(expiresAt);
   const token = randomToken(32);
   db.prepare("DELETE FROM sessions WHERE expires_at <= CURRENT_TIMESTAMP").run();
   db.prepare(`
     INSERT INTO sessions (token_hash, user_id, expires_at)
     VALUES (?, ?, ?)
-  `).run(hashToken(token), userId, expires);
+  `).run(hashToken(token), userId, databaseExpires);
   return { token, expires };
 }
 
@@ -406,13 +418,18 @@ export function deleteSessionsForUser(userId) {
 
 export function createAccountToken(userId, purpose, ttlMinutes = 30) {
   const token = randomToken(32);
-  const expires = new Date(Date.now() + Math.max(5, ttlMinutes) * 60 * 1000).toISOString();
+  const expiresAt = Date.now() + Math.max(5, ttlMinutes) * 60 * 1000;
+  const expires = new Date(expiresAt).toISOString();
   db.prepare("DELETE FROM account_tokens WHERE user_id = ? AND purpose = ?").run(userId, purpose);
   db.prepare(`
     INSERT INTO account_tokens (user_id, purpose, token_hash, expires_at)
     VALUES (?, ?, ?, ?)
-  `).run(userId, purpose, hashToken(token), expires);
+  `).run(userId, purpose, hashToken(token), sqliteTimestamp(expiresAt));
   return { token, expires };
+}
+
+function sqliteTimestamp(value) {
+  return new Date(value).toISOString().slice(0, 19).replace("T", " ");
 }
 
 export function consumeAccountToken(token, purpose) {

@@ -9,6 +9,8 @@ process.env.DB_PATH = join(tempDir, "item-cache.sqlite");
 
 const { db, initDatabase, setSetting } = await import("../server/db.mjs");
 const {
+  SCRAPEDO_ITEM_METADATA_VERSION,
+  SCRAPEDO_PRICE_PARSER_VERSION,
   SCRAPEDO_SALES_PARSER_VERSION,
   searchMercadoLivreCachedItems,
 } = await import("../server/scrapedo.mjs");
@@ -30,9 +32,11 @@ function saveItem(id, title, soldQuantity, price) {
     soldQuantity,
     price,
     revenue: soldQuantity * price,
-    metadataVersion: 4,
-    priceParserVersion: 2,
+    metadataVersion: SCRAPEDO_ITEM_METADATA_VERSION,
+    priceParserVersion: SCRAPEDO_PRICE_PARSER_VERSION,
     salesParserVersion: SCRAPEDO_SALES_PARSER_VERSION,
+    priceSource: "product_page",
+    salesSource: "product_page",
   };
   db.prepare(`
     INSERT INTO market_item_cache (key, title, permalink, payload, updated_at)

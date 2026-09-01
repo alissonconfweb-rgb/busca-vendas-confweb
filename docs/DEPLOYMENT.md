@@ -23,9 +23,9 @@ Passos:
    - `ADMIN_EMAIL`
    - `ADMIN_PASSWORD`
    - `SESSION_SECRET`
-   - `OXYLABS_USERNAME`
-   - `OXYLABS_PASSWORD`
-   - `MELI_CLIENT_SECRET`, se usar Mercado Livre OAuth.
+   - `SETTINGS_ENCRYPTION_KEY`
+   - `SCRAPEDO_API_TOKEN`
+   - `MELI_CLIENT_SECRET`, somente se usar o diagnostico OAuth opcional.
 3. Aguarde o build.
 4. Abra `https://seu-app.onrender.com/api/health`.
 
@@ -90,7 +90,7 @@ Funciona apenas se o cPanel oferecer:
 
 - Node.js `22.5` ou superior.
 - Permissao para instalar pacotes npm.
-- Permissao para executar Chromium/Playwright, caso use scraping/Oxylabs com renderizacao.
+   - Saida HTTPS para a API Scrape.do.
 - Escrita em disco para a pasta `data`.
 
 Passos comuns no cPanel:
@@ -105,7 +105,6 @@ Passos comuns no cPanel:
 
 ```bash
 npm install --include=dev
-npx playwright install chromium
 npm run build
 ```
 

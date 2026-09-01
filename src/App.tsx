@@ -470,6 +470,10 @@ const clientEstimateProfiles = [
 
 async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   let response: Response;
+  const controller = options.signal ? null : new AbortController();
+  const timeoutId = controller
+    ? window.setTimeout(() => controller.abort(), 20_000)
+    : null;
 
   try {
     response = await fetch(path, {
@@ -480,12 +484,17 @@ async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
         ...(options.headers || {}),
       },
       ...options,
+      signal: options.signal || controller?.signal,
     });
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") {
       throw new ApiError("O servidor demorou para responder. Tente novamente em instantes.", 408);
     }
     throw new ApiError("Não consegui conectar à API do Busca Vendas agora.", 0);
+  } finally {
+    if (timeoutId !== null) {
+      window.clearTimeout(timeoutId);
+    }
   }
 
   const raw = response.status === 204 ? "" : await response.text();
@@ -1469,9 +1478,13 @@ function SearchPage({
     onHistoryRefresh();
   };
 
-  const pollSearch = async (pending: PendingSearch, runId: number) => {
+  const pollSearch = async (pending: PendingSearch & { startedAt?: number }, runId: number) => {
     let pollAfterMs = Math.max(1_000, Number(pending.pollAfterMs || 1_500));
+    const startedAt = Number(pending.startedAt || Date.now());
     while (searchRunRef.current === runId) {
+      if (Date.now() - startedAt >= 95_000) {
+        throw new Error("A pesquisa atingiu o prazo máximo. Tente novamente; nenhuma pesquisa foi consumida.");
+      }
       await new Promise<void>((resolve) => window.setTimeout(resolve, pollAfterMs));
       if (searchRunRef.current !== runId) {
         return null;
@@ -1527,6 +1540,7 @@ function SearchPage({
         }
         const reason = pollError instanceof Error ? pollError.message : "Não foi possível acompanhar a pesquisa.";
         setResult(buildUnavailableSearchResult(saved?.query || "", reason));
+        localStorage.removeItem(pendingStorageKey);
       })
       .finally(() => {
         if (searchRunRef.current === runId) {
@@ -1572,10 +1586,11 @@ function SearchPage({
         body: JSON.stringify({ q: cleanQuery }),
       });
       if (isPendingSearch(data)) {
+        const pending = { ...data, startedAt: Date.now() };
         if (pendingStorageKey) {
-          localStorage.setItem(pendingStorageKey, JSON.stringify({ ...data, startedAt: Date.now() }));
+          localStorage.setItem(pendingStorageKey, JSON.stringify(pending));
         }
-        const completed = await pollSearch(data, runId);
+        const completed = await pollSearch(pending, runId);
         if (completed && searchRunRef.current === runId) {
           finishSearch(completed, cleanQuery);
         }
@@ -1587,6 +1602,9 @@ function SearchPage({
       }
     } catch (apiError) {
       await minimumFeedback;
+      if (pendingStorageKey) {
+        localStorage.removeItem(pendingStorageKey);
+      }
       if (apiError instanceof ApiError && [401, 402].includes(apiError.status)) {
         setError(apiError.message);
         return;
@@ -5656,7 +5674,7 @@ function SettingsAccordionTrigger({
 
 function AdminSettingsSimple({ settings, afterSave }: { settings: SettingsMap; afterSave: (text?: string) => void }) {
   const [busy, setBusy] = useState<"provider-save" | "meli-save" | "meli-test" | "meli-disconnect" | "asaas-save" | "asaas-test" | "scrapedo-save" | "scrapedo-test" | "">("");
-  const [providerMode, setProviderMode] = useState(settings.market_search_provider || "auto");
+  const [providerMode, setProviderMode] = useState("scrapedo_only");
   const [providerError, setProviderError] = useState("");
   const [meliError, setMeliError] = useState("");
   const [redirectCopied, setRedirectCopied] = useState(false);
@@ -5861,7 +5879,7 @@ function AdminSettingsSimple({ settings, afterSave }: { settings: SettingsMap; a
           id="search"
           title="Motor de busca"
           description="Defina qual fonte atende pesquisas que ainda não estão na base interna."
-          status={providerMode === "meli_only" ? "Somente Mercado Livre" : providerMode === "scrapedo_only" ? "Somente Scrape.do" : "Automático"}
+          status="Scrape.do principal"
           Icon={Search}
           open={openSections.search}
           onToggle={toggleSection}
@@ -5875,24 +5893,19 @@ function AdminSettingsSimple({ settings, afterSave }: { settings: SettingsMap; a
             <select
               name="market_search_provider"
               value={providerMode}
-              onChange={(event) => setProviderMode(event.target.value)}
+              onChange={() => setProviderMode("scrapedo_only")}
+              disabled
             >
-              <option value="auto">Automático: Mercado Livre primeiro</option>
-              <option value="meli_only">Somente Mercado Livre</option>
-              <option value="scrapedo_only">Somente Scrape.do</option>
+              <option value="scrapedo_only">Scrape.do principal</option>
             </select>
             <small className="field-hint">
-              {providerMode === "meli_only"
-                ? "Não usa créditos da Scrape.do, mesmo se a API oficial não completar o resultado."
-                : providerMode === "scrapedo_only"
-                  ? "Ignora a API oficial e usa a Scrape.do para produtos que não estiverem na base interna."
-                  : "Tenta todas as rotas oficiais do Mercado Livre. A Scrape.do só entra se elas não completarem o resultado."}
+              Novas pesquisas usam somente a Scrape.do. A base interna continua atendendo consultas válidas dentro do prazo de cache.
             </small>
           </label>
         </div>
 
         <p className="integration-note provider-priority-note">
-          Prioridade real: base interna, Mercado Livre oficial e, somente no modo automático, Scrape.do como emergência.
+          Prioridade real: base interna validada e Scrape.do para coleta ou atualização.
         </p>
 
         {providerError && <strong className="oauth-error">{providerError}</strong>}
@@ -5919,8 +5932,8 @@ function AdminSettingsSimple({ settings, afterSave }: { settings: SettingsMap; a
         <SettingsAccordionTrigger
           id="meli"
           title="Mercado Livre"
-          description="Credenciais, autorização OAuth e diagnóstico da fonte oficial."
-          status={settings.meli_oauth_connected ? "Conectado" : "Pendente"}
+          description="OAuth opcional mantido apenas para diagnóstico da conta."
+          status="Fora da busca"
           Icon={PackageSearch}
           open={openSections.meli}
           onToggle={toggleSection}
@@ -6009,7 +6022,7 @@ function AdminSettingsSimple({ settings, afterSave }: { settings: SettingsMap; a
         )}
 
         <p className="integration-note">
-          Depois da autorização, todos os usuários pesquisam pela integração central. Eles não veem nem preenchem estas credenciais. A Scrape.do continua disponível como apoio quando a API oficial não liberar um dado público.
+          Esta autorização não participa das pesquisas dos usuários. O motor de busca permanece integralmente na Scrape.do.
         </p>
 
         <div className="settings-card-actions">
@@ -6039,7 +6052,7 @@ function AdminSettingsSimple({ settings, afterSave }: { settings: SettingsMap; a
         <SettingsAccordionTrigger
           id="scrapedo"
           title="Scrape.do"
-          description="Token, créditos, atualização da base e testes da fonte de emergência."
+          description="Token, créditos, atualização da base e testes da fonte principal."
           status={settings.scrapedo_connected ? "Conectada" : "Pendente"}
           Icon={Database}
           open={openSections.scrapedo}

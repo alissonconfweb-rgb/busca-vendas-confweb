@@ -1,6 +1,7 @@
 import { db, getSetting, setSetting } from "./db.mjs";
 import { lookupBrazilianPostalCode } from "./postal-code.mjs";
 import { randomToken } from "./security.mjs";
+import { timingSafeEqual } from "node:crypto";
 
 const SANDBOX_URL = "https://api-sandbox.asaas.com/v3";
 const PRODUCTION_URL = "https://api.asaas.com/v3";
@@ -393,7 +394,10 @@ export async function refreshAsaasCheckoutStatus({ user, financeId }) {
 export async function handleAsaasWebhook(req, publicUrl) {
   const token = getSetting("asaas_webhook_token") || process.env.ASAAS_WEBHOOK_TOKEN || "";
   const receivedToken = req.headers["asaas-access-token"] || req.headers["access_token"] || req.headers["authorization"] || "";
-  if (token && String(receivedToken).replace(/^Bearer\s+/i, "") !== token) {
+  if (!token) {
+    return { ok: false, status: 503, body: { error: "Webhook da Asaas ainda não foi preparado." } };
+  }
+  if (!secureTokenMatches(String(receivedToken).replace(/^Bearer\s+/i, ""), token)) {
     return { ok: false, status: 401, body: { error: "Token de webhook invalido." } };
   }
 
@@ -715,6 +719,7 @@ async function asaasRequest(path, { method = "GET", body } = {}) {
       access_token: key,
     },
     body: body ? JSON.stringify(body) : undefined,
+    signal: AbortSignal.timeout(15_000),
   });
   const text = await response.text();
   const data = text ? safeJson(text) : {};
@@ -722,6 +727,13 @@ async function asaasRequest(path, { method = "GET", body } = {}) {
     throw new AsaasRequestError(data, response.status);
   }
   return data;
+}
+
+function secureTokenMatches(received, expected) {
+  const receivedBuffer = Buffer.from(String(received || ""));
+  const expectedBuffer = Buffer.from(String(expected || ""));
+  return receivedBuffer.length === expectedBuffer.length
+    && timingSafeEqual(receivedBuffer, expectedBuffer);
 }
 
 function saveFinanceRecord({ user, offer, billingType, chargeMode, status, providerResult, firstPayment, invoiceUrl, pixQrCode, externalReference }) {

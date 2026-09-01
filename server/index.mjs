@@ -14,8 +14,7 @@ import {
   settingsObject,
   userFromSession,
 } from "./db.mjs";
-import { buildMeliAuthorizationUrl, createMeliPkcePair, diagnoseMercadoLivreIntegration, disconnectMeliOAuth, exchangeMeliAuthorizationCode, getMeliRedirectUri, getValidMeliAccessToken, searchMercadoLivre, testMercadoLivreCatalog } from "./meli.mjs";
-import { enrichMercadoLivreCosts } from "./meli-costs.mjs";
+import { buildMeliAuthorizationUrl, createMeliPkcePair, diagnoseMercadoLivreIntegration, disconnectMeliOAuth, exchangeMeliAuthorizationCode, getMeliRedirectUri, searchMercadoLivre, testMercadoLivreCatalog } from "./meli.mjs";
 import { bootstrapAdminFromEnv } from "./bootstrap-admin.mjs";
 import { syncMeliSettingsFromEnv, validateMeliSettingsInput, isValidMeliClientId, resolveMeliRedirectUri } from "./meli-config.mjs";
 import { syncOxylabsSettingsFromEnv, testOxylabsConnection } from "./oxylabs.mjs";
@@ -26,6 +25,7 @@ import {
   isScrapeDoConfigured,
   normalizeScrapeDoToken,
   scrapeDoUsageSummary,
+  SCRAPEDO_ITEM_METADATA_VERSION,
   SCRAPEDO_PRICE_PARSER_VERSION,
   SCRAPEDO_SALES_PARSER_VERSION,
   searchMercadoLivreCachedItems,
@@ -55,7 +55,6 @@ import { hashPassword, hashToken, randomToken, verifyPassword } from "./security
 import { applyRateLimit, MemoryRateLimiter } from "./rate-limit.mjs";
 import { minimumChampionSales } from "./champion-policy.mjs";
 import { isCompleteRealSalesResult } from "./search-result-policy.mjs";
-import { normalizeSearchProviderMode } from "./search-provider.mjs";
 
 initDatabase();
 
@@ -67,7 +66,10 @@ const LEGACY_COOKIES = ["bv_session"];
 const CREATOR_EMAIL = (process.env.CREATOR_EMAIL || process.env.ADMIN_EMAIL || "").trim().toLowerCase();
 const DIST_DIR = resolve(process.cwd(), "dist");
 const MELI_OAUTH_STATE_TTL_MS = 15 * 60 * 1000;
-const SEARCH_RESPONSE_TIMEOUT_MS = Number(process.env.SEARCH_RESPONSE_TIMEOUT_MS || 75_000);
+const SEARCH_RESPONSE_TIMEOUT_MS = Math.min(75_000, Math.max(
+  30_000,
+  Number(process.env.SEARCH_RESPONSE_TIMEOUT_MS || 75_000),
+));
 const SEARCH_JOB_STALE_MS = Number(process.env.SEARCH_JOB_STALE_MS || 90_000);
 const SEARCH_JOB_POLL_AFTER_MS = Number(process.env.SEARCH_JOB_POLL_AFTER_MS || 1_500);
 const MARKET_CACHE_REFRESH_INTERVAL_MS = Number(process.env.MARKET_CACHE_REFRESH_INTERVAL_MS || 6 * 60 * 60_000);
@@ -110,15 +112,13 @@ syncZyteSettingsFromEnv();
 syncScrapeDoSettingsFromEnv();
 ensureScrapeDoSearchDepth();
 syncAsaasSettingsFromEnv();
+enforceScrapeDoPrimarySettings();
 migrateMarketSearchCacheKeys();
 pruneInvalidChampionCaches();
 pruneInvalidPriceCaches();
 pruneInvalidSalesCaches();
 seedMarketItemCacheFromSearches();
 db.prepare("DELETE FROM search_requests WHERE updated_at < datetime('now', '-7 days')").run();
-if (isZyteConfigured() && isZyteSearchEnabled() && process.env.MELI_LOCAL_BROWSER_ENABLED !== "true") {
-  enforceZytePrimarySettings();
-}
 if (CREATOR_EMAIL) {
   db.prepare("UPDATE users SET role = 'admin', status = 'active', updated_at = CURRENT_TIMESTAMP WHERE lower(email) = ?").run(CREATOR_EMAIL);
 }
@@ -667,25 +667,22 @@ async function handleSearchStatus(req, res, user, requestId) {
   if (request.status === "pending") {
     const updatedAt = new Date(String(request.updated_at).replace(" ", "T") + "Z").getTime();
     const ageMs = Date.now() - updatedAt;
-    if (!marketSearchRequestFlights.has(request.id) && ageMs < SEARCH_JOB_STALE_MS) {
+    if (!marketSearchRequestFlights.has(request.id)) {
       startSearchRequest(request.id, request.query);
     }
-    if (ageMs >= SEARCH_JOB_STALE_MS) {
-      markSearchRequestFailed(request.id, "A fonte de dados demorou mais que o esperado para concluir a leitura.");
-      request = findSearchRequest(request.id, user.id);
-    } else {
-      return json(res, 202, {
-        pending: true,
-        requestId: request.id,
-        query: request.query,
-        pollAfterMs: SEARCH_JOB_POLL_AFTER_MS,
-      });
-    }
+    return json(res, 202, {
+      pending: true,
+      requestId: request.id,
+      query: request.query,
+      pollAfterMs: ageMs >= SEARCH_JOB_STALE_MS
+        ? Math.max(2_000, SEARCH_JOB_POLL_AFTER_MS)
+        : SEARCH_JOB_POLL_AFTER_MS,
+    });
   }
 
   if (request.status === "ready") {
     const result = parseSearchPayload(request.payload);
-    if (isBillableSearchResult(result)) {
+    if (isBillableSearchResult(result) && cachedResultMatchesQuery(result, request.query)) {
       recordDeliveredSearch(user, request.query, result, request.id);
       return json(res, 200, {
         pending: false,
@@ -774,21 +771,23 @@ function startSearchRequest(requestId, query) {
   }
 
   const startedAt = Date.now();
+  const deadlineAt = startedAt + SEARCH_RESPONSE_TIMEOUT_MS;
+  const heartbeat = setInterval(() => {
+    db.prepare(`
+      UPDATE search_requests
+      SET updated_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND status = 'pending'
+    `).run(requestId);
+  }, 10_000);
+  heartbeat.unref?.();
   console.info(`[search:${requestId}] provider-start query=${JSON.stringify(query)}`);
-  const task = scheduleMarketSearchRefresh(query)
+  const task = scheduleMarketSearchRefresh(query, { deadlineAt })
     .then(async (result) => {
       let completed = result;
       if (!isBillableSearchResult(completed)) {
         completed = getFreshCachedSearchResult(query)
           || getStaleCachedSearchResult(query)
           || searchMercadoLivreCachedItems(query);
-      }
-      if (isBillableSearchResult(completed) && completed.items.some((item) => !item.marketplaceFees)) {
-        const accessToken = await getValidMeliAccessToken();
-        completed = await enrichMercadoLivreCosts(completed, {
-          accessToken,
-          siteId: process.env.MELI_SITE_ID || getSetting("meli_site_id") || "MLB",
-        });
       }
       if (isBillableSearchResult(completed)) {
         saveMarketSearchCache(query, completed);
@@ -815,7 +814,10 @@ function startSearchRequest(requestId, query) {
       console.error(`[search:${requestId}] failed durationMs=${Date.now() - startedAt} message=${JSON.stringify(sanitizeSearchError(message))}`);
       return null;
     })
-    .finally(() => marketSearchRequestFlights.delete(requestId));
+    .finally(() => {
+      clearInterval(heartbeat);
+      marketSearchRequestFlights.delete(requestId);
+    });
 
   marketSearchRequestFlights.set(requestId, task);
   return task;
@@ -907,14 +909,6 @@ async function resolveMarketSearch(query, options = {}) {
       refreshPending: true,
       providerCreditsUsed: 0,
     };
-  }
-
-  if (isBillableSearchResult(result) && result.items.some((item) => !item.marketplaceFees)) {
-    const accessToken = await getValidMeliAccessToken();
-    result = await enrichMercadoLivreCosts(result, {
-      accessToken,
-      siteId: process.env.MELI_SITE_ID || getSetting("meli_site_id") || "MLB",
-    });
   }
 
   return result;
@@ -1087,35 +1081,32 @@ function cachedResultMatchesQuery(result, query) {
   if (!Array.isArray(result?.items) || result.items.length < 3) {
     return false;
   }
+  if (!["scrapedo_mercado_livre", "confweb_cache"].includes(result.source)) {
+    return false;
+  }
   if (
     result.source === "scrapedo_mercado_livre"
-    && result.rankingStrategy !== "visible_sales_v3"
+    && result.rankingStrategy !== "visible_sales_v4"
   ) {
     return false;
   }
-  if (
-    ["scrapedo_mercado_livre", "confweb_cache"].includes(result.source)
-    && Number(result.priceParserVersion || 0) < SCRAPEDO_PRICE_PARSER_VERSION
-  ) {
+  if (Number(result.priceParserVersion || 0) < SCRAPEDO_PRICE_PARSER_VERSION) {
     return false;
   }
-  if (
-    ["scrapedo_mercado_livre", "zyte_mercado_livre", "confweb_cache"].includes(result.source)
-    && Number(result.salesParserVersion || 0) < SCRAPEDO_SALES_PARSER_VERSION
-  ) {
+  if (Number(result.salesParserVersion || 0) < SCRAPEDO_SALES_PARSER_VERSION) {
     return false;
   }
   const spec = buildProductQuerySpec(query);
   return result.items.slice(0, 3).every((item) => matchesMarketplaceSearchResult(item?.title || "", spec).ok);
 }
 
-function scheduleMarketSearchRefresh(query) {
+function scheduleMarketSearchRefresh(query, options = {}) {
   const key = marketCacheKey(query);
   if (marketRefreshFlights.has(key)) {
     return marketRefreshFlights.get(key);
   }
 
-  const refresh = runLiveMarketSearch(query, { forceRefresh: true })
+  const refresh = runLiveMarketSearch(query, { ...options, forceRefresh: true })
     .then((result) => {
       if (isBillableSearchResult(result)) {
         saveMarketSearchCache(query, result);
@@ -1233,16 +1224,10 @@ function pruneInvalidChampionCaches() {
   }
 
   const removeCache = db.prepare("DELETE FROM market_search_cache WHERE key = ?");
-  const removeHistory = db.prepare("DELETE FROM search_history WHERE id = ?");
   const prune = db.transaction(() => {
     for (const row of db.prepare("SELECT key, payload FROM market_search_cache").all()) {
       if (!isCompleteRealSalesResult(parseSearchPayload(row.payload))) {
         removeCache.run(row.key);
-      }
-    }
-    for (const row of db.prepare("SELECT id, payload FROM search_history").all()) {
-      if (!isCompleteRealSalesResult(parseSearchPayload(row.payload))) {
-        removeHistory.run(row.id);
       }
     }
     setSetting("champion_cache_policy_min", String(minimum));
@@ -1284,7 +1269,6 @@ function pruneInvalidSalesCaches() {
 
   const removeItem = db.prepare("DELETE FROM market_item_cache WHERE key = ?");
   const removeSearch = db.prepare("DELETE FROM market_search_cache WHERE key = ?");
-  const removeHistory = db.prepare("DELETE FROM search_history WHERE id = ?");
   const removeRequest = db.prepare("DELETE FROM search_requests WHERE id = ?");
   const prune = db.transaction(() => {
     for (const row of db.prepare("SELECT key, payload FROM market_item_cache").all()) {
@@ -1299,12 +1283,8 @@ function pruneInvalidSalesCaches() {
         removeSearch.run(row.key);
       }
     }
-    for (const row of db.prepare("SELECT id, query, payload FROM search_history").all()) {
-      const result = parseSearchPayload(row.payload);
-      if (!cachedResultMatchesQuery(result, row.query)) {
-        removeHistory.run(row.id);
-      }
-    }
+    // O histórico é registro de uso e auditoria. Resultados incompatíveis ficam
+    // ocultos pelas rotas de leitura, sem apagar a pesquisa feita pelo cliente.
     for (const row of db.prepare("SELECT id, query, payload FROM search_requests WHERE status = 'ready'").all()) {
       const result = parseSearchPayload(row.payload);
       if (!cachedResultMatchesQuery(result, row.query)) {
@@ -1317,7 +1297,7 @@ function pruneInvalidSalesCaches() {
 }
 
 function seedMarketItemCacheFromSearches() {
-  if (getSetting("market_item_cache_seed_version") === "2") {
+  if (getSetting("market_item_cache_seed_version") === "3") {
     return;
   }
 
@@ -1336,6 +1316,11 @@ function seedMarketItemCacheFromSearches() {
       const cachedItem = {
         ...item,
         href,
+        metadataVersion: SCRAPEDO_ITEM_METADATA_VERSION,
+        priceParserVersion: SCRAPEDO_PRICE_PARSER_VERSION,
+        salesParserVersion: SCRAPEDO_SALES_PARSER_VERSION,
+        priceSource: "product_page",
+        salesSource: "product_page",
       };
       db.prepare(`
         INSERT OR IGNORE INTO market_item_cache (key, title, permalink, payload)
@@ -1343,7 +1328,7 @@ function seedMarketItemCacheFromSearches() {
       `).run(key, item.title, href, JSON.stringify(cachedItem));
     }
   }
-  setSetting("market_item_cache_seed_version", "2");
+  setSetting("market_item_cache_seed_version", "3");
 }
 
 function marketCacheTtlMs() {
@@ -1367,7 +1352,10 @@ function parseSearchPayload(payload) {
 async function searchWithResponseGuard(query, options = {}) {
   let settled = false;
   let timeoutId;
-  const realSearch = searchMercadoLivre(query, options)
+  const deadlineAt = Number(options.deadlineAt) > Date.now()
+    ? Number(options.deadlineAt)
+    : Date.now() + SEARCH_RESPONSE_TIMEOUT_MS;
+  const realSearch = searchMercadoLivre(query, { ...options, deadlineAt })
     .then((result) => {
       settled = true;
       const validated = enforceChampionThreshold(query, result);
@@ -1506,18 +1494,14 @@ function realOnlySearchEnabled() {
     || (isZyteConfigured() && isZyteSearchEnabled());
 }
 
-function enforceZytePrimarySettings() {
-  setSetting("zyte_search_enabled", "true");
-  setSetting("zyte_mode", "browser_html");
-  setSetting("zyte_endpoint", "https://api.zyte.com/v1/extract");
-  setSetting("zyte_search_pages", "4");
-  setSetting("zyte_detail_limit", "60");
+function enforceScrapeDoPrimarySettings() {
+  setSetting("market_search_provider", "scrapedo_only");
+  setSetting("scrapedo_enabled", "true");
+  setSetting("zyte_search_enabled", "false");
   setSetting("meli_scraper_enabled", "false");
   setSetting("proxy_enabled", "false");
   setSetting("proxy_url", "");
   setSetting("min_champion_sales", "1000");
-  setSetting("market_cache_ttl_days", "7");
-  setSetting("zyte_last_error", "");
 }
 
 async function handleAdmin(req, res, url, currentUser) {
@@ -1529,17 +1513,13 @@ async function handleAdmin(req, res, url, currentUser) {
       return json(res, 403, { error: "Somente administradores autorizados podem escolher o motor de busca." });
     }
 
-    const body = await readJson(req);
-    const mode = normalizeSearchProviderMode(body.mode);
+    await readJson(req);
+    const mode = "scrapedo_only";
     setSetting("market_search_provider", mode);
     return json(res, 200, {
       ok: true,
       mode,
-      message: mode === "meli_only"
-        ? "Motor salvo: somente Mercado Livre. A Scrape.do não será consumida."
-        : mode === "scrapedo_only"
-          ? "Motor salvo: somente Scrape.do."
-          : "Motor automático salvo: Mercado Livre primeiro e Scrape.do apenas em emergência.",
+      message: "Motor salvo: Scrape.do é a fonte principal e exclusiva das novas pesquisas.",
     });
   }
 
@@ -2165,12 +2145,7 @@ async function handleAdmin(req, res, url, currentUser) {
       }
       setSetting(key, normalizeSettingValue(key, value));
     }
-    if (
-      ["true", "1", "yes", "sim"].includes(String(body.zyte_search_enabled || "").trim().toLowerCase())
-      && (String(body.zyte_api_key || "").trim() || getSetting("zyte_api_key") || process.env.ZYTE_API_KEY)
-    ) {
-      enforceZytePrimarySettings();
-    }
+    enforceScrapeDoPrimarySettings();
     if (Object.keys(body).some((key) => key.startsWith("meli_"))) {
       setSetting("meli_last_error", "");
     }
@@ -2337,6 +2312,10 @@ function rememberScrapeDoAccountStatus(result) {
   if (remainingCredits !== null && remainingCredits !== undefined && Number.isFinite(Number(remainingCredits))) {
     setSetting("scrapedo_provider_remaining_credits", String(Math.max(0, Number(remainingCredits))));
   }
+  const concurrency = Number(result?.concurrency);
+  if (Number.isFinite(concurrency) && concurrency > 0) {
+    setSetting("scrapedo_provider_concurrency", String(Math.floor(concurrency)));
+  }
   setSetting("scrapedo_provider_checked_at", new Date().toISOString());
 }
 
@@ -2389,9 +2368,7 @@ function safeSettings(user) {
     settings.market_cache_ttl_days = settings.market_cache_ttl_days || process.env.MARKET_CACHE_TTL_DAYS || "7";
     settings.market_cache_stale_days = settings.market_cache_stale_days || process.env.MARKET_CACHE_STALE_DAYS || "30";
     settings.market_item_cache_ttl_days = settings.market_cache_ttl_days;
-    settings.market_search_provider = normalizeSearchProviderMode(
-      settings.market_search_provider || process.env.MARKET_SEARCH_PROVIDER || "auto",
-    );
+    settings.market_search_provider = "scrapedo_only";
     settings.market_cache_entries = String(db.prepare("SELECT COUNT(*) AS total FROM market_search_cache").get().total || 0);
     settings.market_item_cache_entries = String(db.prepare("SELECT COUNT(*) AS total FROM market_item_cache").get().total || 0);
     const scrapeDoUsage = scrapeDoUsageSummary();

@@ -23,10 +23,10 @@ const DEFAULT_DETAIL_CONCURRENCY = 3;
 const DEFAULT_SEARCH_DEADLINE_MS = 55_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 18_000;
 const MINIMUM_REQUEST_BUDGET_MS = 1_500;
-const MARKET_ITEM_METADATA_VERSION = 4;
-export const SCRAPEDO_PRICE_PARSER_VERSION = 2;
+export const SCRAPEDO_ITEM_METADATA_VERSION = 5;
+export const SCRAPEDO_PRICE_PARSER_VERSION = 3;
 export const SCRAPEDO_SALES_PARSER_VERSION = MERCADO_LIVRE_SALES_PARSER_VERSION;
-const SALES_RANKING_STRATEGY = "visible_sales_v3";
+const SALES_RANKING_STRATEGY = "visible_sales_v4";
 const activeSearches = new Map();
 const providerQueue = [];
 let activeProviderSearches = 0;
@@ -116,7 +116,15 @@ export function searchMercadoLivreScrapeDo(query, options = {}) {
     );
   }
 
-  const search = withProviderSlot(() => executeMercadoLivreScrapeDo(query, options))
+  const maximumDeadlineAt = Date.now() + searchDeadlineMs();
+  const deadlineAt = Number(options.deadlineAt) > Date.now()
+    ? Math.min(Number(options.deadlineAt), maximumDeadlineAt)
+    : maximumDeadlineAt;
+  const searchOptions = { ...options, deadlineAt };
+  const search = withScrapeDoProviderSlot(
+    () => executeMercadoLivreScrapeDo(query, searchOptions),
+    { deadlineAt },
+  )
     .then((result) => {
       recordProviderUsage(queryKey, Number(result?.providerCreditsUsed || 0), result?.ok ? "completed" : "incomplete");
       return result;
@@ -174,7 +182,7 @@ export function scrapeDoSearchPolicy() {
 }
 
 export function hasEnoughInspectedCandidates({ championCount, verifiedCount, inspectedCount, sampleTarget }) {
-  return championCount >= 3 || verifiedCount >= 3;
+  return inspectedCount >= sampleTarget && (championCount >= 3 || verifiedCount >= 3);
 }
 
 export function isUsableMercadoLivreHtml(status, html) {
@@ -252,9 +260,10 @@ async function executeMercadoLivreScrapeDo(query, options = {}) {
   const querySpec = buildProductQuerySpec(query);
   const searchQuery = normalizeProductSearchQuery(query);
   const sessionId = createSessionId();
+  const maximumDeadlineAt = Date.now() + searchDeadlineMs();
   const deadlineAt = Number(options.deadlineAt) > Date.now()
-    ? Number(options.deadlineAt)
-    : Date.now() + searchDeadlineMs();
+    ? Math.min(Number(options.deadlineAt), maximumDeadlineAt)
+    : maximumDeadlineAt;
   const candidates = [];
   let totalAvailable = 0;
   let cookies = "";
@@ -362,7 +371,7 @@ async function executeMercadoLivreScrapeDo(query, options = {}) {
       championCount,
       verifiedCount,
       inspectedCount,
-      sampleTarget: Math.min(candidateTarget(), uniqueCandidates.length),
+      sampleTarget: uniqueCandidates.length,
     })) {
       break;
     }
@@ -561,8 +570,6 @@ async function enrichCandidate(candidate, querySpec, sessionId, initialCookies, 
         ...cachedItem,
         title: candidate.title || cachedItem.title,
         image: candidate.image || cachedItem.image,
-        price: Number(candidate.price || 0) || cachedItem.price,
-        soldQuantity: Number(candidate.soldQuantity || 0) || cachedItem.soldQuantity,
         salesParserVersion: SCRAPEDO_SALES_PARSER_VERSION,
         position: candidate.position || cachedItem.position,
         bestSeller: candidate.bestSeller ?? cachedItem.bestSeller,
@@ -571,23 +578,6 @@ async function enrichCandidate(candidate, querySpec, sessionId, initialCookies, 
       creditsUsed: 0,
       cacheHit: true,
     };
-  }
-
-  const listingSales = Number(candidate.soldQuantity || 0);
-  if (
-    !options.requireMetadata
-    && Number(candidate.price) > 0
-    && listingSales > 0
-    && matchesMarketplaceSearchResult(candidate.title, querySpec).ok
-  ) {
-    const listingItem = {
-      ...candidate,
-      href: parser.productDetailUrls(candidate)[0] || candidate.href,
-      soldQuantity: listingSales,
-      salesParserVersion: SCRAPEDO_SALES_PARSER_VERSION,
-    };
-    saveMarketItemCache(candidate, listingItem);
-    return { item: listingItem, creditsUsed: 0, cacheHit: false };
   }
 
   let combinedHtml = "";
@@ -613,7 +603,10 @@ async function enrichCandidate(candidate, querySpec, sessionId, initialCookies, 
     combinedHtml += ` ${response.html}`;
     finalUrl = response.resolvedUrl || parser.cleanMercadoLivreProductUrl(url) || url;
 
-    if (!options.requireMetadata && !parser.parseSalesFromText(combinedHtml)) {
+    if (
+      !options.requireMetadata
+      && (!parser.parseSalesFromText(combinedHtml) || !parser.parsePrice(combinedHtml))
+    ) {
       response = await requestPage(url, {
         sessionId,
         cookies,
@@ -627,12 +620,17 @@ async function enrichCandidate(candidate, querySpec, sessionId, initialCookies, 
         finalUrl = response.resolvedUrl || finalUrl;
       }
     }
-    if (options.requireMetadata || parser.parseSalesFromText(combinedHtml)) {
+    if (
+      options.requireMetadata
+      || (parser.parseSalesFromText(combinedHtml) && parser.parsePrice(combinedHtml))
+    ) {
       break;
     }
   }
 
   const title = parser.parseTitle(combinedHtml) || candidate.title;
+  const detailPrice = parser.parsePrice(combinedHtml);
+  const detailSales = parser.parseSalesFromText(combinedHtml);
   const item = {
     ...candidate,
     id: parser.extractItemId(finalUrl)
@@ -642,8 +640,10 @@ async function enrichCandidate(candidate, querySpec, sessionId, initialCookies, 
     title,
     href: finalUrl,
     image: parser.parseImage(combinedHtml) || candidate.image,
-    price: parser.parsePrice(combinedHtml) || candidate.price,
-    soldQuantity: parser.parseSalesFromText(combinedHtml) || candidate.soldQuantity || 0,
+    price: detailPrice,
+    soldQuantity: detailSales || 0,
+    priceSource: "product_page",
+    salesSource: "product_page",
     salesParserVersion: SCRAPEDO_SALES_PARSER_VERSION,
     categoryId: parser.parseCategoryId(combinedHtml) || candidate.categoryId || "",
     categoryName: parser.parseCategoryName(combinedHtml) || candidate.categoryName || "",
@@ -689,7 +689,7 @@ function getCachedMarketItem(candidate, querySpec, options = {}) {
       && Number(item.soldQuantity) > 0
       && hasTrustedCachedPrice(item)
       && hasTrustedCachedSales(item)
-      && (!options.requireMetadata || Number(item.metadataVersion || 0) >= MARKET_ITEM_METADATA_VERSION)
+      && (!options.requireMetadata || Number(item.metadataVersion || 0) >= SCRAPEDO_ITEM_METADATA_VERSION)
       && matchesMarketplaceSearchResult(item.title, querySpec).ok
     ) {
       return item;
@@ -724,7 +724,7 @@ function getCachedVerifiedItems(querySpec, options = {}) {
         && Number(item.soldQuantity) > 0
         && hasTrustedCachedPrice(item)
         && hasTrustedCachedSales(item)
-        && (options.requireMetadata === false || Number(item.metadataVersion || 0) >= MARKET_ITEM_METADATA_VERSION)
+        && (options.requireMetadata === false || Number(item.metadataVersion || 0) >= SCRAPEDO_ITEM_METADATA_VERSION)
         && matchesMarketplaceSearchResult(item.title, querySpec).ok
       ) {
         items.push(item);
@@ -782,7 +782,7 @@ function saveMarketItemCache(candidate, item) {
     item.href || candidate.href || "",
     JSON.stringify({
       ...item,
-      metadataVersion: MARKET_ITEM_METADATA_VERSION,
+      metadataVersion: SCRAPEDO_ITEM_METADATA_VERSION,
       priceParserVersion: SCRAPEDO_PRICE_PARSER_VERSION,
       salesParserVersion: SCRAPEDO_SALES_PARSER_VERSION,
     }),
@@ -790,11 +790,13 @@ function saveMarketItemCache(candidate, item) {
 }
 
 function hasTrustedCachedPrice(item) {
-  return Number(item?.priceParserVersion || 0) >= SCRAPEDO_PRICE_PARSER_VERSION;
+  return Number(item?.priceParserVersion || 0) >= SCRAPEDO_PRICE_PARSER_VERSION
+    && item?.priceSource === "product_page";
 }
 
 function hasTrustedCachedSales(item) {
-  return Number(item?.salesParserVersion || 0) >= SCRAPEDO_SALES_PARSER_VERSION;
+  return Number(item?.salesParserVersion || 0) >= SCRAPEDO_SALES_PARSER_VERSION
+    && item?.salesSource === "product_page";
 }
 
 function marketItemCacheKey(candidate) {
@@ -947,7 +949,13 @@ function dedupe(items) {
   for (const item of items) {
     const key = item.id || normalizedProductKey(item.title);
     const current = result.get(key);
-    if (!current || Number(item.position || 999) < Number(current.position || 999)) {
+    const itemVerified = item.salesSource === "product_page" && item.priceSource === "product_page";
+    const currentVerified = current?.salesSource === "product_page" && current?.priceSource === "product_page";
+    if (
+      !current
+      || (itemVerified && !currentVerified)
+      || (itemVerified === currentVerified && Number(item.position || 999) < Number(current.position || 999))
+    ) {
       result.set(key, item);
     }
   }
@@ -1080,21 +1088,78 @@ function recordProviderUsage(queryKey, credits, status) {
   `).run(queryKey || null, Math.max(0, Number(credits || 0)), status);
 }
 
-function withProviderSlot(task) {
+export function withScrapeDoProviderSlot(task, options = {}) {
   return new Promise((resolve, reject) => {
-    providerQueue.push({ task, resolve, reject });
+    const deadlineAt = Number(options.deadlineAt || 0);
+    const entry = {
+      task,
+      resolve,
+      reject,
+      deadlineAt,
+      started: false,
+      settled: false,
+      timer: null,
+    };
+    if (deadlineAt) {
+      const waitMs = deadlineAt - Date.now();
+      if (waitMs <= 0) {
+        reject(new Error("A pesquisa expirou antes de entrar na fila da fonte de dados."));
+        return;
+      }
+      entry.timer = setTimeout(() => {
+        if (entry.started || entry.settled) {
+          return;
+        }
+        entry.settled = true;
+        const index = providerQueue.indexOf(entry);
+        if (index >= 0) {
+          providerQueue.splice(index, 1);
+        }
+        reject(new Error("A pesquisa expirou enquanto aguardava a fonte de dados."));
+      }, waitMs);
+    }
+    providerQueue.push(entry);
     drainProviderQueue();
   });
 }
 
 function drainProviderQueue() {
-  const limit = Math.min(10, Math.max(1, Number(process.env.SCRAPEDO_MAX_CONCURRENCY || 4)));
+  const configuredLimit = Math.min(10, Math.max(1, Number(process.env.SCRAPEDO_MAX_CONCURRENCY || 4)));
+  const providerConcurrency = Number(getSetting("scrapedo_provider_concurrency") || 0);
+  const accountSearchLimit = providerConcurrency > 0
+    ? Math.max(1, Math.floor(providerConcurrency / detailConcurrency()))
+    : configuredLimit;
+  const limit = Math.min(configuredLimit, accountSearchLimit);
   while (activeProviderSearches < limit && providerQueue.length) {
     const entry = providerQueue.shift();
+    if (entry.settled) {
+      continue;
+    }
+    if (entry.deadlineAt && entry.deadlineAt <= Date.now()) {
+      clearTimeout(entry.timer);
+      entry.settled = true;
+      entry.reject(new Error("A pesquisa expirou antes de entrar na fonte de dados."));
+      continue;
+    }
+    entry.started = true;
+    clearTimeout(entry.timer);
     activeProviderSearches += 1;
     Promise.resolve()
       .then(entry.task)
-      .then(entry.resolve, entry.reject)
+      .then(
+        (value) => {
+          if (!entry.settled) {
+            entry.settled = true;
+            entry.resolve(value);
+          }
+        },
+        (error) => {
+          if (!entry.settled) {
+            entry.settled = true;
+            entry.reject(error);
+          }
+        },
+      )
       .finally(() => {
         activeProviderSearches -= 1;
         drainProviderQueue();

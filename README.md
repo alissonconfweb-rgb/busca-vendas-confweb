@@ -1,6 +1,6 @@
 # Busca Vendas - Confweb
 
-Aplicacao web para mostrar o potencial de vendas de um produto na internet, quanto os anuncios campeoes ja venderam e se existe espaco para entrar nesse mercado. O Mercado Livre e a primeira fonte de evidencias, e nao o unico canal de venda analisado pelo posicionamento do produto.
+Aplicacao web para mostrar o potencial de vendas de um produto, quanto os anuncios campeoes ja venderam e se existe espaco para entrar nesse mercado. A Scrape.do coleta as evidencias publicas dos anuncios do Mercado Livre e a base interna reaproveita somente resultados ainda validos.
 
 ## O Que Tem No Projeto
 
@@ -9,8 +9,8 @@ Aplicacao web para mostrar o potencial de vendas de um produto na internet, quan
 - Banco SQLite local em `data/busca-vendas.sqlite`.
 - Login/cadastro real, sessoes persistentes e painel admin.
 - Controle de plano, limite de pesquisas, historico, suporte, dicas e contatos comerciais.
-- Integracao oficial com o catalogo, detalhes de produtos e ranking de mais vendidos do Mercado Livre.
-- Fontes externas opcionais para completar categorias que nao exponham tres produtos com vendas pela API oficial.
+- Coleta via Scrape.do com validacao de preco e vendas na pagina de cada anuncio.
+- Cache versionado que descarta metricas antigas ou sem origem comprovada.
 
 ## Requisitos
 
@@ -19,7 +19,7 @@ Aplicacao web para mostrar o potencial de vendas de um produto na internet, quan
 - Acesso a shell/terminal para instalar dependencias e rodar build.
 - Em producao, use HTTPS para dominio proprio.
 
-> Importante: o projeto usa SQLite por meio de `sql.js`, sem depender do modulo experimental `node:sqlite`.
+> Importante: o projeto usa SQLite por meio de `better-sqlite3`, sem depender do modulo experimental `node:sqlite`.
 
 ## Rodar Localmente
 
@@ -69,16 +69,15 @@ Use `.env.example` como base. As principais sao:
 - `ADMIN_EMAIL` e `ADMIN_PASSWORD`: admin inicial.
 - `SESSION_SECRET`: chave obrigatoria para sessoes seguras.
 - `PUBLIC_URL`: URL final da aplicacao em producao.
-- `MELI_CLIENT_ID`, `MELI_CLIENT_SECRET` e `MELI_REDIRECT_URI`: credenciais da fonte oficial do Mercado Livre.
-- `SCRAPEDO_API_TOKEN`: fallback residencial economico usado somente quando a fonte oficial nao completar o Top 3.
+- `SCRAPEDO_API_TOKEN`: credencial obrigatoria da fonte principal de novas pesquisas.
+- `MELI_CLIENT_ID`, `MELI_CLIENT_SECRET` e `MELI_REDIRECT_URI`: opcionais e usados apenas no diagnostico administrativo da conta Mercado Livre.
 
 ## Ordem Das Fontes
 
-1. Base interna compartilhada, se a pesquisa ainda estiver dentro do prazo configurado.
-2. Catalogo, detalhes de produtos e ranking oficial de mais vendidos do Mercado Livre.
-3. Scrape.do com rede residencial brasileira, somente para completar resultados sem dados oficiais suficientes.
+1. Base interna compartilhada, somente se o resultado usar os parsers atuais e ainda estiver dentro do prazo configurado.
+2. Scrape.do para consultar a listagem e validar preco e vendas na pagina de cada anuncio.
 
-Zyte, Oxylabs, navegador local e proxy proprio ficam desativados por padrao.
+Mercado Livre Search oficial, Zyte, Oxylabs, navegador local e proxy proprio nao participam do fluxo de pesquisa.
 
 Nunca commite `.env`, banco SQLite real, arquivos de build ou credenciais.
 

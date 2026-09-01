@@ -20,7 +20,7 @@ const cache = new Map();
 const inFlight = new Map();
 let diskCacheLoaded = false;
 
-export const MERCADO_LIVRE_SALES_PARSER_VERSION = 1;
+export const MERCADO_LIVRE_SALES_PARSER_VERSION = 2;
 
 export function isZyteConfigured() {
   return Boolean(zyteApiKey());
@@ -330,7 +330,9 @@ function extractSearchItems(html) {
         href,
         price: parsePrice(block),
         soldQuantity: parseSalesFromText(block),
-        salesParserVersion: MERCADO_LIVRE_SALES_PARSER_VERSION,
+        // A listagem ajuda a ordenar candidatos, mas não comprova que a
+        // quantidade pertence ao anúncio em vez do vendedor.
+        salesParserVersion: 0,
         categoryId: parseCategoryId(block),
         categoryName: parseCategoryName(block),
         weightKg: parseWeightKg(`${title} ${block}`),
@@ -371,7 +373,7 @@ function extractStructuredProducts(productList) {
         href,
         price,
         soldQuantity: null,
-        salesParserVersion: MERCADO_LIVRE_SALES_PARSER_VERSION,
+        salesParserVersion: 0,
         categoryId: "",
         categoryName: productList?.categoryName || "",
         weightKg: parseWeightKg(`${title} ${JSON.stringify(product.additionalProperties || [])}`),
@@ -536,6 +538,12 @@ function parsePrice(text) {
     return structuredCurrentPrice;
   }
 
+  // Em uma página de produto, um preço genérico pode pertencer a um carrossel
+  // ou recomendação. Sem um marcador do anúncio, é mais seguro rejeitá-lo.
+  if (/<h1\b|ui-pdp-(?:container|title|header)/i.test(source)) {
+    return 0;
+  }
+
   const value = parseNumberValue(firstMatch(source, [
     /itemprop=["']price["'][^>]*content=["']([\d.,]+)/i,
     /"price"\s*:\s*"?([\d.,]+)"?/i,
@@ -631,10 +639,19 @@ function productSalesVisibleText(source) {
     return cleanText(visibleHtml.slice(0, 12_000));
   }
 
-  // The public sales badge belongs to the PDP header, close to the H1. Limiting
-  // this scope prevents carousels and recommendations from lending their sales
-  // count to the advertised product.
-  return cleanText(visibleHtml.slice(Math.max(0, anchorIndex - 5_000), anchorIndex + 8_000));
+  const scopeStart = Math.max(0, anchorIndex - 3_500);
+  const maximumEnd = Math.min(visibleHtml.length, anchorIndex + 4_500);
+  const afterHeading = visibleHtml.slice(anchorIndex, maximumEnd);
+  const sellerOrRelatedIndex = afterHeading.search(
+    /ui-pdp-seller|vendido\s+por|mercadol[ií]der|produtos?\s+relacionados?|recommendations?/i,
+  );
+  const scopeEnd = sellerOrRelatedIndex >= 0
+    ? anchorIndex + sellerOrRelatedIndex
+    : maximumEnd;
+
+  // O selo de vendas do produto fica no cabeçalho do PDP. O bloco do vendedor
+  // começa depois dele e traz as vendas da loja, que nunca podem ser herdadas.
+  return cleanText(visibleHtml.slice(scopeStart, scopeEnd));
 }
 
 function salesUnitMultiplier(unit) {
