@@ -15,7 +15,7 @@ import { minimumChampionSales } from "./champion-policy.mjs";
 
 const DEFAULT_ENDPOINT = "https://api.scrape.do/";
 const DEFAULT_DETAIL_LIMIT = 12;
-const DEFAULT_SEARCH_PAGES = 1;
+const DEFAULT_SEARCH_PAGES = 2;
 const SUPPLEMENTAL_SEARCH_PAGES = 1;
 const SUPPLEMENTAL_QUERY_VARIANTS = 2;
 const EMERGING_MARKET_SAMPLE_SIZE = 6;
@@ -169,13 +169,13 @@ export function scrapeDoUsageSummary() {
 }
 
 export function ensureScrapeDoSearchDepth() {
-  if (getSetting("scrapedo_latency_policy_version") !== "2") {
+  if (getSetting("scrapedo_latency_policy_version") !== "3") {
     setSetting("scrapedo_search_pages", String(DEFAULT_SEARCH_PAGES));
     setSetting("scrapedo_detail_limit", String(DEFAULT_DETAIL_LIMIT));
     setSetting("scrapedo_candidate_target", String(EMERGING_MARKET_SAMPLE_SIZE));
     setSetting("scrapedo_detail_concurrency", String(DEFAULT_DETAIL_CONCURRENCY));
     setSetting("scrapedo_timeout_ms", String(DEFAULT_REQUEST_TIMEOUT_MS));
-    setSetting("scrapedo_latency_policy_version", "2");
+    setSetting("scrapedo_latency_policy_version", "3");
   }
 }
 
@@ -342,10 +342,6 @@ async function executeMercadoLivreScrapeDo(query, options = {}) {
         )),
     );
 
-    const uniquePageCandidates = dedupe(candidates);
-    if (uniquePageCandidates.length >= candidateTarget()) {
-      break;
-    }
   }
 
   const uniqueCandidates = rankCandidatesByPublicSales(dedupe(candidates)).slice(0, detailLimit());

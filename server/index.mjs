@@ -1711,7 +1711,7 @@ async function handleAdmin(req, res, url, currentUser) {
     }
     setSetting("scrapedo_enabled", "true");
     setSetting("scrapedo_endpoint", "https://api.scrape.do/");
-    setSetting("scrapedo_search_pages", "1");
+    setSetting("scrapedo_search_pages", "2");
     setSetting("scrapedo_detail_limit", "12");
     setSetting("scrapedo_candidate_target", "6");
     setSetting("scrapedo_detail_concurrency", "3");
@@ -2369,7 +2369,7 @@ function safeSettings(user) {
     settings.zyte_api_key = "";
     settings.scrapedo_enabled = settings.scrapedo_enabled || process.env.SCRAPEDO_ENABLED || "true";
     settings.scrapedo_endpoint = settings.scrapedo_endpoint || process.env.SCRAPEDO_ENDPOINT || "https://api.scrape.do/";
-    settings.scrapedo_search_pages = settings.scrapedo_search_pages || process.env.SCRAPEDO_SEARCH_PAGES || "1";
+    settings.scrapedo_search_pages = settings.scrapedo_search_pages || process.env.SCRAPEDO_SEARCH_PAGES || "2";
     settings.scrapedo_detail_limit = settings.scrapedo_detail_limit || process.env.SCRAPEDO_DETAIL_LIMIT || "12";
     settings.scrapedo_timeout_ms = settings.scrapedo_timeout_ms || process.env.SCRAPEDO_TIMEOUT_MS || "18000";
     settings.scrapedo_api_token_configured = settings.scrapedo_api_token || process.env.SCRAPEDO_API_TOKEN ? "true" : "";

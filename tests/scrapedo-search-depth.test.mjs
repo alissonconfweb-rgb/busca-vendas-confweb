@@ -25,14 +25,15 @@ after(() => {
   rmSync(tempDir, { recursive: true, force: true });
 });
 
-test("migra a varredura antiga para a politica de baixa latencia", () => {
-  setSetting("scrapedo_search_pages", "2");
+test("migra a varredura antiga para duas paginas de ranking", () => {
+  setSetting("scrapedo_latency_policy_version", "2");
+  setSetting("scrapedo_search_pages", "1");
   setSetting("scrapedo_detail_limit", "9");
 
   ensureScrapeDoSearchDepth();
 
   assert.deepEqual(scrapeDoSearchPolicy(), {
-    pages: 1,
+    pages: 2,
     detailLimit: 12,
     candidateTarget: 6,
     detailConcurrency: 3,
@@ -40,7 +41,7 @@ test("migra a varredura antiga para a politica de baixa latencia", () => {
 });
 
 test("preserva a politica otimizada depois da migracao", () => {
-  setSetting("scrapedo_latency_policy_version", "2");
+  setSetting("scrapedo_latency_policy_version", "3");
   setSetting("scrapedo_search_pages", "4");
   setSetting("scrapedo_detail_limit", "48");
 
