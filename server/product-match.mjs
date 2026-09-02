@@ -53,11 +53,14 @@ const TOKEN_CORRECTIONS = new Map([
   ["bluetoot", "bluetooth"],
   ["blutooht", "bluetooth"],
   ["blutooth", "bluetooth"],
+  ["calsa", "calca"],
+  ["calssa", "calca"],
   ["escrinaninha", "escrivaninha"],
   ["escrivanina", "escrivaninha"],
   ["escrivaninhaa", "escrivaninha"],
   ["langerie", "lingerie"],
   ["rpk", "npk"],
+  ["windbanner", "wind banner"],
 ]);
 const SUPPLEMENT_EXTRA_TERMS = [
   "albumina",
@@ -121,7 +124,7 @@ export function matchesProductQuery(title, specOrQuery) {
     return { ok: false, reason: "Medida/peso diferente da busca." };
   }
 
-  if (!spec.allowsBundle && hasBundleSignal(title)) {
+  if (hasUnrequestedBundle(title, spec)) {
     return { ok: false, reason: "Resultado parece kit/combo, mas a busca não pediu kit." };
   }
 
@@ -164,7 +167,7 @@ export function matchesMarketplaceSearchResult(title, specOrQuery) {
     return { ok: false, reason: "Medida/peso diferente da busca.", matchMode: "rejected" };
   }
 
-  if (!spec.allowsBundle && hasBundleSignal(title)) {
+  if (hasUnrequestedBundle(title, spec)) {
     return { ok: false, reason: "Resultado parece kit/combo, mas a busca não pediu kit.", matchMode: "rejected" };
   }
 
@@ -214,7 +217,7 @@ export function tokenizeProductText(text) {
   const withoutMeasures = stripMeasures(text);
   return normalizeText(withoutMeasures)
     .split(" ")
-    .map(correctToken)
+    .flatMap((token) => correctToken(token).split(" "))
     .map((token) => token.trim())
     .filter((token) => token && !STOPWORDS.has(token));
 }
@@ -314,17 +317,29 @@ function hasUnrequestedSupplementTerms(title, normalizedQuery) {
   return SUPPLEMENT_EXTRA_TERMS.some((term) => !normalizedQuery.includes(term) && normalizedTitle.includes(term));
 }
 
+function hasUnrequestedBundle(title, spec) {
+  if (spec.allowsBundle || !hasBundleSignal(title)) {
+    return false;
+  }
+  const normalizedTitle = normalizeText(title);
+  const isCompleteProduct = /\bkit completo\b/.test(normalizedTitle);
+  const hasExplicitQuantity = /\b(?:kit|pack|pacote)(?:\s+completo)?\s+(?:com\s+)?\d+\b/.test(normalizedTitle);
+  return !isCompleteProduct || hasExplicitQuantity;
+}
+
 function tokenMatchesTitle(token, titleTokens, normalizedTitle) {
   if (titleTokens.has(token)) {
     return true;
   }
 
-  if (token.length < 6) {
+  if (token.length < 5) {
     return false;
   }
 
   return [...titleTokens].some((titleToken) =>
-    Math.abs(titleToken.length - token.length) <= 1 && levenshteinDistance(titleToken, token) <= 1,
+    titleToken[0] === token[0]
+    && Math.abs(titleToken.length - token.length) <= 1
+    && levenshteinDistance(titleToken, token) <= 1,
   );
 }
 

@@ -13,6 +13,7 @@ const {
   hasEnoughInspectedCandidates,
   isUsableMercadoLivreHtml,
   rankCandidatesByPublicSales,
+  rankingVerificationTarget,
   scrapeDoSearchPolicy,
   shouldUseScrapeDoItemCache,
 } = await import("../server/scrapedo.mjs");
@@ -98,4 +99,21 @@ test("ordena toda a listagem pelas vendas antes de escolher os tres campeoes", (
   ]);
 
   assert.deepEqual(ranked.slice(0, 3).map((item) => item.id), ["d", "a", "b"]);
+});
+
+test("valida primeiro o Top 3 quando a lista vincula vendas ao item_id", () => {
+  const trusted = Array.from({ length: 12 }, (_, index) => ({
+    id: `MLB${index}`,
+    soldQuantity: 12_000 - index * 100,
+    salesParserVersion: 3,
+    salesSource: "marketplace_search_backend",
+  }));
+  const untrusted = trusted.map((item) => ({
+    ...item,
+    salesParserVersion: 0,
+    salesSource: "",
+  }));
+
+  assert.equal(rankingVerificationTarget(trusted), 3);
+  assert.equal(rankingVerificationTarget(untrusted), 12);
 });

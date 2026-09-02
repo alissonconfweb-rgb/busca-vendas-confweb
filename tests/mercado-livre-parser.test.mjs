@@ -171,3 +171,50 @@ test("nao herda vendas de produtos relacionados em uma pagina sem vendas", () =>
 
   assert.equal(parser.parseSalesFromText(html), null);
 });
+
+test("associa vendas estruturadas da busca ao item_id correto antes de ranquear", () => {
+  const html = `
+    <ol>
+      <li class="ui-search-layout__item">
+        <a href="https://www.mercadolivre.com.br/produto-a/p/MLB111?pdp_filters=item_id:MLB111">Produto A</a>
+        <div class="poly-price__current"><span class="andes-money-amount__fraction">140</span></div>
+      </li>
+      <li class="ui-search-layout__item">
+        <a href="https://www.mercadolivre.com.br/produto-b/p/MLB222?pdp_filters=item_id:MLB222">Produto B</a>
+        <div class="poly-price__current"><span class="andes-money-amount__fraction">200</span></div>
+      </li>
+    </ol>
+    <script>
+      window.__DATA__ = "{\\"printed_result\\":[{\\"item_id\\":\\"MLB111\\",\\"sold_quantity\\":100,\\"position\\":4},{\\"item_id\\":\\"MLB222\\",\\"sold_quantity\\":10000,\\"position\\":0}]}";
+    </script>
+  `;
+
+  const metrics = parser.parseSearchResultMetrics(html);
+  const items = parser.extractSearchItems(html);
+
+  assert.deepEqual(metrics.get("MLB111"), { soldQuantity: 100, position: 5 });
+  assert.deepEqual(metrics.get("MLB222"), { soldQuantity: 10_000, position: 1 });
+  assert.deepEqual(
+    items.map((item) => ({ id: item.id, sales: item.soldQuantity, source: item.salesSource })),
+    [
+      { id: "MLB111", sales: 100, source: "marketplace_search_backend" },
+      { id: "MLB222", sales: 10_000, source: "marketplace_search_backend" },
+    ],
+  );
+});
+
+test("nao atribui a um card vendas estruturadas de outro item", () => {
+  const html = `
+    <li class="ui-search-layout__item">
+      <a href="https://produto.mercadolivre.com.br/MLB-333-_JM">Produto sem métrica própria</a>
+      <div class="poly-price__current"><span class="andes-money-amount__fraction">39</span></div>
+      <span>Vendedor MercadoLíder +5 mil vendas</span>
+    </li>
+    <script>{"printed_result":[{"item_id":"MLB999","sold_quantity":5000,"position":0}]}</script>
+  `;
+
+  const [item] = parser.extractSearchItems(html);
+  assert.equal(item.id, "MLB333");
+  assert.equal(item.soldQuantity, null);
+  assert.equal(item.salesSource, "");
+});

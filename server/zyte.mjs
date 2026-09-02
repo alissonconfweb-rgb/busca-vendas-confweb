@@ -20,7 +20,7 @@ const cache = new Map();
 const inFlight = new Map();
 let diskCacheLoaded = false;
 
-export const MERCADO_LIVRE_SALES_PARSER_VERSION = 2;
+export const MERCADO_LIVRE_SALES_PARSER_VERSION = 3;
 
 export function isZyteConfigured() {
   return Boolean(zyteApiKey());
@@ -319,20 +319,24 @@ function zyteNetworkOptions(options = {}) {
 }
 
 function extractSearchItems(html) {
+  const structuredMetrics = parseSearchResultMetrics(html);
   return splitSearchBlocks(html)
     .map((block, index) => {
       const href = normalizeMercadoLivreUrl(parseHref(block));
       const title = cleanText(parseTitle(block) || parseAnchorText(block));
+      const id = extractItemId(href) || extractProductId(href) || normalizedProductKey(title);
+      const metrics = structuredMetrics.get(id);
       return {
-        id: extractItemId(href) || extractProductId(href) || normalizedProductKey(title),
+        id,
         title,
         image: parseImage(block),
         href,
         price: parsePrice(block),
-        soldQuantity: parseSalesFromText(block),
-        // A listagem ajuda a ordenar candidatos, mas não comprova que a
-        // quantidade pertence ao anúncio em vez do vendedor.
-        salesParserVersion: 0,
+        soldQuantity: metrics?.soldQuantity || parseSalesFromText(block),
+        salesSource: metrics ? "marketplace_search_backend" : "",
+        // O bloco printed_result associa sold_quantity ao item_id. Textos
+        // visíveis soltos da listagem continuam sem ser tratados como prova.
+        salesParserVersion: metrics ? MERCADO_LIVRE_SALES_PARSER_VERSION : 0,
         categoryId: parseCategoryId(block),
         categoryName: parseCategoryName(block),
         weightKg: parseWeightKg(`${title} ${block}`),
@@ -344,10 +348,82 @@ function extractSearchItems(html) {
         freeShipping: parseFreeShipping(block),
         bestSeller: /mais vendido/i.test(block),
         isAd: /is_advertising=true|promoted|patrocinado/i.test(block),
-        position: index + 1,
+        position: metrics?.position || index + 1,
       };
     })
     .filter((item) => item.title && item.href && item.price > 0);
+}
+
+function parseSearchResultMetrics(html) {
+  const source = decodeText(html);
+  const metrics = new Map();
+  let cursor = 0;
+
+  while (cursor < source.length) {
+    const keyIndex = source.indexOf('"printed_result"', cursor);
+    if (keyIndex < 0) {
+      break;
+    }
+    const arrayStart = source.indexOf("[", keyIndex);
+    if (arrayStart < 0) {
+      break;
+    }
+    const arrayEnd = findMatchingArrayEnd(source, arrayStart);
+    if (arrayEnd < 0) {
+      cursor = arrayStart + 1;
+      continue;
+    }
+
+    const region = source.slice(arrayStart + 1, arrayEnd);
+    const itemPattern = /"item_id"\s*:\s*"(MLB\d+)"([\s\S]*?)(?="item_id"\s*:|$)/gi;
+    for (const match of region.matchAll(itemPattern)) {
+      const id = String(match[1] || "").toUpperCase();
+      const soldQuantity = Number(match[2].match(/"sold_quantity"\s*:\s*(\d+)/i)?.[1] || 0);
+      const zeroBasedPosition = Number(match[2].match(/"position"\s*:\s*(\d+)/i)?.[1]);
+      if (!id || !Number.isFinite(soldQuantity) || soldQuantity <= 0) {
+        continue;
+      }
+      const position = Number.isFinite(zeroBasedPosition) ? zeroBasedPosition + 1 : Number.MAX_SAFE_INTEGER;
+      const current = metrics.get(id);
+      if (!current || position < current.position) {
+        metrics.set(id, { soldQuantity: Math.round(soldQuantity), position });
+      }
+    }
+    cursor = arrayEnd + 1;
+  }
+
+  return metrics;
+}
+
+function findMatchingArrayEnd(source, arrayStart) {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let index = arrayStart; index < source.length; index += 1) {
+    const character = source[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === "\\") {
+        escaped = true;
+      } else if (character === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (character === '"') {
+      inString = true;
+    } else if (character === "[") {
+      depth += 1;
+    } else if (character === "]") {
+      depth -= 1;
+      if (depth === 0) {
+        return index;
+      }
+    }
+  }
+  return -1;
 }
 
 function extractStructuredProducts(productList) {
@@ -1034,6 +1110,7 @@ export const mercadoLivreHtmlParser = Object.freeze({
   parseListingTypeId,
   parseLogisticType,
   parsePrice,
+  parseSearchResultMetrics,
   parseSalesFromText,
   parseSellerId,
   parseShippingDimensions,

@@ -26,7 +26,7 @@ const MINIMUM_REQUEST_BUDGET_MS = 1_500;
 export const SCRAPEDO_ITEM_METADATA_VERSION = 5;
 export const SCRAPEDO_PRICE_PARSER_VERSION = 3;
 export const SCRAPEDO_SALES_PARSER_VERSION = MERCADO_LIVRE_SALES_PARSER_VERSION;
-const SALES_RANKING_STRATEGY = "visible_sales_v5";
+const SALES_RANKING_STRATEGY = "item_scoped_search_sales_v6";
 const activeSearches = new Map();
 const providerQueue = [];
 const providerInstanceId = `${process.pid}-${Date.now()}-${randomInt(100_000, 999_999)}`;
@@ -354,6 +354,7 @@ async function executeMercadoLivreScrapeDo(query, options = {}) {
   }
   const enriched = [];
   const batchSize = detailConcurrency();
+  const verificationTarget = rankingVerificationTarget(uniqueCandidates);
   for (let offset = 0; offset < uniqueCandidates.length; offset += batchSize) {
     const batch = await mapWithConcurrency(uniqueCandidates.slice(offset, offset + batchSize), batchSize, async (candidate) => (
       enrichCandidate(candidate, querySpec, sessionId, cookies, {
@@ -378,7 +379,7 @@ async function executeMercadoLivreScrapeDo(query, options = {}) {
       championCount,
       verifiedCount,
       inspectedCount,
-      sampleTarget: uniqueCandidates.length,
+      sampleTarget: verificationTarget,
     })) {
       break;
     }
@@ -572,6 +573,8 @@ async function enrichCandidate(candidate, querySpec, sessionId, initialCookies, 
     ? getCachedMarketItem(candidate, querySpec, options)
     : null;
   if (cachedItem) {
+    const currentSales = trustedCandidateSales(candidate);
+    const cachedSales = Number(cachedItem.soldQuantity || 0);
     return {
       item: {
         ...cachedItem,
@@ -581,6 +584,10 @@ async function enrichCandidate(candidate, querySpec, sessionId, initialCookies, 
         position: candidate.position || cachedItem.position,
         bestSeller: candidate.bestSeller ?? cachedItem.bestSeller,
         isAd: candidate.isAd ?? cachedItem.isAd,
+        ...(currentSales > cachedSales ? {
+          soldQuantity: currentSales,
+          salesSource: "marketplace_search_backend",
+        } : {}),
       },
       creditsUsed: 0,
       cacheHit: true,
@@ -612,7 +619,10 @@ async function enrichCandidate(candidate, querySpec, sessionId, initialCookies, 
 
     if (
       !options.requireMetadata
-      && (!parser.parseSalesFromText(combinedHtml) || !parser.parsePrice(combinedHtml))
+      && (
+        (!parser.parseSalesFromText(combinedHtml) && !trustedCandidateSales(candidate))
+        || !parser.parsePrice(combinedHtml)
+      )
     ) {
       response = await requestPage(url, {
         sessionId,
@@ -638,6 +648,8 @@ async function enrichCandidate(candidate, querySpec, sessionId, initialCookies, 
   const title = parser.parseTitle(combinedHtml) || candidate.title;
   const detailPrice = parser.parsePrice(combinedHtml);
   const detailSales = parser.parseSalesFromText(combinedHtml);
+  const searchSales = trustedCandidateSales(candidate);
+  const soldQuantity = Math.max(Number(detailSales || 0), searchSales);
   const item = {
     ...candidate,
     id: parser.extractItemId(finalUrl)
@@ -648,9 +660,11 @@ async function enrichCandidate(candidate, querySpec, sessionId, initialCookies, 
     href: finalUrl,
     image: parser.parseImage(combinedHtml) || candidate.image,
     price: detailPrice,
-    soldQuantity: detailSales || 0,
+    soldQuantity,
     priceSource: "product_page",
-    salesSource: "product_page",
+    salesSource: Number(detailSales || 0) >= searchSales && detailSales
+      ? "product_page"
+      : "marketplace_search_backend",
     salesParserVersion: SCRAPEDO_SALES_PARSER_VERSION,
     categoryId: parser.parseCategoryId(combinedHtml) || candidate.categoryId || "",
     categoryName: parser.parseCategoryName(combinedHtml) || candidate.categoryName || "",
@@ -803,7 +817,18 @@ function hasTrustedCachedPrice(item) {
 
 function hasTrustedCachedSales(item) {
   return Number(item?.salesParserVersion || 0) >= SCRAPEDO_SALES_PARSER_VERSION
-    && item?.salesSource === "product_page";
+    && ["product_page", "marketplace_search_backend"].includes(item?.salesSource);
+}
+
+function trustedCandidateSales(candidate) {
+  if (
+    Number(candidate?.salesParserVersion || 0) < SCRAPEDO_SALES_PARSER_VERSION
+    || candidate?.salesSource !== "marketplace_search_backend"
+  ) {
+    return 0;
+  }
+  const quantity = Number(candidate?.soldQuantity || 0);
+  return Number.isFinite(quantity) && quantity > 0 ? Math.round(quantity) : 0;
 }
 
 function marketItemCacheKey(candidate) {
@@ -956,8 +981,8 @@ function dedupe(items) {
   for (const item of items) {
     const key = item.id || normalizedProductKey(item.title);
     const current = result.get(key);
-    const itemVerified = item.salesSource === "product_page" && item.priceSource === "product_page";
-    const currentVerified = current?.salesSource === "product_page" && current?.priceSource === "product_page";
+    const itemVerified = hasTrustedCachedSales(item) && item.priceSource === "product_page";
+    const currentVerified = hasTrustedCachedSales(current) && current?.priceSource === "product_page";
     if (
       !current
       || (itemVerified && !currentVerified)
@@ -977,6 +1002,16 @@ export function rankCandidatesByPublicSales(items) {
     }
     return Number(a.position || 999) - Number(b.position || 999);
   });
+}
+
+export function rankingVerificationTarget(items) {
+  const candidates = Array.isArray(items) ? items : [];
+  if (candidates.length < 3) {
+    return candidates.length;
+  }
+  return candidates.slice(0, 3).every((candidate) => trustedCandidateSales(candidate) > 0)
+    ? 3
+    : candidates.length;
 }
 
 async function mapWithConcurrency(values, concurrency, worker) {

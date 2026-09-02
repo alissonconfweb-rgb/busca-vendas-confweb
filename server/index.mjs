@@ -1090,7 +1090,7 @@ function cachedResultMatchesQuery(result, query) {
   }
   if (
     result.source === "scrapedo_mercado_livre"
-    && result.rankingStrategy !== "visible_sales_v5"
+    && result.rankingStrategy !== "item_scoped_search_sales_v6"
   ) {
     return false;
   }

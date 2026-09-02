@@ -33,6 +33,31 @@ test("corrige langerie para lingerie antes de consultar o marketplace", () => {
   );
 });
 
+test("corrige calsa e aceita pequenas trocas em palavras de cinco letras", () => {
+  assert.equal(normalizeProductSearchQuery("Calsa Jeans"), "calca jeans");
+  assert.equal(
+    matchesProductQuery("Calça Jeans Feminina", buildProductQuerySpec("calsa jeans")).ok,
+    true,
+  );
+  assert.equal(
+    matchesProductQuery("Calça Jeans Feminina", buildProductQuerySpec("calssa jeans")).ok,
+    true,
+  );
+});
+
+test("separa windbanner para consultar a rota estável do marketplace", () => {
+  assert.equal(normalizeProductSearchQuery("Windbanner"), "wind banner");
+  assert.deepEqual(buildProductQuerySpec("Windbanner").tokens, ["wind", "banner"]);
+  assert.equal(
+    matchesProductQuery("Wind Banner Personalizado Kit Completo", buildProductQuerySpec("Windbanner")).ok,
+    true,
+  );
+  assert.equal(
+    matchesProductQuery("Kit 10 Wind Banner Personalizado", buildProductQuerySpec("Windbanner")).ok,
+    false,
+  );
+});
+
 test("entende erro de digitacao e trata MDF como caracteristica opcional", () => {
   const spec = buildProductQuerySpec("escrinaninha de mdf");
 

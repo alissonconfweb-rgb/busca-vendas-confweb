@@ -93,9 +93,9 @@ test("entrega uma coleta concluída depois da resposta inicial sem cobrar duas v
   const result = {
     ok: true,
     source: "scrapedo_mercado_livre",
-    rankingStrategy: "visible_sales_v5",
+    rankingStrategy: "item_scoped_search_sales_v6",
     priceParserVersion: 3,
-    salesParserVersion: 2,
+    salesParserVersion: 3,
     metricsMode: "sales",
     salesAvailable: true,
     message: "Dados reais retornados pelo Mercado Livre.",
