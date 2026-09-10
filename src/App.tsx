@@ -679,6 +679,36 @@ function formJson(form: HTMLFormElement) {
   return Object.fromEntries(new FormData(form).entries());
 }
 
+function secureRandomIndex(max: number) {
+  const bytes = new Uint8Array(1);
+  const unbiasedLimit = 256 - (256 % max);
+  do {
+    crypto.getRandomValues(bytes);
+  } while (bytes[0] >= unbiasedLimit);
+  return bytes[0] % max;
+}
+
+function generateSuggestedPassword() {
+  const uppercase = "ABCDEFGHJKLMNPQRSTUVWXYZ";
+  const lowercase = "abcdefghijkmnopqrstuvwxyz";
+  const numbers = "23456789";
+  const symbols = "!@#$%&*";
+  const allCharacters = `${uppercase}${lowercase}${numbers}${symbols}`;
+  const characters = [uppercase, lowercase, numbers, symbols]
+    .map((group) => group[secureRandomIndex(group.length)]);
+
+  while (characters.length < 14) {
+    characters.push(allCharacters[secureRandomIndex(allCharacters.length)]);
+  }
+
+  for (let index = characters.length - 1; index > 0; index -= 1) {
+    const swapIndex = secureRandomIndex(index + 1);
+    [characters[index], characters[swapIndex]] = [characters[swapIndex], characters[index]];
+  }
+
+  return characters.join("");
+}
+
 function newCheckoutIdempotencyKey() {
   if (typeof crypto.randomUUID === "function") {
     return crypto.randomUUID().replace(/-/g, "_");
@@ -4423,6 +4453,67 @@ function Stat({ title, value, icon }: { title: string; value: string; icon: Reac
   );
 }
 
+function AdminPasswordField({
+  id,
+  name,
+  label,
+  placeholder,
+  required = false,
+}: {
+  id: string;
+  name: string;
+  label: string;
+  placeholder: string;
+  required?: boolean;
+}) {
+  const [password, setPassword] = useState("");
+  const [visible, setVisible] = useState(false);
+
+  const suggestPassword = () => {
+    setPassword(generateSuggestedPassword());
+    setVisible(true);
+  };
+
+  return (
+    <div className="admin-password-control">
+      <label className="admin-password-label" htmlFor={id}>{label}</label>
+      <div className="admin-password-actions">
+        <div className="password-field">
+          <input
+            id={id}
+            name={name}
+            type={visible ? "text" : "password"}
+            value={password}
+            minLength={10}
+            autoComplete="new-password"
+            autoCapitalize="off"
+            spellCheck={false}
+            placeholder={placeholder}
+            required={required}
+            aria-describedby={`${id}-requirements`}
+            onChange={(event) => setPassword(event.target.value)}
+          />
+          <button
+            className="admin-password-visibility"
+            type="button"
+            onClick={() => setVisible((current) => !current)}
+            aria-label={visible ? `Ocultar ${label.toLowerCase()}` : `Mostrar ${label.toLowerCase()}`}
+            aria-pressed={visible}
+            title={visible ? "Ocultar senha" : "Mostrar senha"}
+          >
+            {visible ? <EyeOff size={18} /> : <Eye size={18} />}
+          </button>
+        </div>
+        <button className="secondary-action admin-password-suggest" type="button" onClick={suggestPassword}>
+          <RefreshCw size={16} />
+          Sugerir senha
+        </button>
+      </div>
+      <small id={`${id}-requirements`}>Mínimo de 10 caracteres, com maiúscula, minúscula e número.</small>
+    </div>
+  );
+}
+
 function AdminUsers({
   currentUser,
   users,
@@ -4632,7 +4723,13 @@ function AdminUsers({
               {Object.entries(MARKETPLACE_EXPERIENCE_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
             </select>
           </label>
-          <label><span>Senha inicial</span><input name="password" type="password" minLength={10} placeholder="Mínimo de 10 caracteres" required /></label>
+          <AdminPasswordField
+            id="admin-create-password"
+            name="password"
+            label="Senha inicial"
+            placeholder="Mínimo de 10 caracteres"
+            required
+          />
           <label>
             <span>Plano</span>
             <select name="plan" defaultValue="free">
@@ -4700,7 +4797,12 @@ function AdminUsers({
                     <label><span>Permissão</span><select name="role" defaultValue={item.role} disabled={itemIsCreator}><option value="user">Cliente</option><option value="admin">Admin autorizado</option></select></label>
                   ) : <input type="hidden" name="role" value={item.role} />}
                   <label><span>Limite de pesquisas</span><input name="search_limit" type="number" min="0" defaultValue={item.search_limit ?? ""} placeholder="Ilimitado" /></label>
-                  <label><span>Nova senha</span><input name="new_password" type="password" minLength={10} autoComplete="new-password" placeholder="Opcional" /></label>
+                  <AdminPasswordField
+                    id={`admin-user-${item.id}-new-password`}
+                    name="new_password"
+                    label="Nova senha"
+                    placeholder="Opcional"
+                  />
                   <div className="admin-user-edit-actions">
                     <button className="secondary-action" type="button" onClick={() => toggleSetValue(setEditingIds, item.id, false)}>Cancelar</button>
                     <button className="primary-action" type="submit" disabled={savingId === item.id}>{savingId === item.id ? "Salvando..." : "Salvar alterações"}</button>

@@ -4772,6 +4772,53 @@ button.learn-card span {
   font-weight: 900;
 }
 
+.admin-password-control {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.admin-password-label {
+  color: var(--blue-dark);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.admin-password-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.admin-password-actions .password-field {
+  min-width: 0;
+}
+
+.admin-form .admin-password-visibility {
+  min-height: 34px;
+  padding: 0;
+  box-shadow: none;
+}
+
+.admin-password-suggest {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border-radius: 7px;
+  padding: 0 12px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.admin-password-control > small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
 .admin-users-list {
   display: grid;
   gap: 9px;
@@ -4993,6 +5040,14 @@ button.learn-card span {
   .admin-user-edit-form {
     grid-template-columns: 1fr;
     padding: 13px;
+  }
+
+  .admin-password-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-password-suggest {
+    width: 100%;
   }
 
   .admin-user-create-form .form-section-title,
