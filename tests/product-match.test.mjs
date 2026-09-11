@@ -115,6 +115,8 @@ test("aceita flexao de singular e plural sem confundir palavras diferentes", () 
   const pluralSpec = buildProductQuerySpec("jogo de talheres");
 
   assert.equal(matchesMarketplaceSearchResult("Jogo de Talheres Tramontina 24 Peças", singularSpec).ok, true);
+  assert.equal(matchesMarketplaceSearchResult("Conjunto de Talheres em Aço com 24 Peças", singularSpec).ok, true);
+  assert.equal(matchesMarketplaceSearchResult("Conjunto Faqueiro Inox com 24 Peças", singularSpec).ok, true);
   assert.equal(matchesMarketplaceSearchResult("Jogo Talher Portátil com Estojo", pluralSpec).ok, true);
   assert.equal(matchesMarketplaceSearchResult("Jogo de Talhadeiras para Madeira", singularSpec).ok, false);
 });

@@ -17,7 +17,11 @@ const STOPWORDS = new Set([
   "the",
 ]);
 
-const BUNDLE_WORDS = ["kit", "combo", "conjunto", "pack", "pacote"];
+const BUNDLE_WORDS = ["kit", "combo", "conjunto", "jogo", "pack", "pacote"];
+const EQUIVALENT_TOKEN_GROUPS = [
+  new Set(["conjunto", "jogo"]),
+  new Set(["faqueiro", "talher"]),
+];
 const OPTIONAL_MODIFIER_WORDS = new Set([
   "aco",
   "aluminio",
@@ -336,6 +340,10 @@ function tokenMatchesTitle(token, titleTokens, normalizedTitle) {
     return true;
   }
 
+  if ([...titleTokens].some((titleToken) => areEquivalentProductTokens(token, titleToken))) {
+    return true;
+  }
+
   if (token.length < 5) {
     return false;
   }
@@ -345,6 +353,14 @@ function tokenMatchesTitle(token, titleTokens, normalizedTitle) {
     && Math.abs(titleToken.length - token.length) <= 1
     && levenshteinDistance(titleToken, token) <= 1,
   );
+}
+
+function areEquivalentProductTokens(left, right) {
+  return EQUIVALENT_TOKEN_GROUPS.some((group) => {
+    const leftMatchesGroup = [...group].some((term) => left === term || isPortugueseSingularPluralMatch(left, term));
+    const rightMatchesGroup = [...group].some((term) => right === term || isPortugueseSingularPluralMatch(right, term));
+    return leftMatchesGroup && rightMatchesGroup;
+  });
 }
 
 function normalizeCorrectedText(text) {
