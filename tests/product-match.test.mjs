@@ -110,6 +110,33 @@ test("nao aceita termo curto apenas como substring de outra palavra", () => {
   assert.equal(matchesMarketplaceSearchResult("Kit proteção para sol", spec).ok, true);
 });
 
+test("aceita flexao de singular e plural sem confundir palavras diferentes", () => {
+  const singularSpec = buildProductQuerySpec("jogo de talher");
+  const pluralSpec = buildProductQuerySpec("jogo de talheres");
+
+  assert.equal(matchesMarketplaceSearchResult("Jogo de Talheres Tramontina 24 Peças", singularSpec).ok, true);
+  assert.equal(matchesMarketplaceSearchResult("Jogo Talher Portátil com Estojo", pluralSpec).ok, true);
+  assert.equal(matchesMarketplaceSearchResult("Jogo de Talhadeiras para Madeira", singularSpec).ok, false);
+});
+
+test("normaliza t-shirt como camiseta em buscas e titulos", () => {
+  const spec = buildProductQuerySpec("T-shirt");
+
+  assert.equal(normalizeProductSearchQuery("T-shirt"), "camiseta");
+  assert.deepEqual(spec.tokens, ["camiseta"]);
+  assert.equal(matchesMarketplaceSearchResult("T-shirts Oversized Algodão", spec).ok, true);
+  assert.equal(matchesMarketplaceSearchResult("Camiseta Feminina Gola V", spec).ok, true);
+  assert.equal(matchesMarketplaceSearchResult("Camisa Social Manga Longa", spec).ok, false);
+});
+
+test("trata moda como contexto sem perder o publico infantil", () => {
+  const spec = buildProductQuerySpec("moda infantil");
+
+  assert.equal(matchesMarketplaceSearchResult("Camiseta Infantil Casual de Algodão", spec).ok, true);
+  assert.equal(matchesMarketplaceSearchResult("Vestido Infantil Juvenil Moda Evangélica", spec).ok, true);
+  assert.equal(matchesMarketplaceSearchResult("Vestido Feminino Adulto", spec).ok, false);
+});
+
 test("amplia uma busca com marca sem perder o produto principal", () => {
   assert.deepEqual(
     buildMarketplaceSearchQueries("conjunto feminino Blue Bay Plush"),

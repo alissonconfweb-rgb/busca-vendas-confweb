@@ -789,9 +789,12 @@ function startSearchRequest(requestId, query) {
     .then(async (result) => {
       let completed = result;
       if (!isBillableSearchResult(completed)) {
-        completed = getFreshCachedSearchResult(query)
+        const fallback = getFreshCachedSearchResult(query)
           || getStaleCachedSearchResult(query)
           || searchMercadoLivreCachedItems(query);
+        if (isBillableSearchResult(fallback)) {
+          completed = fallback;
+        }
       }
       if (isBillableSearchResult(completed)) {
         saveMarketSearchCache(query, completed);

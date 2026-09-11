@@ -473,9 +473,9 @@ async function executeMercadoLivreScrapeDo(query, options = {}) {
   return {
     ...emptyResult(
       "scrapedo_incomplete_sales",
-      `A Scrape.do encontrou ${championItems.length} anúncio(s) exato(s) com pelo menos ${minimumChampionSales().toLocaleString("pt-BR")} vendas públicas para "${query}".`,
+      `A Scrape.do confirmou vendas públicas em ${verifiedSalesItems.length} anúncio(s) relevante(s) para "${query}", mas são necessários 3.`,
     ),
-    exactMatches: championItems.length,
+    exactMatches: verifiedSalesItems.length,
     totalAvailable: totalAvailable || uniqueCandidates.length,
     providerCreditsUsed: creditsUsed,
     itemCacheHits,

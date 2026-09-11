@@ -28,6 +28,7 @@ const OPTIONAL_MODIFIER_WORDS = new Set([
   "mdf",
   "mdp",
   "metal",
+  "moda",
   "plastico",
   "tecido",
   "vidro",
@@ -215,9 +216,8 @@ export function buildMarketplaceSearchQueries(query) {
 
 export function tokenizeProductText(text) {
   const withoutMeasures = stripMeasures(text);
-  return normalizeText(withoutMeasures)
+  return normalizeCorrectedText(withoutMeasures)
     .split(" ")
-    .flatMap((token) => correctToken(token).split(" "))
     .map((token) => token.trim())
     .filter((token) => token && !STOPWORDS.has(token));
 }
@@ -332,6 +332,10 @@ function tokenMatchesTitle(token, titleTokens, normalizedTitle) {
     return true;
   }
 
+  if ([...titleTokens].some((titleToken) => isPortugueseSingularPluralMatch(token, titleToken))) {
+    return true;
+  }
+
   if (token.length < 5) {
     return false;
   }
@@ -345,10 +349,60 @@ function tokenMatchesTitle(token, titleTokens, normalizedTitle) {
 
 function normalizeCorrectedText(text) {
   return normalizeText(text)
+    .replace(/\bt\s*shirts?\b/g, "camiseta")
     .split(" ")
     .map(correctToken)
     .join(" ")
     .trim();
+}
+
+function isPortugueseSingularPluralMatch(left, right) {
+  if (left === right || left.length < 3 || right.length < 3) {
+    return false;
+  }
+  const singular = left.length < right.length ? left : right;
+  const plural = left.length < right.length ? right : left;
+  return portuguesePluralForms(singular).has(plural);
+}
+
+function portuguesePluralForms(singular) {
+  const forms = new Set();
+
+  if (singular.endsWith("ao")) {
+    const stem = singular.slice(0, -2);
+    forms.add(`${stem}oes`);
+    forms.add(`${stem}aes`);
+    forms.add(`${singular}s`);
+    return forms;
+  }
+
+  const ending = singular.at(-1);
+  if (/[aeiou]/.test(ending)) {
+    forms.add(`${singular}s`);
+  }
+  if (/[rz]/.test(ending)) {
+    forms.add(`${singular}es`);
+  }
+  if (ending === "m") {
+    forms.add(`${singular.slice(0, -1)}ns`);
+  }
+  if (singular.endsWith("al")) {
+    forms.add(`${singular.slice(0, -2)}ais`);
+  }
+  if (singular.endsWith("el")) {
+    forms.add(`${singular.slice(0, -2)}eis`);
+  }
+  if (singular.endsWith("ol")) {
+    forms.add(`${singular.slice(0, -2)}ois`);
+  }
+  if (singular.endsWith("ul")) {
+    forms.add(`${singular.slice(0, -2)}uis`);
+  }
+  if (singular.endsWith("il")) {
+    forms.add(`${singular.slice(0, -2)}is`);
+  }
+
+  return forms;
 }
 
 function correctToken(token) {
