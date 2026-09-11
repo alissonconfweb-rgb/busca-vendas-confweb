@@ -107,6 +107,24 @@ test("acompanha o chamado no painel mesmo antes de o SMTP ser configurado", asyn
   assert.equal(tickets[0].response, "Recebemos seu chamado e vamos ajudar.");
   assert.equal(tickets[0].response_email_status, "not_configured");
 
+  const resolved = await fetch(`${baseUrl}/api/admin/support/${ticket.id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", Cookie: cookie, Origin: origin },
+    body: JSON.stringify({
+      status: "closed",
+      priority: "high",
+      response: "Recebemos seu chamado e vamos ajudar.",
+    }),
+  });
+  assert.equal(resolved.status, 200);
+  assert.equal((await resolved.json()).status, "closed");
+
+  const afterResolve = await fetch(`${baseUrl}/api/support`, {
+    headers: { Cookie: cookie, Origin: origin },
+  });
+  assert.equal(afterResolve.status, 200);
+  assert.equal((await afterResolve.json())[0].status, "closed");
+
   const database = new Database(databasePath, { readonly: true });
   const stored = database.prepare(`
     SELECT notification_email_status, notification_email_error,

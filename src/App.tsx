@@ -3871,7 +3871,7 @@ function ticketStatusLabel(status: string) {
   return {
     open: "Aberto",
     waiting: "Respondido",
-    closed: "Finalizado",
+    closed: "Resolvido",
   }[status] || status;
 }
 
@@ -3957,7 +3957,7 @@ function SupportPage({
       <div className="support-flow" aria-label="Etapas do atendimento">
         <span><b>1</b> Aberto</span>
         <span><b>2</b> Respondido</span>
-        <span><b>3</b> Finalizado</span>
+        <span><b>3</b> Resolvido</span>
       </div>
       <form className="support-form" onSubmit={submit}>
         <input name="subject" placeholder="Assunto" maxLength={120} required />
@@ -5287,28 +5287,43 @@ function AdminSupport({
   afterSave: (message?: string) => void | Promise<void>;
 }) {
   const [savingId, setSavingId] = useState<number | null>(null);
+  const [savingAction, setSavingAction] = useState<"respond" | "resolve" | "">("");
   const [error, setError] = useState("");
+  const [view, setView] = useState<"active" | "resolved">("active");
+  const activeTickets = tickets.filter((ticket) => ticket.status !== "closed");
+  const resolvedTickets = tickets.filter((ticket) => ticket.status === "closed");
+  const visibleTickets = view === "active" ? activeTickets : resolvedTickets;
 
   const update = async (event: FormEvent<HTMLFormElement>, ticketId: number) => {
     event.preventDefault();
     const form = event.currentTarget;
+    const submitter = (event.nativeEvent as SubmitEvent).submitter as HTMLButtonElement | null;
+    const action = submitter?.value === "resolve" ? "resolve" : "respond";
+    const payload = formJson(form);
+    payload.status = action === "resolve" ? "closed" : "waiting";
     setSavingId(ticketId);
+    setSavingAction(action);
     setError("");
 
     try {
       const result = await api<{ status?: string; emailStatus?: string }>(`/api/admin/support/${ticketId}`, {
         method: "PATCH",
-        body: JSON.stringify(formJson(form)),
+        body: JSON.stringify(payload),
       });
-      await afterSave(
-        result.emailStatus === "sent"
-          ? "Resposta salva e enviada por e-mail ao usuário."
-          : "Resposta salva e disponível no painel do usuário.",
-      );
+      if (action === "resolve") {
+        await afterSave("Chamado marcado como Resolvido e movido para o histórico.");
+      } else {
+        await afterSave(
+          result.emailStatus === "sent"
+            ? "Chamado marcado como Respondido e resposta enviada por e-mail."
+            : "Chamado marcado como Respondido e resposta salva no painel do usuário.",
+        );
+      }
     } catch (updateError) {
-      setError(updateError instanceof Error ? updateError.message : "Não foi possível salvar a resposta.");
+      setError(updateError instanceof Error ? updateError.message : "Não foi possível atualizar o chamado.");
     } finally {
       setSavingId(null);
+      setSavingAction("");
     }
   };
 
@@ -5334,46 +5349,100 @@ function AdminSupport({
         <div><strong>Canal oficial do suporte</strong><span>{supportEmail}</span></div>
         <span>Acompanhe abertura, resposta e envio de e-mail em cada chamado.</span>
       </div>
+      <div className="support-queue-tabs" aria-label="Filtrar chamados por situação">
+        <button
+          className={view === "active" ? "is-active" : ""}
+          type="button"
+          aria-pressed={view === "active"}
+          onClick={() => setView("active")}
+        >
+          Em aberto <b>{activeTickets.length}</b>
+        </button>
+        <button
+          className={view === "resolved" ? "is-active" : ""}
+          type="button"
+          aria-pressed={view === "resolved"}
+          onClick={() => setView("resolved")}
+        >
+          Resolvidos <b>{resolvedTickets.length}</b>
+        </button>
+      </div>
       <div className="table-list">
         {error && <p className="form-error">{error}</p>}
-        {tickets.map((ticket) => (
+        {visibleTickets.length ? visibleTickets.map((ticket) => view === "active" ? (
           <form className="support-admin-row" key={ticket.id} onSubmit={(event) => update(event, ticket.id)}>
-          <div className="support-admin-summary">
-            <strong>{ticket.subject}</strong>
-            <span>{ticket.user_email || "Usuário"} · {formatCacheDate(ticket.created_at)}</span>
-            <p>{ticket.message}</p>
-            <small className={`support-email-state is-${ticket.notification_email_status || "not_sent"}`}>
-              {emailDeliveryLabel(ticket.notification_email_status)}
-            </small>
-            {ticket.notification_email_error && <small className="support-email-error">{ticket.notification_email_error}</small>}
-            {ticket.response && (
-              <small className={`support-email-state is-${ticket.response_email_status || "not_sent"}`}>
-                {emailDeliveryLabel(ticket.response_email_status, "response")}
+            <div className="support-admin-summary">
+              <div className="support-ticket-head">
+                <strong>{ticket.subject}</strong>
+                <span className={`support-ticket-status is-${ticket.status}`}>{ticketStatusLabel(ticket.status)}</span>
+              </div>
+              <span>{ticket.user_email || "Usuário"} · {formatCacheDate(ticket.created_at)}</span>
+              <p>{ticket.message}</p>
+              <small className={`support-email-state is-${ticket.notification_email_status || "not_sent"}`}>
+                {emailDeliveryLabel(ticket.notification_email_status)}
               </small>
-            )}
-            {ticket.response_email_error && <small className="support-email-error">{ticket.response_email_error}</small>}
-          </div>
-          <select name="status" defaultValue={ticket.status}>
-            <option value="open">Aberto</option>
-            <option value="waiting">Respondido</option>
-            <option value="closed">Finalizado</option>
-          </select>
-          <select name="priority" defaultValue={ticket.priority}>
-            <option value="low">Baixa</option>
-            <option value="normal">Normal</option>
-            <option value="high">Alta</option>
-          </select>
-          <textarea
-            name="response"
-            defaultValue={ticket.response || ""}
-            placeholder="Escreva a resposta para o usuário"
-            maxLength={3000}
-          />
-          <button type="submit" disabled={savingId === ticket.id}>
-            {savingId === ticket.id ? "Salvando..." : "Responder"}
-          </button>
+              {ticket.notification_email_error && <small className="support-email-error">{ticket.notification_email_error}</small>}
+              {ticket.response && (
+                <small className={`support-email-state is-${ticket.response_email_status || "not_sent"}`}>
+                  {emailDeliveryLabel(ticket.response_email_status, "response")}
+                </small>
+              )}
+              {ticket.response_email_error && <small className="support-email-error">{ticket.response_email_error}</small>}
+            </div>
+            <label className="support-admin-field">
+              <span>Prioridade</span>
+              <select name="priority" defaultValue={ticket.priority}>
+                <option value="low">Baixa</option>
+                <option value="normal">Normal</option>
+                <option value="high">Alta</option>
+              </select>
+            </label>
+            <label className="support-admin-field">
+              <span>Resposta ao usuário</span>
+              <textarea
+                name="response"
+                defaultValue={ticket.response || ""}
+                placeholder="Escreva a resposta para o usuário"
+                maxLength={3000}
+              />
+            </label>
+            <div className="support-admin-actions">
+              <button type="submit" name="action" value="respond" disabled={savingId === ticket.id}>
+                {savingId === ticket.id && savingAction === "respond" ? "Respondendo..." : "Responder"}
+              </button>
+              <button
+                className="support-resolve-button"
+                type="submit"
+                name="action"
+                value="resolve"
+                disabled={savingId === ticket.id}
+              >
+                <CircleCheck size={17} />
+                {savingId === ticket.id && savingAction === "resolve" ? "Finalizando..." : "Finalizar chamado"}
+              </button>
+            </div>
           </form>
-        ))}
+        ) : (
+          <article className="support-admin-row is-resolved" key={ticket.id}>
+            <div className="support-admin-summary">
+              <div className="support-ticket-head">
+                <strong>{ticket.subject}</strong>
+                <span className="support-ticket-status is-closed">Resolvido</span>
+              </div>
+              <span>{ticket.user_email || "Usuário"} · Resolvido em {formatCacheDate(ticket.updated_at || ticket.created_at)}</span>
+              <div className="support-resolved-conversation">
+                <div><small>Mensagem do usuário</small><p>{ticket.message}</p></div>
+                {ticket.response && <div><small>Resposta enviada</small><p>{ticket.response}</p></div>}
+              </div>
+            </div>
+          </article>
+        )) : (
+          <div className="support-admin-empty is-inline">
+            <CircleCheck size={28} />
+            <strong>{view === "active" ? "Nenhum chamado em aberto" : "Nenhum chamado resolvido"}</strong>
+            <p>{view === "active" ? "A fila está limpa. Novos chamados aparecerão aqui." : "Os chamados finalizados ficarão disponíveis neste histórico."}</p>
+          </div>
+        )}
       </div>
     </div>
   );

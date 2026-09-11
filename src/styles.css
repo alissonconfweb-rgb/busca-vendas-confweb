@@ -3357,6 +3357,47 @@ button.learn-card span {
   font-weight: 700;
 }
 
+.support-queue-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.support-queue-tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--blue-dark);
+  background: #fff;
+  padding: 8px 15px;
+  font-weight: 900;
+}
+
+.support-queue-tabs button.is-active {
+  border-color: var(--blue-dark);
+  color: #fff;
+  background: var(--blue-dark);
+}
+
+.support-queue-tabs b {
+  display: inline-grid;
+  min-width: 23px;
+  height: 23px;
+  place-items: center;
+  border-radius: 999px;
+  color: inherit;
+  background: rgba(11, 50, 88, 0.09);
+  padding: 0 6px;
+  font-size: 11px;
+}
+
+.support-queue-tabs button.is-active b {
+  background: rgba(255, 255, 255, 0.18);
+}
+
 .history-row {
   display: grid;
   grid-template-columns: minmax(180px, 1fr) 140px 140px 160px 140px;
@@ -5300,7 +5341,7 @@ article.finance-row {
 }
 
 .support-admin-row {
-  grid-template-columns: minmax(180px, 0.9fr) 140px 140px minmax(180px, 1fr) auto;
+  grid-template-columns: minmax(260px, 0.95fr) 140px minmax(260px, 1fr) minmax(160px, auto);
 }
 
 .support-admin-summary {
@@ -5317,6 +5358,63 @@ article.finance-row {
 .support-admin-row textarea {
   min-height: 76px;
   resize: vertical;
+}
+
+.support-admin-field,
+.support-admin-actions {
+  display: grid;
+  gap: 7px;
+}
+
+.support-admin-field > span {
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.support-admin-actions button {
+  width: 100%;
+  white-space: nowrap;
+}
+
+.support-admin-row .support-resolve-button {
+  border: 1px solid #acd8bf;
+  color: #08783f;
+  background: #effaf4;
+  box-shadow: none;
+}
+
+.support-admin-row.is-resolved {
+  grid-template-columns: 1fr;
+  align-items: stretch;
+  border-color: #cde7d9;
+  background: #fbfefc;
+}
+
+.support-resolved-conversation {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 5px;
+}
+
+.support-resolved-conversation > div {
+  display: grid;
+  gap: 4px;
+  border-radius: 10px;
+  background: #f4f7fb;
+  padding: 10px;
+}
+
+.support-resolved-conversation small {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.support-admin-empty.is-inline {
+  padding: 24px 18px;
 }
 
 @media (max-width: 1380px) {
@@ -5406,6 +5504,7 @@ article.finance-row {
   .tip-admin-row,
   article.table-row,
   .support-admin-row,
+  .support-resolved-conversation,
   .history-row {
     grid-template-columns: 1fr;
   }
