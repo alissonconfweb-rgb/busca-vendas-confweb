@@ -55,6 +55,14 @@ import { hashPassword, hashToken, randomToken, verifyPassword } from "./security
 import { applyRateLimit, SqliteRateLimiter } from "./rate-limit.mjs";
 import { minimumChampionSales } from "./champion-policy.mjs";
 import { isCompleteRealSalesResult } from "./search-result-policy.mjs";
+import {
+  notifySupportTicketOpened,
+  notifySupportTicketResponded,
+  publicSupportEmailConfig,
+  publicSupportEmailError,
+  sendSupportEmailTest,
+  verifySupportEmailConnection,
+} from "./support-email.mjs";
 
 initDatabase();
 
@@ -97,6 +105,7 @@ const PUBLIC_SETTING_KEYS = new Set([
   "commercial_training_url",
   "commercial_support_text",
   "commercial_support_button",
+  "support_email_address",
 ]);
 const BUSINESS_MODELS = [
   "importer",
@@ -418,7 +427,7 @@ async function route(req, res) {
       settings: safeSettings(user),
       tips: db.prepare("SELECT * FROM tips WHERE status = 'published' ORDER BY id DESC").all(),
       contacts: db.prepare("SELECT * FROM commercial_contacts WHERE status = 'active' ORDER BY is_primary DESC, id DESC").all(),
-      tickets: db.prepare("SELECT * FROM support_tickets WHERE user_id = ? ORDER BY id DESC").all(user.id),
+      tickets: supportTicketsForUser(user.id),
     });
   }
 
@@ -525,7 +534,7 @@ async function route(req, res) {
   }
 
   if (url.pathname === "/api/support" && method === "GET") {
-    return json(res, 200, db.prepare("SELECT * FROM support_tickets WHERE user_id = ? ORDER BY id DESC").all(user.id));
+    return json(res, 200, supportTicketsForUser(user.id));
   }
 
   if (url.pathname === "/api/support" && method === "POST") {
@@ -540,7 +549,11 @@ async function route(req, res) {
       INSERT INTO support_tickets (user_id, subject, message, priority)
       VALUES (?, ?, ?, ?)
     `).run(user.id, subject, message, priority);
-    return json(res, 201, db.prepare("SELECT * FROM support_tickets WHERE id = ?").get(result.lastInsertRowid));
+    const ticketId = Number(result.lastInsertRowid);
+    const ticket = db.prepare("SELECT * FROM support_tickets WHERE id = ?").get(ticketId);
+    const delivery = await notifySupportTicketOpened({ ticket, user });
+    saveTicketEmailDelivery(ticketId, "notification", delivery);
+    return json(res, 201, supportTicketForUser(ticketId, user.id));
   }
 
   if (url.pathname === "/api/tips" && method === "GET") {
@@ -1543,6 +1556,95 @@ async function handleAdmin(req, res, url, currentUser) {
   const method = req.method || "GET";
   const path = url.pathname.replace("/api/admin/", "");
 
+  if (path === "support-email/configure" && method === "POST") {
+    if (!canManageIntegrations(currentUser)) {
+      return json(res, 403, { error: "Somente administradores autorizados podem configurar o e-mail do suporte." });
+    }
+    const body = await readJson(req);
+    const address = normalizeEmail(body.address || "suportebuscavendas@confweb.com.br");
+    const host = String(body.host || "mail.confweb.com.br").trim().toLowerCase();
+    const port = Number(body.port || 465);
+    const username = normalizeEmail(body.username || address);
+    const suppliedPassword = String(body.password || "");
+    const currentPassword = getSetting("support_smtp_password") || process.env.SUPPORT_SMTP_PASSWORD || "";
+
+    if (!isValidEmail(address) || !isValidEmail(username)) {
+      return json(res, 400, { error: "Informe o endereço e o usuário SMTP completos." });
+    }
+    if (!/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i.test(host)) {
+      return json(res, 400, { error: "Informe um servidor SMTP válido." });
+    }
+    if (![465, 587].includes(port)) {
+      return json(res, 400, { error: "Use a porta SMTP segura 465 ou 587." });
+    }
+    if (!suppliedPassword && !currentPassword) {
+      return json(res, 400, { error: "Informe a senha da conta de e-mail para concluir a configuração." });
+    }
+
+    setSetting("support_email_address", address);
+    setSetting("support_smtp_host", host);
+    setSetting("support_smtp_port", String(port));
+    setSetting("support_smtp_secure", port === 465 ? "true" : "false");
+    setSetting("support_smtp_user", username);
+    if (suppliedPassword) {
+      setSetting("support_smtp_password", suppliedPassword);
+    }
+    setSetting("support_smtp_verified", "false");
+    setSetting("support_smtp_last_error", "");
+
+    try {
+      const config = await verifySupportEmailConnection();
+      setSetting("support_smtp_verified", "true");
+      return json(res, 200, {
+        ok: true,
+        ...config,
+        message: "Conta de suporte salva e autenticada no servidor SMTP.",
+      });
+    } catch (error) {
+      const detail = publicSupportEmailError(error);
+      setSetting("support_smtp_last_error", detail);
+      return json(res, 200, {
+        ok: false,
+        saved: true,
+        error: `Configuração salva, mas o teste falhou: ${detail}`,
+      });
+    }
+  }
+
+  if (path === "support-email/test" && method === "POST") {
+    if (!canManageIntegrations(currentUser)) {
+      return json(res, 403, { error: "Somente administradores autorizados podem testar o e-mail do suporte." });
+    }
+    try {
+      const config = await verifySupportEmailConnection();
+      setSetting("support_smtp_verified", "true");
+      setSetting("support_smtp_last_error", "");
+      return json(res, 200, { ok: true, ...config, message: "Servidor SMTP autenticado com sucesso." });
+    } catch (error) {
+      const detail = publicSupportEmailError(error);
+      setSetting("support_smtp_verified", "false");
+      setSetting("support_smtp_last_error", detail);
+      return json(res, 400, { ok: false, error: detail });
+    }
+  }
+
+  if (path === "support-email/send-test" && method === "POST") {
+    if (!canManageIntegrations(currentUser)) {
+      return json(res, 403, { error: "Somente administradores autorizados podem enviar o teste do suporte." });
+    }
+    const delivery = await sendSupportEmailTest();
+    if (delivery.status !== "sent") {
+      setSetting("support_smtp_last_error", delivery.error || "O teste de envio falhou.");
+      return json(res, 400, { ok: false, error: delivery.error || "O teste de envio falhou." });
+    }
+    setSetting("support_smtp_verified", "true");
+    setSetting("support_smtp_last_error", "");
+    return json(res, 200, {
+      ok: true,
+      message: "E-mail de teste aceito pelo servidor e enviado para a caixa de suporte.",
+    });
+  }
+
   if (path === "search-provider/configure" && method === "POST") {
     if (!canManageIntegrations(currentUser)) {
       return json(res, 403, { error: "Somente administradores autorizados podem escolher o motor de busca." });
@@ -2183,7 +2285,7 @@ async function handleAdmin(req, res, url, currentUser) {
         return json(res, 400, { error: error instanceof Error ? error.message : "Configuração inválida." });
       }
     }
-    const keepWhenBlank = new Set(["meli_access_token", "meli_refresh_token", "meli_client_secret", "oxylabs_password", "proxy_password", "zyte_api_key", "scrapedo_api_token", "asaas_api_key", "asaas_webhook_token"]);
+    const keepWhenBlank = new Set(["meli_access_token", "meli_refresh_token", "meli_client_secret", "oxylabs_password", "proxy_password", "zyte_api_key", "scrapedo_api_token", "asaas_api_key", "asaas_webhook_token", "support_smtp_password"]);
     for (const [key, value] of Object.entries(body)) {
       if (keepWhenBlank.has(key) && !String(value || "").trim() && getSetting(key)) {
         continue;
@@ -2205,6 +2307,10 @@ async function handleAdmin(req, res, url, currentUser) {
     }
     if (Object.keys(body).some((key) => key.startsWith("asaas_"))) {
       setSetting("asaas_last_error", "");
+    }
+    if (Object.keys(body).some((key) => key.startsWith("support_"))) {
+      setSetting("support_smtp_last_error", "");
+      setSetting("support_smtp_verified", "false");
     }
     return json(res, 200, safeSettings({ role: "admin" }));
   }
@@ -2249,20 +2355,41 @@ async function handleAdmin(req, res, url, currentUser) {
   if (ticketMatch && method === "PATCH") {
     const body = await readJson(req);
     const ticketId = Number(ticketMatch[1]);
-    const ticket = db.prepare("SELECT id FROM support_tickets WHERE id = ?").get(ticketId);
+    const ticket = db.prepare(`
+      SELECT t.*, u.name AS user_name, u.email AS user_email
+      FROM support_tickets t
+      LEFT JOIN users u ON u.id = t.user_id
+      WHERE t.id = ?
+    `).get(ticketId);
     if (!ticket) {
       return json(res, 404, { error: "Chamado não encontrado." });
     }
-    const status = oneOf(body.status, ["open", "waiting", "closed"], "Status inválido.");
+    const requestedStatus = oneOf(body.status, ["open", "waiting", "closed"], "Status inválido.");
     const priority = oneOf(body.priority, ["low", "normal", "high"], "Prioridade inválida.");
     const response = String(body.response || "").trim().slice(0, 3000) || null;
+    if (requestedStatus === "waiting" && !response) {
+      return json(res, 400, { error: "Escreva a resposta antes de marcar o chamado como Respondido." });
+    }
+    const status = response && requestedStatus === "open" ? "waiting" : requestedStatus;
     db.prepare("UPDATE support_tickets SET status = ?, priority = ?, response = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(
       status,
       priority,
       response,
       ticketId,
     );
-    return json(res, 200, { ok: true });
+    let delivery = null;
+    if (response && response !== ticket.response && ticket.user_email) {
+      delivery = await notifySupportTicketResponded({
+        ticket: { ...ticket, status, priority, response },
+        user: { name: ticket.user_name || "Cliente", email: ticket.user_email },
+      });
+      saveTicketEmailDelivery(ticketId, "response", delivery);
+    }
+    return json(res, 200, {
+      ok: true,
+      status,
+      emailStatus: delivery?.status || ticket.response_email_status || "not_sent",
+    });
   }
 
   if (path === "finance" && method === "GET") {
@@ -2451,6 +2578,15 @@ function safeSettings(user) {
     settings.meli_access_token = "";
     settings.meli_refresh_token = "";
     settings.meli_client_secret = "";
+    const supportEmail = publicSupportEmailConfig();
+    settings.support_email_address = supportEmail.address;
+    settings.support_smtp_host = supportEmail.host;
+    settings.support_smtp_port = String(supportEmail.port);
+    settings.support_smtp_secure = supportEmail.secure ? "true" : "false";
+    settings.support_smtp_user = supportEmail.user;
+    settings.support_smtp_password_configured = supportEmail.configured ? "true" : "";
+    settings.support_smtp_connected = supportEmail.configured && settings.support_smtp_verified === "true" ? "true" : "";
+    settings.support_smtp_password = "";
     delete settings.meli_oauth_state_hash;
     delete settings.meli_oauth_state_user_id;
     delete settings.meli_oauth_state_created_at;
@@ -2459,6 +2595,51 @@ function safeSettings(user) {
     delete settings.session_secret;
   }
   return settings;
+}
+
+function supportTicketsForUser(userId) {
+  return db.prepare(`
+    SELECT id, subject, message, status, priority, response,
+           notification_email_status, notification_email_sent_at,
+           response_email_status, response_email_sent_at,
+           created_at, updated_at
+    FROM support_tickets
+    WHERE user_id = ?
+    ORDER BY id DESC
+  `).all(userId);
+}
+
+function supportTicketForUser(ticketId, userId) {
+  return db.prepare(`
+    SELECT id, subject, message, status, priority, response,
+           notification_email_status, notification_email_sent_at,
+           response_email_status, response_email_sent_at,
+           created_at, updated_at
+    FROM support_tickets
+    WHERE id = ? AND user_id = ?
+  `).get(ticketId, userId);
+}
+
+function saveTicketEmailDelivery(ticketId, kind, delivery) {
+  const status = String(delivery?.status || "failed");
+  const sentAt = status === "sent" ? new Date().toISOString() : null;
+  const messageId = delivery?.messageId || null;
+  const error = delivery?.error || null;
+  if (kind === "notification") {
+    db.prepare(`
+      UPDATE support_tickets
+      SET notification_email_status = ?, notification_email_sent_at = ?,
+          notification_email_message_id = ?, notification_email_error = ?
+      WHERE id = ?
+    `).run(status, sentAt, messageId, error, ticketId);
+    return;
+  }
+  db.prepare(`
+    UPDATE support_tickets
+    SET response_email_status = ?, response_email_sent_at = ?,
+        response_email_message_id = ?, response_email_error = ?
+    WHERE id = ?
+  `).run(status, sentAt, messageId, error, ticketId);
 }
 
 function publicBootstrapPayload() {
@@ -2829,7 +3010,7 @@ function boolValue(value) {
 }
 
 function normalizeSettingValue(key, value) {
-  if (key.startsWith("meli_") || key.startsWith("oxylabs_") || key.startsWith("proxy_") || key.startsWith("zyte_") || key.startsWith("scrapedo_") || key.startsWith("asaas_") || key.startsWith("market_") || key.startsWith("commercial_") || key === "min_champion_sales" || key === "frontend_origin") {
+  if (key.startsWith("meli_") || key.startsWith("oxylabs_") || key.startsWith("proxy_") || key.startsWith("zyte_") || key.startsWith("scrapedo_") || key.startsWith("asaas_") || key.startsWith("support_") || key.startsWith("market_") || key.startsWith("commercial_") || key === "min_champion_sales" || key === "frontend_origin") {
     return String(value || "").trim();
   }
   return value;

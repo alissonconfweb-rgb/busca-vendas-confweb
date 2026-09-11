@@ -237,6 +237,12 @@ type Ticket = {
   priority: string;
   response?: string | null;
   user_email?: string;
+  notification_email_status?: string;
+  notification_email_sent_at?: string | null;
+  notification_email_error?: string | null;
+  response_email_status?: string;
+  response_email_sent_at?: string | null;
+  response_email_error?: string | null;
   created_at: string;
   updated_at?: string;
 };
@@ -399,6 +405,11 @@ const defaultSettings: SettingsMap = {
   commercial_training_url: "https://www.confweb.com.br",
   commercial_support_text: "Precisa de ajuda? Fale com um especialista da Confweb.",
   commercial_support_button: "Conversar",
+  support_email_address: "suportebuscavendas@confweb.com.br",
+  support_smtp_host: "mail.confweb.com.br",
+  support_smtp_port: "465",
+  support_smtp_secure: "true",
+  support_smtp_user: "suportebuscavendas@confweb.com.br",
 };
 
 const defaultTips: Tip[] = [
@@ -1025,6 +1036,7 @@ function ProductApp({ user, onUserChange }: { user: User | null; onUserChange: (
             tickets={tickets}
             onTicketsChange={setTickets}
             onLoginRequired={requireLogin}
+            supportEmail={settings.support_email_address || defaultSettings.support_email_address}
           />
         )}
         {mode === "terms" && <LegalPage kind="terms" onBack={() => setMode("search")} />}
@@ -3858,9 +3870,22 @@ function CancelPlanModal({ contacts, onClose }: { contacts: Contact[]; onClose: 
 function ticketStatusLabel(status: string) {
   return {
     open: "Aberto",
-    waiting: "Aguardando resposta",
-    closed: "Fechado",
+    waiting: "Respondido",
+    closed: "Finalizado",
   }[status] || status;
+}
+
+function emailDeliveryLabel(status?: string, kind: "notification" | "response" = "notification") {
+  if (status === "sent") {
+    return kind === "response" ? "Resposta enviada por e-mail" : "Aviso enviado ao suporte";
+  }
+  if (status === "failed") {
+    return kind === "response" ? "Resposta salva; e-mail não enviado" : "Chamado salvo; aviso por e-mail não enviado";
+  }
+  if (status === "not_configured") {
+    return "Registrado e acompanhado pelo painel";
+  }
+  return kind === "response" ? "Resposta disponível no painel" : "Chamado registrado no painel";
 }
 
 function ticketPriorityLabel(priority: string) {
@@ -3876,11 +3901,13 @@ function SupportPage({
   tickets,
   onTicketsChange,
   onLoginRequired,
+  supportEmail,
 }: {
   user: User | null;
   tickets: Ticket[];
   onTicketsChange: (tickets: Ticket[]) => void;
   onLoginRequired: () => boolean;
+  supportEmail: string;
 }) {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -3904,7 +3931,11 @@ function SupportPage({
       });
       onTicketsChange([ticket, ...tickets]);
       form.reset();
-      setMessage("Chamado aberto com sucesso. Acompanhe a resposta abaixo.");
+      setMessage(
+        ticket.notification_email_status === "sent"
+          ? "Chamado aberto e aviso enviado para a equipe. Acompanhe a resposta abaixo."
+          : "Chamado registrado com sucesso. A equipe já pode acompanhá-lo pelo painel.",
+      );
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "Não foi possível abrir o chamado.");
     } finally {
@@ -3919,7 +3950,15 @@ function SupportPage({
   return (
     <section className="bv-page simple-page">
       <h1>Suporte</h1>
-      <p>Envie sua dúvida para a equipe Confweb e acompanhe a resposta por aqui.</p>
+      <p>
+        Envie sua dúvida e acompanhe todo o atendimento por aqui. Canal oficial:{" "}
+        <a href={`mailto:${supportEmail}`}>{supportEmail}</a>.
+      </p>
+      <div className="support-flow" aria-label="Etapas do atendimento">
+        <span><b>1</b> Aberto</span>
+        <span><b>2</b> Respondido</span>
+        <span><b>3</b> Finalizado</span>
+      </div>
       <form className="support-form" onSubmit={submit}>
         <input name="subject" placeholder="Assunto" maxLength={120} required />
         <select name="priority" defaultValue="normal">
@@ -3945,7 +3984,11 @@ function SupportPage({
             </div>
             <span>
               Prioridade {ticketPriorityLabel(ticket.priority)} · Aberto em {formatCacheDate(ticket.created_at)}
+              {ticket.updated_at && ticket.updated_at !== ticket.created_at ? ` · Atualizado em ${formatCacheDate(ticket.updated_at)}` : ""}
             </span>
+            <small className={`support-email-state is-${ticket.notification_email_status || "not_sent"}`}>
+              {emailDeliveryLabel(ticket.notification_email_status)}
+            </small>
             <div className="support-ticket-message">
               <small>Sua mensagem</small>
               <p>{ticket.message}</p>
@@ -3954,6 +3997,7 @@ function SupportPage({
               <div className="support-ticket-response">
                 <small>Resposta da equipe Confweb</small>
                 <p>{ticket.response}</p>
+                <span>{emailDeliveryLabel(ticket.response_email_status, "response")}</span>
               </div>
             )}
           </article>
@@ -4194,7 +4238,7 @@ function LegalPage({ kind, onBack }: { kind: "terms" | "privacy"; onBack: () => 
         <h2>4. Segurança e retenção</h2>
         <p>Aplicamos controle de acesso, senhas protegidas por hash, sessões revogáveis, conexão HTTPS, criptografia de credenciais de integração e backups operacionais. Mantemos os dados enquanto a conta estiver ativa ou pelo prazo necessário para obrigações legais e financeiras.</p>
         <h2>5. Seus direitos</h2>
-        <p>Você pode pedir confirmação, acesso, correção, portabilidade ou exclusão dos dados, observadas as retenções legais aplicáveis. Solicitações podem ser enviadas pelo suporte do Busca Vendas ou para alisson.confweb@gmail.com.</p>
+      <p>Você pode pedir confirmação, acesso, correção, portabilidade ou exclusão dos dados, observadas as retenções legais aplicáveis. Solicitações podem ser enviadas pelo suporte do Busca Vendas ou para suportebuscavendas@confweb.com.br.</p>
       </section>
     );
   }
@@ -4214,7 +4258,7 @@ function LegalPage({ kind, onBack }: { kind: "terms" | "privacy"; onBack: () => 
       <h2>4. Dados de mercado</h2>
       <p>Preços, vendas e anúncios podem mudar ou deixar de estar públicos. A Confweb emprega cache e atualização periódica para reduzir custo e melhorar disponibilidade, informando a data da consulta quando aplicável.</p>
       <h2>5. Cancelamento e suporte</h2>
-      <p>O cancelamento interrompe cobranças futuras, sem apagar registros financeiros que precisem ser mantidos por lei. Dúvidas, solicitações e problemas podem ser enviados pela área de suporte do aplicativo ou para alisson.confweb@gmail.com.</p>
+      <p>O cancelamento interrompe cobranças futuras, sem apagar registros financeiros que precisem ser mantidos por lei. Dúvidas, solicitações e problemas podem ser enviados pela área de suporte do aplicativo ou para suportebuscavendas@confweb.com.br.</p>
     </section>
   );
 }
@@ -4309,7 +4353,13 @@ function AdminPanel({ user, onSettingsChange }: { user: User; onSettingsChange: 
       {tab === "finance" && <AdminFinance finance={data.finance} users={data.users} afterSave={afterSave} />}
       {tab === "contacts" && <AdminContacts contacts={data.contacts} settings={data.settings} afterSave={afterSave} />}
       {tab === "tips" && <AdminTips tips={data.tips} afterSave={afterSave} />}
-      {tab === "support" && <AdminSupport tickets={data.tickets} afterSave={afterSave} />}
+      {tab === "support" && (
+        <AdminSupport
+          tickets={data.tickets}
+          supportEmail={data.settings.support_email_address || defaultSettings.support_email_address}
+          afterSave={afterSave}
+        />
+      )}
       {tab === "settings" && <AdminSettings settings={data.settings} afterSave={afterSave} />}
     </section>
   );
@@ -5229,9 +5279,11 @@ function AdminTips({ tips, afterSave }: { tips: Tip[]; afterSave: () => void }) 
 
 function AdminSupport({
   tickets,
+  supportEmail,
   afterSave,
 }: {
   tickets: Ticket[];
+  supportEmail: string;
   afterSave: (message?: string) => void | Promise<void>;
 }) {
   const [savingId, setSavingId] = useState<number | null>(null);
@@ -5244,11 +5296,15 @@ function AdminSupport({
     setError("");
 
     try {
-      await api(`/api/admin/support/${ticketId}`, {
+      const result = await api<{ status?: string; emailStatus?: string }>(`/api/admin/support/${ticketId}`, {
         method: "PATCH",
         body: JSON.stringify(formJson(form)),
       });
-      await afterSave("Resposta do suporte salva.");
+      await afterSave(
+        result.emailStatus === "sent"
+          ? "Resposta salva e enviada por e-mail ao usuário."
+          : "Resposta salva e disponível no painel do usuário.",
+      );
     } catch (updateError) {
       setError(updateError instanceof Error ? updateError.message : "Não foi possível salvar a resposta.");
     } finally {
@@ -5258,28 +5314,49 @@ function AdminSupport({
 
   if (!tickets.length) {
     return (
-      <div className="support-admin-empty">
-        <Headphones size={30} />
-        <strong>Nenhum chamado recebido</strong>
-        <p>Quando um usuário enviar uma dúvida pela área Suporte, ela aparecerá aqui para resposta.</p>
+      <div className="admin-section">
+        <div className="support-admin-channel">
+          <div><strong>Canal oficial do suporte</strong><span>{supportEmail}</span></div>
+          <span>Os chamados também ficam registrados neste painel.</span>
+        </div>
+        <div className="support-admin-empty">
+          <Headphones size={30} />
+          <strong>Nenhum chamado recebido</strong>
+          <p>Quando um usuário enviar uma dúvida pela área Suporte, ela aparecerá aqui para resposta.</p>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="table-list">
-      {error && <p className="form-error">{error}</p>}
-      {tickets.map((ticket) => (
-        <form className="support-admin-row" key={ticket.id} onSubmit={(event) => update(event, ticket.id)}>
+    <div className="admin-section">
+      <div className="support-admin-channel">
+        <div><strong>Canal oficial do suporte</strong><span>{supportEmail}</span></div>
+        <span>Acompanhe abertura, resposta e envio de e-mail em cada chamado.</span>
+      </div>
+      <div className="table-list">
+        {error && <p className="form-error">{error}</p>}
+        {tickets.map((ticket) => (
+          <form className="support-admin-row" key={ticket.id} onSubmit={(event) => update(event, ticket.id)}>
           <div className="support-admin-summary">
             <strong>{ticket.subject}</strong>
             <span>{ticket.user_email || "Usuário"} · {formatCacheDate(ticket.created_at)}</span>
             <p>{ticket.message}</p>
+            <small className={`support-email-state is-${ticket.notification_email_status || "not_sent"}`}>
+              {emailDeliveryLabel(ticket.notification_email_status)}
+            </small>
+            {ticket.notification_email_error && <small className="support-email-error">{ticket.notification_email_error}</small>}
+            {ticket.response && (
+              <small className={`support-email-state is-${ticket.response_email_status || "not_sent"}`}>
+                {emailDeliveryLabel(ticket.response_email_status, "response")}
+              </small>
+            )}
+            {ticket.response_email_error && <small className="support-email-error">{ticket.response_email_error}</small>}
           </div>
           <select name="status" defaultValue={ticket.status}>
             <option value="open">Aberto</option>
-            <option value="waiting">Aguardando</option>
-            <option value="closed">Fechado</option>
+            <option value="waiting">Respondido</option>
+            <option value="closed">Finalizado</option>
           </select>
           <select name="priority" defaultValue={ticket.priority}>
             <option value="low">Baixa</option>
@@ -5295,8 +5372,9 @@ function AdminSupport({
           <button type="submit" disabled={savingId === ticket.id}>
             {savingId === ticket.id ? "Salvando..." : "Responder"}
           </button>
-        </form>
-      ))}
+          </form>
+        ))}
+      </div>
     </div>
   );
 }
@@ -5833,7 +5911,7 @@ function AdminSettings({ settings, afterSave }: { settings: SettingsMap; afterSa
   );
 }
 
-type SettingsAccordionKey = "search" | "meli" | "scrapedo" | "payments";
+type SettingsAccordionKey = "search" | "meli" | "scrapedo" | "email" | "payments";
 
 function SettingsAccordionTrigger({
   id,
@@ -5874,7 +5952,7 @@ function SettingsAccordionTrigger({
 }
 
 function AdminSettingsSimple({ settings, afterSave }: { settings: SettingsMap; afterSave: (text?: string) => void }) {
-  const [busy, setBusy] = useState<"provider-save" | "meli-save" | "meli-test" | "meli-disconnect" | "asaas-save" | "asaas-test" | "scrapedo-save" | "scrapedo-test" | "">("");
+  const [busy, setBusy] = useState<"provider-save" | "meli-save" | "meli-test" | "meli-disconnect" | "asaas-save" | "asaas-test" | "scrapedo-save" | "scrapedo-test" | "email-save" | "email-test" | "email-send-test" | "">("");
   const [providerMode, setProviderMode] = useState("scrapedo_only");
   const [providerError, setProviderError] = useState("");
   const [meliError, setMeliError] = useState("");
@@ -5882,10 +5960,12 @@ function AdminSettingsSimple({ settings, afterSave }: { settings: SettingsMap; a
   const [meliDiagnostic, setMeliDiagnostic] = useState<MeliDiagnostic | null>(null);
   const [asaasError, setAsaasError] = useState("");
   const [scrapeDoError, setScrapeDoError] = useState("");
+  const [supportEmailError, setSupportEmailError] = useState("");
   const [openSections, setOpenSections] = useState<Record<SettingsAccordionKey, boolean>>({
     search: false,
     meli: false,
     scrapedo: false,
+    email: false,
     payments: false,
   });
 
@@ -6066,6 +6146,63 @@ function AdminSettingsSimple({ settings, afterSave }: { settings: SettingsMap; a
       );
     } catch (error) {
       setScrapeDoError(error instanceof Error ? error.message : "Não foi possível validar a Scrape.do.");
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const saveAndTestSupportEmail = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const payload = formJson(form);
+    setSupportEmailError("");
+    setBusy("email-save");
+    try {
+      const data = await api<{ ok?: boolean; error?: string; message?: string }>("/api/admin/support-email/configure", {
+        method: "POST",
+        body: JSON.stringify({
+          address: payload.support_email_address,
+          host: payload.support_smtp_host,
+          port: payload.support_smtp_port,
+          username: payload.support_smtp_user,
+          password: payload.support_smtp_password || "",
+        }),
+      });
+      form.reset();
+      if (data.ok === false) {
+        setSupportEmailError(data.error || "A configuração foi salva, mas o SMTP não autenticou.");
+        await afterSave("Configuração do suporte salva; revise a autenticação SMTP.");
+        return;
+      }
+      await afterSave(data.message || "E-mail do suporte configurado com sucesso.");
+    } catch (error) {
+      setSupportEmailError(error instanceof Error ? error.message : "Não foi possível configurar o e-mail do suporte.");
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const testSupportEmail = async () => {
+    setSupportEmailError("");
+    setBusy("email-test");
+    try {
+      const data = await api<{ message?: string }>("/api/admin/support-email/test", { method: "POST" });
+      await afterSave(data.message || "Servidor SMTP autenticado com sucesso.");
+    } catch (error) {
+      setSupportEmailError(error instanceof Error ? error.message : "Não foi possível autenticar no servidor SMTP.");
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const sendSupportEmailTestMessage = async () => {
+    setSupportEmailError("");
+    setBusy("email-send-test");
+    try {
+      const data = await api<{ message?: string }>("/api/admin/support-email/send-test", { method: "POST" });
+      await afterSave(data.message || "E-mail de teste enviado.");
+    } catch (error) {
+      setSupportEmailError(error instanceof Error ? error.message : "Não foi possível enviar o e-mail de teste.");
     } finally {
       setBusy("");
     }
@@ -6340,6 +6477,104 @@ function AdminSettingsSimple({ settings, afterSave }: { settings: SettingsMap; a
             </button>
           )}
         </div>
+        </div>
+      </form>
+
+      <form className="settings-card settings-accordion-item" onSubmit={saveAndTestSupportEmail}>
+        <SettingsAccordionTrigger
+          id="email"
+          title="E-mail do suporte"
+          description="Receba novos chamados e envie respostas aos usuários pela conta oficial."
+          status={settings.support_smtp_connected ? "Conectado" : settings.support_smtp_password_configured ? "Revisar" : "Pendente"}
+          Icon={Headphones}
+          open={openSections.email}
+          onToggle={toggleSection}
+        />
+
+        <div className="settings-accordion-content" id="settings-panel-email" hidden={!openSections.email}>
+          <div className="integration-setup-guide">
+            <div>
+              <span>1</span>
+              <p><b>Informe a senha da caixa.</b> Ela será criptografada no servidor.</p>
+            </div>
+            <div>
+              <span>2</span>
+              <p><b>Salve e autentique.</b> O teste não envia mensagem.</p>
+            </div>
+            <div>
+              <span>3</span>
+              <p><b>Envie um teste.</b> Confirme o recebimento no Webmail.</p>
+            </div>
+          </div>
+
+          <div className="settings-grid">
+            <label>
+              Endereço oficial
+              <input
+                name="support_email_address"
+                type="email"
+                defaultValue={settings.support_email_address || defaultSettings.support_email_address}
+                required
+              />
+            </label>
+            <label>
+              Usuário SMTP
+              <input
+                name="support_smtp_user"
+                type="email"
+                defaultValue={settings.support_smtp_user || defaultSettings.support_smtp_user}
+                required
+              />
+            </label>
+            <label>
+              Servidor SMTP
+              <input
+                name="support_smtp_host"
+                defaultValue={settings.support_smtp_host || defaultSettings.support_smtp_host}
+                required
+              />
+            </label>
+            <label>
+              Porta segura
+              <select name="support_smtp_port" defaultValue={settings.support_smtp_port || "465"}>
+                <option value="465">465 — SSL/TLS</option>
+                <option value="587">587 — STARTTLS</option>
+              </select>
+            </label>
+            <label className="wide">
+              Senha da conta de e-mail
+              <input
+                name="support_smtp_password"
+                type="password"
+                autoComplete="new-password"
+                placeholder={settings.support_smtp_password_configured ? "Senha já salva; deixe em branco para manter" : "Digite a senha criada no cPanel"}
+              />
+              <small className="field-hint">
+                A senha não volta para o navegador e permanece criptografada no banco de dados.
+              </small>
+            </label>
+          </div>
+
+          {(supportEmailError || settings.support_smtp_last_error) && (
+            <strong className="oauth-error">{supportEmailError || settings.support_smtp_last_error}</strong>
+          )}
+
+          <div className="settings-card-actions">
+            <button className="primary-action" type="submit" disabled={isBusy}>
+              <ShieldCheck size={18} />
+              {busy === "email-save" ? "Salvando e autenticando..." : "Salvar e autenticar SMTP"}
+            </button>
+            {settings.support_smtp_password_configured && (
+              <button className="secondary-action" type="button" onClick={testSupportEmail} disabled={isBusy}>
+                {busy === "email-test" ? "Autenticando..." : "Testar conexão"}
+              </button>
+            )}
+            {settings.support_smtp_connected && (
+              <button className="secondary-action" type="button" onClick={sendSupportEmailTestMessage} disabled={isBusy}>
+                {busy === "email-send-test" ? "Enviando..." : "Enviar e-mail de teste"}
+              </button>
+            )}
+          </div>
         </div>
       </form>
       </section>

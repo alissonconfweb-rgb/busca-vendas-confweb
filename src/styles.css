@@ -3162,6 +3162,37 @@ button.learn-card span {
   grid-column: 1 / -1;
 }
 
+.support-flow {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.support-flow span {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 42px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--blue-dark);
+  background: #f7faff;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.support-flow b {
+  display: inline-grid;
+  width: 23px;
+  height: 23px;
+  place-items: center;
+  border-radius: 50%;
+  color: #fff;
+  background: var(--blue);
+  font-size: 11px;
+}
+
 .success-text {
   margin: 0;
   color: var(--success);
@@ -3226,6 +3257,31 @@ button.learn-card span {
   background: #fff4e6;
 }
 
+.support-email-state {
+  width: fit-content;
+  border-radius: 999px;
+  color: var(--muted);
+  background: var(--surface-soft);
+  padding: 5px 9px;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.support-email-state.is-sent {
+  color: var(--success);
+  background: #eaf8f1;
+}
+
+.support-email-state.is-failed {
+  color: var(--danger);
+  background: #fff0f0;
+}
+
+.support-email-error {
+  color: var(--danger) !important;
+  font-size: 11px !important;
+}
+
 .support-ticket-message,
 .support-ticket-response {
   display: grid;
@@ -3276,6 +3332,29 @@ button.learn-card span {
 .support-admin-empty p {
   max-width: 560px;
   margin: 0;
+}
+
+.support-admin-channel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border: 1px solid #b8d2e8;
+  border-radius: 14px;
+  color: var(--blue-dark);
+  background: #f4f9fd;
+  padding: 13px 15px;
+}
+
+.support-admin-channel > div {
+  display: grid;
+  gap: 3px;
+}
+
+.support-admin-channel span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .history-row {
@@ -5636,6 +5715,11 @@ article.finance-row {
     grid-template-columns: 1fr;
   }
 
+  .support-admin-channel {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
   .admin-tabs button,
   .admin-form button,
   .settings-save-bar button,
@@ -5645,6 +5729,10 @@ article.finance-row {
 }
 
 @media (max-width: 620px) {
+  .support-flow {
+    grid-template-columns: 1fr;
+  }
+
   body {
     background: #f7f9fc;
   }

@@ -239,6 +239,14 @@ export function initDatabase() {
   ensureColumn("users", "password_changed_at", "TEXT");
   ensureColumn("users", "business_model", "TEXT");
   ensureColumn("users", "marketplace_experience", "TEXT");
+  ensureColumn("support_tickets", "notification_email_status", "TEXT NOT NULL DEFAULT 'not_sent'");
+  ensureColumn("support_tickets", "notification_email_sent_at", "TEXT");
+  ensureColumn("support_tickets", "notification_email_message_id", "TEXT");
+  ensureColumn("support_tickets", "notification_email_error", "TEXT");
+  ensureColumn("support_tickets", "response_email_status", "TEXT NOT NULL DEFAULT 'not_sent'");
+  ensureColumn("support_tickets", "response_email_sent_at", "TEXT");
+  ensureColumn("support_tickets", "response_email_message_id", "TEXT");
+  ensureColumn("support_tickets", "response_email_error", "TEXT");
   ensureColumn("finance_records", "provider", "TEXT");
   ensureColumn("finance_records", "external_id", "TEXT");
   ensureColumn("finance_records", "provider_payment_id", "TEXT");
@@ -298,6 +306,14 @@ function seedDefaults() {
     commercial_training_url: "https://www.confweb.com.br",
     commercial_support_text: "Precisa de ajuda? Fale com um especialista da Confweb.",
     commercial_support_button: "Conversar",
+    support_email_address: "suportebuscavendas@confweb.com.br",
+    support_smtp_host: "mail.confweb.com.br",
+    support_smtp_port: "465",
+    support_smtp_secure: "true",
+    support_smtp_user: "suportebuscavendas@confweb.com.br",
+    support_smtp_password: "",
+    support_smtp_verified: "false",
+    support_smtp_last_error: "",
     oxylabs_enabled: "false",
     oxylabs_mode: "web_unblocker",
     oxylabs_endpoint: "https://unblock.oxylabs.io:60000",
