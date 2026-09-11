@@ -1492,6 +1492,56 @@ textarea:focus {
   background: #fff9f4;
 }
 
+.search-correction-prompt,
+.search-correction-notice {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid #b8d2e8;
+  border-radius: 12px;
+  background: #f4f9fd;
+  padding: 12px 14px;
+  color: var(--blue-dark);
+}
+
+.search-correction-prompt > div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  margin-right: auto;
+}
+
+.search-correction-prompt strong,
+.search-correction-notice strong {
+  font-weight: 900;
+}
+
+.search-correction-prompt p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.search-correction-prompt button {
+  flex: 0 0 auto;
+  min-height: 42px;
+  border-radius: 8px;
+  color: #fff;
+  background: var(--orange);
+  padding: 0 14px;
+  font-weight: 900;
+}
+
+.search-correction-notice {
+  justify-content: center;
+  border-color: #b8dfcc;
+  background: #effaf5;
+  color: var(--success);
+  font-size: 13px;
+  font-weight: 700;
+}
+
 .inline-error,
 .form-error {
   margin: 0;
@@ -6835,6 +6885,19 @@ article.finance-row {
 @media (max-width: 620px) {
   .results-anchor {
     gap: 14px;
+  }
+
+  .search-correction-prompt {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .search-correction-prompt > svg {
+    align-self: flex-start;
+  }
+
+  .search-correction-prompt button {
+    width: 100%;
   }
 
   .opportunity-card {

@@ -686,6 +686,12 @@ async function handleSearchStatus(req, res, user, requestId) {
 
   if (request.status === "ready") {
     const result = parseSearchPayload(request.payload);
+    if (isQueryConfirmationResult(result)) {
+      return json(res, 200, {
+        pending: false,
+        result,
+      });
+    }
     if (isBillableSearchResult(result) && cachedResultMatchesQuery(result, request.query)) {
       recordDeliveredSearch(user, request.query, result, request.id);
       return json(res, 200, {
@@ -788,6 +794,13 @@ function startSearchRequest(requestId, query) {
   const task = scheduleMarketSearchRefresh(query, { deadlineAt })
     .then(async (result) => {
       let completed = result;
+      if (isQueryConfirmationResult(completed)) {
+        markSearchRequestReady(requestId, completed);
+        console.info(
+          `[search:${requestId}] confirmation-required durationMs=${Date.now() - startedAt} suggestion=${JSON.stringify(completed.suggestedQuery)}`,
+        );
+        return completed;
+      }
       if (!isBillableSearchResult(completed)) {
         const fallback = getFreshCachedSearchResult(query)
           || getStaleCachedSearchResult(query)
@@ -923,6 +936,14 @@ async function resolveMarketSearch(query, options = {}) {
 
 function isBillableSearchResult(result) {
   return isCompleteRealSalesResult(result);
+}
+
+function isQueryConfirmationResult(result) {
+  return Boolean(
+    result?.needsConfirmation === true
+    && typeof result?.suggestedQuery === "string"
+    && result.suggestedQuery.trim(),
+  );
 }
 
 function enforceChampionThreshold(query, result) {
@@ -1103,7 +1124,8 @@ function cachedResultMatchesQuery(result, query) {
   if (Number(result.salesParserVersion || 0) < SCRAPEDO_SALES_PARSER_VERSION) {
     return false;
   }
-  const spec = buildProductQuerySpec(query);
+  const interpretedQuery = result?.queryInterpretation?.interpretedQuery;
+  const spec = buildProductQuerySpec(interpretedQuery || query);
   return result.items.slice(0, 3).every((item) => matchesMarketplaceSearchResult(item?.title || "", spec).ok);
 }
 

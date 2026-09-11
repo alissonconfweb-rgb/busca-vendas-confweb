@@ -218,6 +218,89 @@ export function buildMarketplaceSearchQueries(query) {
   return [...new Set(variants.map((value) => value.trim()).filter(Boolean))].slice(0, 5);
 }
 
+export function interpretMarketplaceQuery(query, candidateTitles = []) {
+  const spec = buildProductQuerySpec(query);
+  const titleTokenRows = candidateTitles
+    .slice(0, 24)
+    .map((title) => [...new Set(tokenizeProductText(title))]);
+  const tokenStats = new Map();
+
+  titleTokenRows.forEach((tokens, titleIndex) => {
+    tokens.forEach((token) => {
+      if (token.length < 3 || /\d/.test(token)) {
+        return;
+      }
+      const current = tokenStats.get(token) || { token, occurrences: 0, rankScore: 0 };
+      current.occurrences += 1;
+      current.rankScore += 1 / (titleIndex + 1);
+      tokenStats.set(token, current);
+    });
+  });
+
+  const corrections = [];
+  const interpretedTokens = spec.tokens.map((token) => {
+    if (
+      token.length < 4
+      || /\d/.test(token)
+      || titleTokenRows.some((titleTokens) => titleTokens.some((titleToken) => isDirectTokenMatch(token, titleToken)))
+    ) {
+      return token;
+    }
+
+    const candidates = [...tokenStats.values()]
+      .map((candidate) => {
+        const distance = damerauLevenshteinDistance(token, candidate.token);
+        const similarity = 1 - (distance / Math.max(token.length, candidate.token.length));
+        return { ...candidate, distance, similarity };
+      })
+      .filter((candidate) => {
+        const distanceLimit = token.length >= 10 ? 3 : token.length >= 7 ? 2 : 1;
+        return candidate.distance <= distanceLimit
+          && candidate.similarity >= 0.7
+          && (candidate.token[0] === token[0] || candidate.distance === 1);
+      })
+      .sort((left, right) => (
+        left.distance - right.distance
+        || right.occurrences - left.occurrences
+        || right.rankScore - left.rankScore
+        || left.token.localeCompare(right.token)
+      ));
+    const best = candidates[0];
+    if (!best) {
+      return token;
+    }
+
+    const confidence = best.distance === 1
+      || (best.distance === 2 && token.length >= 8 && best.occurrences >= 2)
+      ? "high"
+      : "medium";
+    corrections.push({
+      from: token,
+      to: best.token,
+      confidence,
+      occurrences: best.occurrences,
+    });
+    return best.token;
+  });
+
+  const hasKnownCorrection = spec.normalized !== spec.rawNormalized;
+  const corrected = hasKnownCorrection || corrections.length > 0;
+  const confidence = corrections.some((correction) => correction.confidence === "medium")
+    ? "medium"
+    : corrected
+      ? "high"
+      : "none";
+
+  return {
+    originalQuery: spec.original,
+    normalizedQuery: spec.normalized,
+    interpretedQuery: corrections.length ? interpretedTokens.join(" ") : spec.normalized,
+    corrected,
+    confidence,
+    corrections,
+  };
+}
+
 export function tokenizeProductText(text) {
   const withoutMeasures = stripMeasures(text);
   return normalizeCorrectedText(withoutMeasures)
@@ -332,15 +415,7 @@ function hasUnrequestedBundle(title, spec) {
 }
 
 function tokenMatchesTitle(token, titleTokens, normalizedTitle) {
-  if (titleTokens.has(token)) {
-    return true;
-  }
-
-  if ([...titleTokens].some((titleToken) => isPortugueseSingularPluralMatch(token, titleToken))) {
-    return true;
-  }
-
-  if ([...titleTokens].some((titleToken) => areEquivalentProductTokens(token, titleToken))) {
+  if ([...titleTokens].some((titleToken) => isDirectTokenMatch(token, titleToken))) {
     return true;
   }
 
@@ -353,6 +428,12 @@ function tokenMatchesTitle(token, titleTokens, normalizedTitle) {
     && Math.abs(titleToken.length - token.length) <= 1
     && levenshteinDistance(titleToken, token) <= 1,
   );
+}
+
+function isDirectTokenMatch(left, right) {
+  return left === right
+    || isPortugueseSingularPluralMatch(left, right)
+    || areEquivalentProductTokens(left, right);
 }
 
 function areEquivalentProductTokens(left, right) {
@@ -446,6 +527,40 @@ function levenshteinDistance(a, b) {
   }
 
   return previous[b.length];
+}
+
+function damerauLevenshteinDistance(a, b) {
+  const rows = a.length + 1;
+  const columns = b.length + 1;
+  const matrix = Array.from({ length: rows }, () => new Array(columns).fill(0));
+
+  for (let row = 0; row < rows; row += 1) {
+    matrix[row][0] = row;
+  }
+  for (let column = 0; column < columns; column += 1) {
+    matrix[0][column] = column;
+  }
+
+  for (let row = 1; row < rows; row += 1) {
+    for (let column = 1; column < columns; column += 1) {
+      const substitutionCost = a[row - 1] === b[column - 1] ? 0 : 1;
+      matrix[row][column] = Math.min(
+        matrix[row - 1][column] + 1,
+        matrix[row][column - 1] + 1,
+        matrix[row - 1][column - 1] + substitutionCost,
+      );
+      if (
+        row > 1
+        && column > 1
+        && a[row - 1] === b[column - 2]
+        && a[row - 2] === b[column - 1]
+      ) {
+        matrix[row][column] = Math.min(matrix[row][column], matrix[row - 2][column - 2] + 1);
+      }
+    }
+  }
+
+  return matrix[a.length][b.length];
 }
 
 function normalizeMeasureText(text) {

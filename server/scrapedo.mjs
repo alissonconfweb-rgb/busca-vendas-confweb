@@ -3,6 +3,7 @@ import { db, getSetting, setSetting } from "./db.mjs";
 import {
   buildMarketplaceSearchQueries,
   buildProductQuerySpec,
+  interpretMarketplaceQuery,
   matchesMarketplaceSearchResult,
   normalizeProductSearchQuery,
   normalizedProductKey,
@@ -264,7 +265,6 @@ async function executeMercadoLivreScrapeDo(query, options = {}) {
     return emptyResult("scrapedo_not_configured", "Scrape.do ainda não foi configurada.");
   }
 
-  const querySpec = buildProductQuerySpec(query);
   const searchQuery = normalizeProductSearchQuery(query);
   const sessionId = createSessionId();
   const maximumDeadlineAt = Date.now() + searchDeadlineMs();
@@ -338,13 +338,30 @@ async function executeMercadoLivreScrapeDo(query, options = {}) {
         .filter((item) => (
           item.title
           && item.price > 0
-          && matchesMarketplaceSearchResult(item.title, querySpec).ok
         )),
     );
 
   }
 
-  const uniqueCandidates = rankCandidatesByPublicSales(dedupe(candidates)).slice(0, detailLimit());
+  const interpretation = interpretMarketplaceQuery(query, candidates.map((item) => item.title));
+  const queryInterpretation = interpretation.corrected ? interpretation : null;
+  if (interpretation.corrected && interpretation.confidence === "medium") {
+    return {
+      ...emptyResult(
+        "query_confirmation_required",
+        `Encontramos produtos para "${interpretation.interpretedQuery}". Confirme a correção para continuar a análise.`,
+      ),
+      needsConfirmation: true,
+      suggestedQuery: interpretation.interpretedQuery,
+      queryInterpretation,
+      totalAvailable: totalAvailable || candidates.length,
+      providerCreditsUsed: creditsUsed,
+    };
+  }
+
+  const querySpec = buildProductQuerySpec(interpretation.interpretedQuery || query);
+  const relevantCandidates = candidates.filter((item) => matchesMarketplaceSearchResult(item.title, querySpec).ok);
+  const uniqueCandidates = rankCandidatesByPublicSales(dedupe(relevantCandidates)).slice(0, detailLimit());
   if (!uniqueCandidates.length && lastPageError) {
     throw lastPageError;
   }
@@ -400,12 +417,13 @@ async function executeMercadoLivreScrapeDo(query, options = {}) {
   ));
 
   if (verifiedBeforeSupplement.length < 3) {
-    const supplemental = await collectSupplementalVerifiedItems(query, querySpec, {
+    const supplemental = await collectSupplementalVerifiedItems(interpretation.interpretedQuery || query, querySpec, {
       sessionId,
       cookies,
       existingItems: enrichedPool,
       options,
       deadlineAt,
+      initialSearchQuery: searchQuery,
     });
     creditsUsed += supplemental.creditsUsed;
     itemCacheHits += supplemental.itemCacheHits;
@@ -437,6 +455,7 @@ async function executeMercadoLivreScrapeDo(query, options = {}) {
       totalAvailable: totalAvailable || uniqueCandidates.length,
       providerCreditsUsed: creditsUsed,
       itemCacheHits,
+      queryInterpretation,
     });
   }
 
@@ -454,6 +473,7 @@ async function executeMercadoLivreScrapeDo(query, options = {}) {
       itemCacheHits,
       opportunityMode: "emerging",
       marketThreshold: minimumChampionSales(),
+      queryInterpretation,
     });
   }
 
@@ -467,6 +487,7 @@ async function executeMercadoLivreScrapeDo(query, options = {}) {
       itemCacheHits,
       opportunityMode: "developing",
       marketThreshold: minimumChampionSales(),
+      queryInterpretation,
     });
   }
 
@@ -479,11 +500,15 @@ async function executeMercadoLivreScrapeDo(query, options = {}) {
     totalAvailable: totalAvailable || uniqueCandidates.length,
     providerCreditsUsed: creditsUsed,
     itemCacheHits,
+    ...(queryInterpretation ? { queryInterpretation } : {}),
   };
 }
 
 async function collectSupplementalVerifiedItems(query, querySpec, context) {
-  const variants = buildMarketplaceSearchQueries(query).slice(1, 1 + SUPPLEMENTAL_QUERY_VARIANTS);
+  const initialSearchKey = normalizedProductKey(context.initialSearchQuery || query);
+  const variants = buildMarketplaceSearchQueries(query)
+    .filter((variant) => normalizedProductKey(variant) !== initialSearchKey)
+    .slice(0, SUPPLEMENTAL_QUERY_VARIANTS);
   const collected = [];
   let cookies = context.cookies || "";
   let creditsUsed = 0;
@@ -774,6 +799,7 @@ function buildSalesResult(items, metadata = {}) {
     itemCacheHits: Number(metadata.itemCacheHits || 0),
     ...(metadata.opportunityMode ? { opportunityMode: metadata.opportunityMode } : {}),
     ...(metadata.marketThreshold ? { marketThreshold: metadata.marketThreshold } : {}),
+    ...(metadata.queryInterpretation ? { queryInterpretation: metadata.queryInterpretation } : {}),
     totals: {
       demand,
       revenue,

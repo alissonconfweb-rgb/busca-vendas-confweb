@@ -173,6 +173,21 @@ type MarginEstimate = {
 type SearchResult = {
   ok: boolean;
   source: string;
+  needsConfirmation?: boolean;
+  suggestedQuery?: string;
+  queryInterpretation?: {
+    originalQuery: string;
+    normalizedQuery: string;
+    interpretedQuery: string;
+    corrected: boolean;
+    confidence: "high" | "medium" | "none";
+    corrections: Array<{
+      from: string;
+      to: string;
+      confidence: "high" | "medium";
+      occurrences: number;
+    }>;
+  };
   metricsMode?: "sales" | "market_signal";
   salesAvailable?: boolean;
   opportunityMode?: "emerging" | "developing";
@@ -1595,7 +1610,7 @@ function SearchPage({
     };
   }, [user?.id]);
 
-  const submitSearch = async (event?: FormEvent<HTMLFormElement>) => {
+  const submitSearch = async (event?: FormEvent<HTMLFormElement>, queryOverride?: string) => {
     event?.preventDefault();
     if (!onLoginRequired()) {
       return;
@@ -1605,10 +1620,13 @@ function SearchPage({
       return;
     }
 
-    const cleanQuery = query.trim();
+    const cleanQuery = String(queryOverride || query).trim().slice(0, 160);
     if (!cleanQuery) {
       setError("Digite o produto que deseja validar.");
       return;
+    }
+    if (queryOverride) {
+      setQuery(cleanQuery);
     }
 
     setActiveQuery(cleanQuery);
@@ -1718,6 +1736,7 @@ function SearchPage({
               contacts={contacts}
               canSeeMargin={Boolean(canSeeMargin)}
               onPlans={onPlans}
+              onSearchSuggestion={(suggestion) => void submitSearch(undefined, suggestion)}
             />
             {Boolean(result?.ok && result.items.length && shouldOfferPaidPlan) && (
               <PlansPreview settings={settings} onSelectPlan={onCheckout} />
@@ -1793,6 +1812,7 @@ function ResultsPanel({
   contacts,
   canSeeMargin,
   onPlans,
+  onSearchSuggestion,
 }: {
   query: string;
   result: SearchResult | null;
@@ -1801,8 +1821,10 @@ function ResultsPanel({
   contacts: Contact[];
   canSeeMargin: boolean;
   onPlans: () => void;
+  onSearchSuggestion: (query: string) => void;
 }) {
-  const marketUrl = `https://lista.mercadolivre.com.br/${encodeURIComponent(query)}`;
+  const interpretedQuery = result?.queryInterpretation?.interpretedQuery || query;
+  const marketUrl = `https://lista.mercadolivre.com.br/${encodeURIComponent(interpretedQuery)}`;
   const items = result?.items ?? [];
   const hasItems = items.length > 0;
   const marketSignalMode = result?.metricsMode === "market_signal" || result?.salesAvailable === false;
@@ -1882,15 +1904,35 @@ function ResultsPanel({
 
       {loading && <SearchProgress query={query} elapsedMs={elapsedMs} />}
 
-      {!loading && !hasItems && (
+      {!loading && result?.needsConfirmation && result.suggestedQuery && (
+        <div className="search-correction-prompt" role="status">
+          <HelpCircle size={30} />
+          <div>
+            <strong>Você quis dizer “{result.suggestedQuery}”?</strong>
+            <p>Confirme o produto para pesquisarmos os anúncios corretos. Esta confirmação não consome sua pesquisa.</p>
+          </div>
+          <button type="button" onClick={() => onSearchSuggestion(result.suggestedQuery || "")}>
+            Sim, buscar este produto
+          </button>
+        </div>
+      )}
+
+      {!loading && hasItems && result?.queryInterpretation?.corrected && (
+        <div className="search-correction-notice" role="status">
+          <CircleCheck size={18} />
+          <span>Resultados encontrados para <strong>{result.queryInterpretation.interpretedQuery}</strong>.</span>
+        </div>
+      )}
+
+      {!loading && !hasItems && !result?.needsConfirmation && (
         <div className={`market-empty ${result && !result.ok ? "warning" : ""}`}>
           <PackageSearch size={34} />
           <strong>
             {result
-              ? "Não foi possível concluir esta análise agora. Sua pesquisa não foi consumida."
+              ? "Ainda não encontramos três anúncios públicos para este termo."
               : "Pesquise seu produto e descubra o tamanho dessa oportunidade."}
           </strong>
-          <p>{result ? "Tente novamente em instantes. Seus resultados só serão liberados quando os dados estiverem completos." : emptyHelp}</p>
+          <p>{result ? "Revise o nome, acrescente o tipo ou a marca do produto e pesquise novamente. Sua pesquisa não foi consumida." : emptyHelp}</p>
         </div>
       )}
 

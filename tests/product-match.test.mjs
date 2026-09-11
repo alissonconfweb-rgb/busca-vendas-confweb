@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   buildMarketplaceSearchQueries,
   buildProductQuerySpec,
+  interpretMarketplaceQuery,
   matchesMarketplaceSearchResult,
   matchesProductQuery,
   normalizeProductSearchQuery,
@@ -137,6 +138,53 @@ test("trata moda como contexto sem perder o publico infantil", () => {
   assert.equal(matchesMarketplaceSearchResult("Camiseta Infantil Casual de Algodão", spec).ok, true);
   assert.equal(matchesMarketplaceSearchResult("Vestido Infantil Juvenil Moda Evangélica", spec).ok, true);
   assert.equal(matchesMarketplaceSearchResult("Vestido Feminino Adulto", spec).ok, false);
+});
+
+test("corrige erro de digitacao usando consenso dos resultados do marketplace", () => {
+  const interpretation = interpretMarketplaceQuery("camistea feminina", [
+    "Camiseta Feminina Oversized Gola V",
+    "Camiseta Feminina Básica de Algodão",
+    "Camiseta Feminina Proteção UV",
+    "Camisa Feminina Social Manga Longa",
+  ]);
+
+  assert.equal(interpretation.corrected, true);
+  assert.equal(interpretation.confidence, "high");
+  assert.equal(interpretation.interpretedQuery, "camiseta feminina");
+  assert.deepEqual(interpretation.corrections.map(({ from, to }) => ({ from, to })), [
+    { from: "camistea", to: "camiseta" },
+  ]);
+});
+
+test("pede confirmacao quando a correcao tem menor evidencia", () => {
+  const interpretation = interpretMarketplaceQuery("cafeteorra eletrica", [
+    "Cafeteira Elétrica Inox Programável",
+    "Máquina Espresso Automática",
+  ]);
+
+  assert.equal(interpretation.corrected, true);
+  assert.equal(interpretation.confidence, "medium");
+  assert.equal(interpretation.interpretedQuery, "cafeteira eletrica");
+});
+
+test("corrige tambem erros nos qualificadores do produto", () => {
+  const interpretation = interpretMarketplaceQuery("mesa infnatil madeirra", [
+    "Mesa Infantil de Madeira com Duas Cadeiras",
+    "Mesa Infantil Madeira Maciça",
+  ]);
+
+  assert.equal(interpretation.confidence, "high");
+  assert.equal(interpretation.interpretedQuery, "mesa infantil madeira");
+});
+
+test("nao corrige numero de modelo nem termo sem evidencia", () => {
+  const interpretation = interpretMarketplaceQuery("iphone 16 pro", [
+    "Apple iPhone 15 Pro Max",
+    "Capa para iPhone 15 Pro",
+  ]);
+
+  assert.equal(interpretation.corrected, false);
+  assert.equal(interpretation.interpretedQuery, "iphone 16 pro");
 });
 
 test("amplia uma busca com marca sem perder o produto principal", () => {
