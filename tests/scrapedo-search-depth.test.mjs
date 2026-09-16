@@ -7,7 +7,7 @@ import test, { after } from "node:test";
 const tempDir = mkdtempSync(join(tmpdir(), "busca-vendas-scrapedo-depth-"));
 process.env.DB_PATH = join(tempDir, "scrapedo-depth.sqlite");
 
-const { db, initDatabase, setSetting } = await import("../server/db.mjs");
+const { db, getSetting, initDatabase, setSetting } = await import("../server/db.mjs");
 const {
   ensureScrapeDoSearchDepth,
   hasEnoughInspectedCandidates,
@@ -25,8 +25,8 @@ after(() => {
   rmSync(tempDir, { recursive: true, force: true });
 });
 
-test("migra a varredura antiga para duas paginas de ranking", () => {
-  setSetting("scrapedo_latency_policy_version", "2");
+test("migra a coleta para paginas paralelas e tentativas mais curtas", () => {
+  setSetting("scrapedo_latency_policy_version", "3");
   setSetting("scrapedo_search_pages", "1");
   setSetting("scrapedo_detail_limit", "9");
 
@@ -38,10 +38,12 @@ test("migra a varredura antiga para duas paginas de ranking", () => {
     candidateTarget: 6,
     detailConcurrency: 3,
   });
+  assert.equal(getSetting("scrapedo_timeout_ms"), "10000");
+  assert.equal(getSetting("scrapedo_latency_policy_version"), "4");
 });
 
 test("preserva a politica otimizada depois da migracao", () => {
-  setSetting("scrapedo_latency_policy_version", "3");
+  setSetting("scrapedo_latency_policy_version", "4");
   setSetting("scrapedo_search_pages", "4");
   setSetting("scrapedo_detail_limit", "48");
 

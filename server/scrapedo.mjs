@@ -22,7 +22,7 @@ const SUPPLEMENTAL_QUERY_VARIANTS = 2;
 const EMERGING_MARKET_SAMPLE_SIZE = 6;
 const DEFAULT_DETAIL_CONCURRENCY = 3;
 const DEFAULT_SEARCH_DEADLINE_MS = 55_000;
-const DEFAULT_REQUEST_TIMEOUT_MS = 18_000;
+const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
 const MINIMUM_REQUEST_BUDGET_MS = 1_500;
 export const SCRAPEDO_ITEM_METADATA_VERSION = 5;
 export const SCRAPEDO_PRICE_PARSER_VERSION = 3;
@@ -170,13 +170,13 @@ export function scrapeDoUsageSummary() {
 }
 
 export function ensureScrapeDoSearchDepth() {
-  if (getSetting("scrapedo_latency_policy_version") !== "3") {
+  if (getSetting("scrapedo_latency_policy_version") !== "4") {
     setSetting("scrapedo_search_pages", String(DEFAULT_SEARCH_PAGES));
     setSetting("scrapedo_detail_limit", String(DEFAULT_DETAIL_LIMIT));
     setSetting("scrapedo_candidate_target", String(EMERGING_MARKET_SAMPLE_SIZE));
     setSetting("scrapedo_detail_concurrency", String(DEFAULT_DETAIL_CONCURRENCY));
     setSetting("scrapedo_timeout_ms", String(DEFAULT_REQUEST_TIMEOUT_MS));
-    setSetting("scrapedo_latency_policy_version", "3");
+    setSetting("scrapedo_latency_policy_version", "4");
   }
 }
 
@@ -277,70 +277,76 @@ async function executeMercadoLivreScrapeDo(query, options = {}) {
   let creditsUsed = 0;
   let itemCacheHits = 0;
   let lastPageError = null;
-
-  for (let page = 1; page <= searchPages(); page += 1) {
-    if (!hasRequestBudget(deadlineAt)) {
-      break;
-    }
-    let pageResponse;
-    let usedRenderedResponse = false;
-    try {
-      pageResponse = await requestPage(parser.searchUrlFor(searchQuery, page), {
-        sessionId,
-        cookies,
-        render: false,
-        deadlineAt,
-      });
-    } catch (error) {
-      lastPageError = error;
-      pageResponse = await requestPage(parser.searchUrlFor(searchQuery, page), {
-        sessionId,
-        cookies,
-        render: true,
-        deadlineAt,
-      }).catch(() => null);
-      usedRenderedResponse = Boolean(pageResponse);
-      if (!pageResponse) {
-        continue;
-      }
-    }
+  const appendSearchPage = (pageResponse) => {
     cookies = pageResponse.cookies || cookies;
     creditsUsed += pageResponse.cost;
-    let pageItems = parser.extractSearchItems(pageResponse.html);
-
-    if (pageItems.length < 3 && !usedRenderedResponse) {
-      try {
-        const renderedResponse = await requestPage(parser.searchUrlFor(searchQuery, page), {
-          sessionId,
-          cookies,
-          render: true,
-          deadlineAt,
-        });
-        cookies = renderedResponse.cookies || cookies;
-        creditsUsed += renderedResponse.cost;
-        const renderedItems = parser.extractSearchItems(renderedResponse.html);
-        if (renderedItems.length > pageItems.length) {
-          pageResponse = renderedResponse;
-          pageItems = renderedItems;
-        }
-      } catch (error) {
-        lastPageError = error;
-      }
-    }
-
-    totalAvailable = totalAvailable || parser.parseTotalAvailable(pageResponse.html);
+    totalAvailable = Math.max(totalAvailable, parser.parseTotalAvailable(pageResponse.html) || 0);
+    const pageItems = parser.extractSearchItems(pageResponse.html);
     candidates.push(
       ...pageItems
         .map((item, index) => ({
           ...item,
           position: item.position || candidates.length + index + 1,
         }))
-        .filter((item) => (
-          item.title
-          && item.price > 0
-        )),
+        .filter((item) => item.title && item.price > 0),
     );
+    return pageItems.length;
+  };
 
+  const exactPages = Array.from({ length: searchPages() }, (_, index) => index + 1);
+  const exactPageResults = await Promise.all(exactPages.map(async (page) => {
+    try {
+      return await requestPage(parser.searchUrlFor(searchQuery, page), {
+        sessionId,
+        render: false,
+        deadlineAt,
+        retry: false,
+      });
+    } catch (error) {
+      lastPageError = error;
+      return null;
+    }
+  }));
+  exactPageResults.filter(Boolean).forEach(appendSearchPage);
+
+  if (dedupe(candidates).length < 3) {
+    const fallbackQueries = buildMarketplaceSearchQueries(query)
+      .filter((variant) => normalizedProductKey(variant) !== normalizedProductKey(searchQuery));
+    for (const variant of fallbackQueries) {
+      if (!hasRequestBudget(deadlineAt)) {
+        break;
+      }
+      try {
+        const fallbackResponse = await requestPage(parser.searchUrlFor(variant, 1), {
+          sessionId,
+          cookies,
+          render: false,
+          deadlineAt,
+          retry: false,
+        });
+        appendSearchPage(fallbackResponse);
+        if (dedupe(candidates).length >= 3) {
+          break;
+        }
+      } catch (error) {
+        lastPageError = error;
+      }
+    }
+  }
+
+  if (dedupe(candidates).length < 3 && hasRequestBudget(deadlineAt)) {
+    try {
+      const renderedResponse = await requestPage(parser.searchUrlFor(searchQuery, 1), {
+        sessionId,
+        cookies,
+        render: true,
+        deadlineAt,
+        retry: false,
+      });
+      appendSearchPage(renderedResponse);
+    } catch (error) {
+      lastPageError = error;
+    }
   }
 
   const interpretation = interpretMarketplaceQuery(query, candidates.map((item) => item.title));
@@ -900,9 +906,19 @@ async function requestPage(targetUrl, options = {}) {
 
   const requestUrl = `${scrapeDoEndpoint()}?${params.toString()}`;
   const startedAt = Date.now();
-  const response = await fetchScrapeDoPageWithRetry(requestUrl, {
-    deadlineAt: options.deadlineAt,
-  });
+  let response;
+  try {
+    response = await fetchScrapeDoPageWithRetry(requestUrl, {
+      deadlineAt: options.deadlineAt,
+      maxAttempts: options.retry === false ? 1 : 2,
+    });
+  } catch (error) {
+    const target = new URL(targetUrl);
+    console.warn(
+      `[scrapedo] request-failed durationMs=${Date.now() - startedAt} render=${options.render === true} target=${target.hostname}${target.pathname} reason=${JSON.stringify(String(error?.message || error || "erro desconhecido").slice(0, 120))}`,
+    );
+    throw error;
+  }
   const html = await response.text();
   if (!isUsableMercadoLivreHtml(response.status, html)) {
     throw new Error(describeError(response.status, html));
@@ -925,19 +941,20 @@ async function requestPage(targetUrl, options = {}) {
 
 async function fetchScrapeDoPageWithRetry(url, options = {}) {
   let lastError;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  const maxAttempts = Math.min(2, Math.max(1, Number(options.maxAttempts || 2)));
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     if (!hasRequestBudget(options.deadlineAt)) {
       break;
     }
     try {
       const response = await fetchScrapeDoPage(url, requestTimeoutMs(options.deadlineAt));
-      if (![502, 503, 504].includes(response.status) || attempt === 1) {
+      if (![502, 503, 504].includes(response.status) || attempt === maxAttempts - 1) {
         return response;
       }
       await response.body?.cancel();
     } catch (error) {
       lastError = error;
-      if (!isTransientFetchError(error) || attempt === 1) {
+      if (!isTransientFetchError(error) || attempt === maxAttempts - 1) {
         throw error;
       }
     }

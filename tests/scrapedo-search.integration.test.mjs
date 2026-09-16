@@ -35,6 +35,9 @@ globalThis.fetch = async (requestUrl) => {
   }
 
   const target = new URL(String(requestUrl)).searchParams.get("url") || "";
+  if (fixtureMode === "primary-timeout" && target.includes("/cordao-cracha-retratil")) {
+    throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+  }
   if (target.includes("lista.mercadolivre.com.br")) {
     return scrapeDoResponse(searchListingFixture());
   }
@@ -47,6 +50,20 @@ after(() => {
   globalThis.fetch = originalFetch;
   db.close();
   rmSync(tempDir, { recursive: true, force: true });
+});
+
+test("troca para uma consulta equivalente quando as paginas principais expiram", async () => {
+  fixtureMode = "primary-timeout";
+  requestCount = 0;
+  const result = await searchMercadoLivreScrapeDo("cordao cracha retratil", {
+    forceRefresh: true,
+    deadlineAt: Date.now() + 5_000,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.items.length, 3);
+  assert.deepEqual(result.items.map((item) => item.soldQuantity), [500, 100, 25]);
+  assert.ok(requestCount >= 6, `quantidade inesperada de chamadas: ${requestCount}`);
 });
 
 test("retorna tres oportunidades reais e rejeita vendas que pertencem ao vendedor", async () => {
