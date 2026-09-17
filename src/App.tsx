@@ -40,7 +40,8 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { Dispatch, FormEvent, ReactNode, SetStateAction, useEffect, useMemo, useRef, useState } from "react";
-import confwebLogoUrl from "./assets/confweb-logo.webp";
+import { BrandMark } from "./components/BrandMark";
+import { LandingPage } from "./components/LandingPage";
 
 type Role = "admin" | "user";
 type Plan = "free" | "starter" | "scale";
@@ -50,7 +51,22 @@ type BillingType = "PIX" | "CREDIT_CARD";
 type ChargeMode = "subscription" | "single";
 type BusinessModel = "importer" | "manufacturer" | "distributor" | "physical_retail" | "online_retail_cnpj" | "online_retail_no_cnpj";
 type MarketplaceExperience = "selling" | "starting";
-type Mode = "search" | "history" | "plans" | "checkout" | "learn" | "commercial" | "support" | "profile" | "admin" | "terms" | "privacy";
+type Mode = "landing" | "search" | "history" | "plans" | "checkout" | "learn" | "commercial" | "support" | "profile" | "admin" | "terms" | "privacy";
+
+const modePaths: Record<Mode, string> = {
+  landing: "/", search: "/app", history: "/pesquisas", plans: "/planos",
+  checkout: "/checkout", learn: "/dicas", commercial: "/especialista",
+  support: "/suporte", profile: "/perfil", admin: "/admin", terms: "/termos", privacy: "/privacidade",
+};
+
+function modeFromLocation(signedIn: boolean): Mode {
+  const params = new URLSearchParams(window.location.search);
+  if (params.has("q") || params.has("meli")) return "search";
+  const path = window.location.pathname.replace(/\/$/, "") || "/";
+  // Keep a direct entry to the tool for existing customers and partner query links.
+  if (path === "/") return window.history.state?.mode === "landing" || window.location.hash ? "landing" : signedIn ? "search" : "landing";
+  return (Object.entries(modePaths).find(([, value]) => value === path)?.[0] as Mode) || (signedIn ? "search" : "landing");
+}
 
 const BUSINESS_MODEL_LABELS: Record<BusinessModel, string> = {
   importer: "Importador",
@@ -850,7 +866,22 @@ function App() {
 }
 
 function ProductApp({ user, onUserChange }: { user: User | null; onUserChange: (user: User | null) => void }) {
-  const [mode, setMode] = useState<Mode>("search");
+  const [mode, updateMode] = useState<Mode>(() => modeFromLocation(Boolean(user)));
+  const setMode = (nextMode: Mode) => {
+    const url = new URL(window.location.href);
+    url.pathname = modePaths[nextMode];
+    url.hash = "";
+    if (nextMode !== "search") url.searchParams.delete("q");
+    if (nextMode !== "admin") url.searchParams.delete("meli");
+    if (nextMode !== "checkout") {
+      url.searchParams.delete("plan");
+      url.searchParams.delete("cycle");
+    }
+    if (`${url.pathname}${url.search}` !== `${window.location.pathname}${window.location.search}` || nextMode !== mode) {
+      window.history.pushState({ mode: nextMode }, "", `${url.pathname}${url.search}`);
+    }
+    updateMode(nextMode);
+  };
   const [loginOpen, setLoginOpen] = useState(false);
   const [loginMode, setLoginMode] = useState<"login" | "register">("login");
   const [settings, setSettings] = useState<SettingsMap>(defaultSettings);
@@ -859,10 +890,23 @@ function ProductApp({ user, onUserChange }: { user: User | null; onUserChange: (
   const [contacts, setContacts] = useState<Contact[]>(defaultContacts);
   const [history, setHistory] = useState<HistoryRecord[]>([]);
   const [refreshKey, setRefreshKey] = useState(0);
-  const [checkoutSelection, setCheckoutSelection] = useState<CheckoutSelection>({ plan: "starter", cycle: "monthly" });
+  const [checkoutSelection, setCheckoutSelection] = useState<CheckoutSelection>(() => {
+    const params = new URLSearchParams(window.location.search);
+    return { plan: params.get("plan") === "scale" ? "scale" : "starter", cycle: params.get("cycle") === "yearly" ? "yearly" : "monthly" };
+  });
   const [restoredSearch, setRestoredSearch] = useState<RestoredSearch | null>(null);
   const [selectedTip, setSelectedTip] = useState<Tip | null>(null);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem("bv_sidebar_collapsed") !== "false");
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem("bv_sidebar_collapsed") === "true");
+
+  useEffect(() => {
+    const onPopState = () => {
+      updateMode(modeFromLocation(Boolean(user)));
+      const params = new URLSearchParams(window.location.search);
+      setCheckoutSelection({ plan: params.get("plan") === "scale" ? "scale" : "starter", cycle: params.get("cycle") === "yearly" ? "yearly" : "monthly" });
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, [user]);
 
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: "auto" });
@@ -934,12 +978,20 @@ function ProductApp({ user, onUserChange }: { user: User | null; onUserChange: (
   };
 
   const openCheckout = (selection: CheckoutSelection) => {
-    setCheckoutSelection(selection);
     setMode("checkout");
+    selectCheckout(selection);
     if (!user) {
       openAuth("register");
       return;
     }
+  };
+
+  const selectCheckout = (selection: CheckoutSelection) => {
+    setCheckoutSelection(selection);
+    const url = new URL(window.location.href);
+    url.searchParams.set("plan", selection.plan);
+    url.searchParams.set("cycle", selection.cycle);
+    window.history.replaceState({ mode: "checkout" }, "", `${url.pathname}${url.search}`);
   };
 
   const openSavedSearch = async (record: HistoryRecord) => {
@@ -961,7 +1013,7 @@ function ProductApp({ user, onUserChange }: { user: User | null; onUserChange: (
   const logout = async () => {
     await api("/api/auth/logout", { method: "POST" });
     onUserChange(null);
-    setMode("search");
+    setMode("landing");
   };
 
   useEffect(() => {
@@ -973,7 +1025,20 @@ function ProductApp({ user, onUserChange }: { user: User | null; onUserChange: (
   }, [mode]);
 
   return (
-    <div className={sidebarCollapsed ? "bv-shell sidebar-collapsed" : "bv-shell sidebar-expanded"}>
+    <div className={mode === "landing" ? "bv-public-shell" : sidebarCollapsed ? "bv-shell sidebar-collapsed" : "bv-shell sidebar-expanded"}>
+      {mode === "landing" ? (
+        <LandingPage
+          signedIn={Boolean(user)}
+          starterPrice={money.format(planPricing(settings, "starter").monthly)}
+          scalePrice={money.format(planPricing(settings, "scale").monthly)}
+          onSearch={() => setMode("search")}
+          onLogin={() => openAuth("login")}
+          onRegister={() => openAuth("register")}
+          onSelectPlan={(plan) => openCheckout({ plan, cycle: "monthly" })}
+          onLegal={setMode}
+          onSupport={() => setMode("support")}
+        />
+      ) : <>
       <Sidebar
         mode={mode}
         user={user}
@@ -1013,7 +1078,7 @@ function ProductApp({ user, onUserChange }: { user: User | null; onUserChange: (
             user={user}
             settings={settings}
             selection={checkoutSelection}
-            onSelection={setCheckoutSelection}
+            onSelection={selectCheckout}
             onLoginRequired={requireLogin}
             onUserChange={onUserChange}
             onDone={() => setRefreshKey((key) => key + 1)}
@@ -1046,6 +1111,7 @@ function ProductApp({ user, onUserChange }: { user: User | null; onUserChange: (
         )}
         <LegalFooter onMode={setMode} />
       </main>
+      </>}
       {loginOpen && (
         <LoginModal
           initialMode={loginMode}
@@ -1053,6 +1119,7 @@ function ProductApp({ user, onUserChange }: { user: User | null; onUserChange: (
           onLogin={(loggedUser) => {
             onUserChange(loggedUser);
             setLoginOpen(false);
+            if (mode === "landing") setMode("search");
           }}
           onLegal={(legalMode) => {
             setLoginOpen(false);
@@ -1071,19 +1138,6 @@ function LoadingScreen() {
       <BrandMark />
       <p>Carregando Busca Vendas...</p>
     </main>
-  );
-}
-
-function BrandMark() {
-  return (
-    <div className="brand-mark">
-      <strong aria-label="Busca Vendas">
-        <span className="brand-busca">Busca</span>
-        <span className="brand-vendas">Vendas</span>
-      </strong>
-      <span className="brand-by">BY</span>
-      <img src={confwebLogoUrl} alt="Confweb" />
-    </div>
   );
 }
 
@@ -1123,7 +1177,7 @@ function Sidebar({
   return (
     <aside className={collapsed ? "bv-sidebar collapsed" : "bv-sidebar expanded"}>
       <div className="sidebar-brand-row">
-        <BrandMark />
+        <button className="sidebar-brand-home" type="button" onClick={() => onMode("landing")} aria-label="Conhecer o BuscaVendas"><BrandMark light /></button>
         <button
           className="sidebar-toggle"
           type="button"
@@ -1160,6 +1214,7 @@ function Sidebar({
           </button>
         ))}
       </nav>
+      <a className="sidebar-ecosystem" href="https://vemserseller.confweb.com.br/" target="_blank" rel="noreferrer" title="Conheça o VemSerSeller"><Rocket size={20} /><span><small>AINDA NÃO SABE O QUE VENDER?</small>Conheça o VemSerSeller</span><ChevronRight size={15} /></a>
       <PlanStatus user={user} onRegister={onRegister} onPlans={() => onMode("plans")} />
       <button className="help-card" type="button" onClick={() => onMode("support")}>
         <HelpCircle size={24} />
@@ -4214,7 +4269,7 @@ function LoginModal({
 function LegalFooter({ onMode }: { onMode: (mode: Mode) => void }) {
   return (
     <footer className="legal-footer">
-      <span>Busca Vendas por Confweb</span>
+      <button type="button" onClick={() => onMode("landing")}>BuscaVendas by Confweb</button>
       <button type="button" onClick={() => onMode("terms")}>Termos de Uso</button>
       <button type="button" onClick={() => onMode("privacy")}>Política de Privacidade</button>
       <a href="https://www.confweb.com.br" target="_blank" rel="noreferrer">Confweb</a>
