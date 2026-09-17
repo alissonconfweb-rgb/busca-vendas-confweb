@@ -650,7 +650,12 @@ async function handleSearch(req, res, user, query, options = {}) {
     });
   }
 
-  if (user.role !== "admin" && user.search_limit !== null && user.searches_used >= user.search_limit) {
+  if (
+    user.role !== "admin"
+    && user.plan !== "scale"
+    && user.search_limit !== null
+    && user.searches_used >= user.search_limit
+  ) {
     return json(res, 402, { error: "Limite de pesquisas atingido. Faça upgrade para continuar." });
   }
 
@@ -2232,7 +2237,7 @@ async function handleAdmin(req, res, url, currentUser) {
       marketplaceExperience,
       status,
       plan,
-      nullableNumber(body.search_limit),
+      plan === "scale" ? null : nullableNumber(body.search_limit),
       role,
       billingStatus,
       billingCycle,

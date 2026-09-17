@@ -270,6 +270,13 @@ export function initDatabase() {
       AND (billing_status IS NULL OR billing_status = 'none')
   `).run();
   db.prepare(`
+    UPDATE users
+    SET search_limit = NULL,
+        updated_at = CURRENT_TIMESTAMP
+    WHERE plan = 'scale'
+      AND search_limit IS NOT NULL
+  `).run();
+  db.prepare(`
     UPDATE sessions
     SET expires_at = replace(substr(expires_at, 1, 19), 'T', ' ')
     WHERE instr(expires_at, 'T') > 0
@@ -445,7 +452,10 @@ export function publicUser(user) {
     billing_provider_subscription_id,
     ...safeUser
   } = user;
-  return safeUser;
+  return {
+    ...safeUser,
+    search_limit: safeUser.plan === "scale" ? null : safeUser.search_limit,
+  };
 }
 
 export function createSession(userId) {

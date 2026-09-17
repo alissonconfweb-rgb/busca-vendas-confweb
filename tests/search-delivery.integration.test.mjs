@@ -193,12 +193,13 @@ test("entrega uma coleta concluída depois da resposta inicial sem cobrar duas v
       status: "active",
       plan: "scale",
       role: "user",
-      search_limit: null,
+      search_limit: "9999999999999999999999999999999999999999",
     }),
   });
   assert.equal(edited.status, 200);
   const editedUser = database.prepare("SELECT * FROM users WHERE id = ?").get(paidUserId);
   assert.equal(editedUser.name, "Cliente com nome editado");
+  assert.equal(editedUser.search_limit, null);
   assert.equal(editedUser.billing_status, "canceled");
   assert.equal(editedUser.billing_provider_subscription_id, "sub_cancelada");
   database.close();

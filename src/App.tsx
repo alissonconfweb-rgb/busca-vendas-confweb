@@ -1195,15 +1195,16 @@ function userPlanInfo(user: User | null) {
   }
 
   const planLabel = user.plan === "scale" ? "Ilimitado" : user.plan === "starter" ? "10 pesquisas" : "Grátis";
+  const unlimited = user.plan === "scale" || user.search_limit === null;
   const limit = user.search_limit ?? 1;
   const used = user.searches_used ?? 0;
   const remaining = billingNeedsAttention(user)
     ? "Bloqueadas até regularizar"
-    : user.search_limit === null
-      ? "Sem limite"
+    : unlimited
+      ? "Ilimitado"
       : `${Math.max(0, limit - used)} de ${limit}`;
   const usage =
-    user.search_limit === null
+    unlimited
       ? 100
       : Math.max(0, Math.min(100, ((limit - used) / Math.max(1, limit)) * 100));
 
