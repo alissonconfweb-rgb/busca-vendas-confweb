@@ -24,7 +24,7 @@ button:focus-visible, a:focus-visible, summary:focus-visible {
 }
 
 .confweb-brand { display: inline-flex; align-items: center; gap: 12px; color: var(--brand-navy); text-align: left; vertical-align: middle; white-space: nowrap; }
-.confweb-brand-symbol { color: var(--brand-orange); stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.confweb-brand-symbol { display: block; flex-shrink: 0; object-fit: contain; background: transparent; }
 .confweb-brand-type { display: grid; gap: 4px; }
 .confweb-brand-name { font-size: 25px; font-weight: 800; letter-spacing: -.8px; line-height: 1.15; }
 .confweb-brand-name > span { color: var(--brand-orange); }
@@ -41,14 +41,14 @@ button:focus-visible, a:focus-visible, summary:focus-visible {
 .bv-sidebar .sidebar-brand-row { position: relative; width: 100%; }
 .bv-sidebar.expanded .sidebar-brand-row { display: flex; justify-content: flex-start; min-height: 56px; }
 .sidebar-brand-home { background: transparent; padding: 0; text-align: left; }
-.bv-sidebar.expanded .confweb-brand { gap: 8px; }
-.bv-sidebar.expanded .confweb-brand-symbol { width: 33px; height: 43px; }
+.bv-sidebar.expanded .confweb-brand { gap: 4px; }
+.bv-sidebar.expanded .confweb-brand-symbol { width: 43px; height: 43px; }
 .bv-sidebar.expanded .confweb-brand-name { font-size: 23px; }
 .bv-sidebar.expanded .sidebar-toggle { position: absolute; right: -3px; top: 12px; width: 24px; height: 27px; border-radius: 5px; z-index: 1; }
 .bv-sidebar.collapsed .confweb-brand { flex-direction: column; gap: 7px; text-align: center; }
 .bv-sidebar.collapsed .confweb-brand-name { font-size: 13px; letter-spacing: -.3px; }
 .bv-sidebar.collapsed .confweb-brand-signature { font-size: 8px; }
-.bv-sidebar.collapsed .confweb-brand-symbol { width: 32px; height: 40px; }
+.bv-sidebar.collapsed .confweb-brand-symbol { width: 40px; height: 40px; }
 .bv-sidebar .sidebar-toggle { background: #1c1c35; color: #fff; border-color: #35354b; box-shadow: none; }
 .bv-sidebar.expanded .sidebar-nav button, .bv-sidebar.collapsed .sidebar-nav button { border-radius: 6px; color: #bcbcd0; font-weight: 600; }
 .bv-sidebar .sidebar-nav button svg { color: #999aae; stroke-width: 1.7; }
@@ -258,7 +258,7 @@ button:focus-visible, a:focus-visible, summary:focus-visible {
 @media (min-width: 621px) and (max-width: 900px) {
   .bv-shell.sidebar-expanded { grid-template-columns: 228px minmax(0, 1fr); }
   .bv-sidebar.expanded .confweb-brand-name { font-size: 20px; }
-  .bv-sidebar.expanded .confweb-brand-symbol { width: 27px; }
+  .bv-sidebar.expanded .confweb-brand-symbol { width: 35px; height: 40px; }
   .bv-sidebar.expanded .sidebar-toggle { right: -6px; width: 20px; }
 }
 @media (max-width: 780px) {
@@ -303,7 +303,7 @@ button:focus-visible, a:focus-visible, summary:focus-visible {
   .bv-sidebar.expanded .sidebar-brand-row, .bv-sidebar.collapsed .sidebar-brand-row { min-height: 0; display: block; }
   .bv-sidebar.expanded .confweb-brand, .bv-sidebar.collapsed .confweb-brand { flex-direction: row; text-align: left; gap: 9px; }
   .bv-sidebar.expanded .confweb-brand-name, .bv-sidebar.collapsed .confweb-brand-name { font-size: 20px; letter-spacing: -.6px; }
-  .bv-sidebar.expanded .confweb-brand-symbol, .bv-sidebar.collapsed .confweb-brand-symbol { width: 28px; height: 36px; }
+  .bv-sidebar.expanded .confweb-brand-symbol, .bv-sidebar.collapsed .confweb-brand-symbol { width: 36px; height: 36px; }
   .bv-sidebar.expanded .confweb-brand-signature, .bv-sidebar.collapsed .confweb-brand-signature { font-size: 9px; }
   .bv-sidebar .sidebar-ecosystem { display: none; }
   .bv-sidebar.expanded .sidebar-nav, .bv-sidebar.collapsed .sidebar-nav { background: #080823; border: 1px solid #34344b; border-radius: 12px; }
@@ -316,7 +316,7 @@ button:focus-visible, a:focus-visible, summary:focus-visible {
   .landing-header .confweb-brand { gap: 8px; }
   .landing-header .confweb-brand-name { font-size: 22px; }
   .landing-header .confweb-brand-signature { font-size: 10px; }
-  .landing-header .confweb-brand-symbol { width: 31px; height: 40px; }
+  .landing-header .confweb-brand-symbol { width: 40px; height: 40px; }
   .landing-login { min-height: 39px; padding: 0 13px; font-size: 12px; gap: 6px; }
   .landing-hero-grid { padding-block: 39px 36px; }
   .landing-hero h1 { font-size: clamp(37px, 9.8vw, 53px); letter-spacing: -1.6px; margin-top: 22px; }
